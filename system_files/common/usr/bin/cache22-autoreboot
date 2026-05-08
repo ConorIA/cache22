@@ -12,8 +12,15 @@
 #   cache22-autoreboot status
 #
 # --at SPEC                 Any systemd OnCalendar value. REQUIRED.
-#                           Examples: 'daily 04:00', 'Sun 03:00',
-#                           'Thu,Sat 16:00'.
+#                           Time-of-day examples (local time):
+#                             '04:00'              every day at 04:00
+#                             '*-*-* 04:00:00'     same, full form
+#                             'Sun *-*-* 03:00:00' Sundays at 03:00
+#                             'Thu,Sat *-*-* 16:00:00'
+#                           NB: systemd's calendar grammar does NOT accept
+#                           'daily 04:00' as a single token — 'daily' on
+#                           its own means 00:00:00. To pin a time of day,
+#                           use one of the forms above.
 # --window DURATION         How long to keep retrying within each window
 #                           (default: 30m). Examples: 1h, 90m, 2h.
 # --allow-active-sessions   Reboot even if users are logged in to
@@ -39,7 +46,7 @@ cmd_enable() {
             *)                          die "unknown arg: $1" ;;
         esac
     done
-    [[ -n "$at" ]] || die "--at is required (e.g. --at 'daily 04:00')"
+    [[ -n "$at" ]] || die "--at is required (e.g. --at '04:00' for every day at 4 AM local)"
 
     install -dm755 /etc/cache22 "$(dirname "$DROPIN")"
     cat > "$CONF" <<EOF
