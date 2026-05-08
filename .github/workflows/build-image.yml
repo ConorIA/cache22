@@ -113,14 +113,13 @@ jobs:
 
       - name: Build raw image (single-layer)
         run: |
-          # Reproducibility: SOURCE_DATE_EPOCH = git commit timestamp.
-          # Plumbed through to dracut --reproducible (initramfs cpio
-          # mtimes), kbuild (DKMS module __DATE__/__TIME__ replacement),
-          # and any other build tooling that honors the standard SDE
-          # convention (gzip, ar, gnu-strip, debian's strip-nondeterm,
-          # etc.).
-          SDE=$(git -C "$GITHUB_WORKSPACE" log -1 --format=%ct)
-          echo "Build SOURCE_DATE_EPOCH=$SDE ($(date -u -d @$SDE))"
+          # SOURCE_DATE_EPOCH=0 plumbed to dracut --reproducible, kbuild,
+          # gzip, ar, gnu-strip and other tools that honour the standard
+          # SDE convention. A fixed value is required for stable layer
+          # digests across rebuilds: any per-build value would make
+          # every tar entry's mtime differ between builds, defeating
+          # bootc's blob-level dedup on incremental upgrades.
+          SDE=0
           sudo buildah bud \
             --secret id=sbkey,src=/tmp/sbkey.pem \
             --build-arg BASE_IMAGE=${{ matrix.base_image }} \
@@ -249,21 +248,22 @@ jobs:
 
       - name: Rechunk into ~120 per-package/bucket layers
         if: steps.detect.outputs.has_changes == 'true'
-        # Splits the giant install layer so daily updates only redownload the
-        # layers containing changed packages. See scripts/rechunk-cache22.py
-        # for details. Outputs an OCI image directory at /tmp/rechunked.
-        # SOURCE_DATE_EPOCH = commit timestamp: identical across all four
-        # variants of the same commit (so cross-variant dedup works), but
-        # advances each commit so OCI registries don't reject pushes that
-        # would replace newer manifests with older "created" timestamps.
+        # Splits the install image into per-package/bucket layers so
+        # daily updates only redownload the layers containing changed
+        # packages. SOURCE_DATE_EPOCH=0 fixes tar-entry mtimes to a
+        # constant: identical input bytes produce identical layer
+        # digests across builds, which is what makes incremental
+        # bootc upgrades work. The OCI image config "created" field
+        # is set separately (--image-created-epoch) to the commit
+        # timestamp so `bootc status` shows a real build date.
         run: |
           mkdir -p /tmp/rechunked
-          SDE=$(git -C "$GITHUB_WORKSPACE" log -1 --format=%ct)
-          echo "Using SOURCE_DATE_EPOCH=$SDE ($(date -u -d @$SDE))"
+          CREATED=$(git -C "$GITHUB_WORKSPACE" log -1 --format=%ct)
           sudo python3 scripts/rechunk-cache22.py \
             --src localhost/cache22-${{ matrix.variant }}:raw \
             --dst /tmp/rechunked \
-            --source-date-epoch "$SDE"
+            --source-date-epoch 0 \
+            --image-created-epoch "$CREATED"
 
       - name: Scrub Secure Boot key
         if: always()

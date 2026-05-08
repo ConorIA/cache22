@@ -430,12 +430,28 @@ def main():
         "--source-date-epoch",
         type=int,
         default=0,
-        help="SOURCE_DATE_EPOCH for image config 'created' field",
+        help=(
+            "Stable epoch for tar-entry mtimes. Identical across builds "
+            "so unchanged content produces identical layer digests."
+        ),
+    )
+    ap.add_argument(
+        "--image-created-epoch",
+        type=int,
+        default=None,
+        help=(
+            "Epoch for the OCI image config 'created' annotation. "
+            "Lives only in the config blob, not in any layer, so it can "
+            "vary per build without affecting layer dedup. Defaults to "
+            "--source-date-epoch."
+        ),
     )
     args = ap.parse_args()
 
     global SDE
     SDE = args.source_date_epoch
+    if args.image_created_epoch is None:
+        args.image_created_epoch = args.source_date_epoch
 
     out_root = Path(args.dst).absolute()
     out_blobs = out_root / "blobs" / "sha256"
@@ -823,10 +839,11 @@ def main():
         )[0]
         src_config = src_inspect.get("Config", {})
 
+        created_iso = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(args.image_created_epoch)
+        )
         config = {
-            "created": time.strftime(
-                "%Y-%m-%dT%H:%M:%SZ", time.gmtime(args.source_date_epoch)
-            ),
+            "created": created_iso,
             "architecture": "amd64",
             "os": "linux",
             "config": {
@@ -842,9 +859,7 @@ def main():
             },
             "history": [
                 {
-                    "created": time.strftime(
-                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(args.source_date_epoch)
-                    ),
+                    "created": created_iso,
                     "created_by": f"cache22 rechunk: layer {i}",
                     "empty_layer": False,
                 }
