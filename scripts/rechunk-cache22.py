@@ -33,13 +33,11 @@ leftover layer, which keeps per-package layers truly content-stable.
 
 import argparse
 import fnmatch
-import gzip
 import hashlib
 import io
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tarfile
@@ -265,7 +263,7 @@ def add_layer_from_files(
     extra_dirs: list[tuple[str, int]] | None = None,
 ) -> dict | None:
     """
-    Build a gzip-compressed tar layer containing exactly file_list.
+    Build a zstd-compressed tar layer containing exactly file_list.
     Returns the OCI layer descriptor dict (digest, size, mediaType, diff_id),
     or None if file_list is empty after filtering.
 
@@ -384,27 +382,30 @@ def add_layer_from_files(
 
     diff_id = "sha256:" + sha256_file(tmp_tar)
 
-    # Phase 2: gzip it (deterministic — fixed mtime so the same content gives
-    # the same compressed blob across builds).
-    gz_tmp = out_blobs / f"{layer_name}.tar.gz"
-    with tmp_tar.open("rb") as src, gzip.GzipFile(
-        filename=gz_tmp, mode="wb", mtime=0, compresslevel=6
-    ) as dst:
-        shutil.copyfileobj(src, dst, length=4 * 1024 * 1024)
+    # zstd compression. The zstd CLI is deterministic regardless of
+    # thread count (a design goal — Arch's pacman relies on it), so
+    # -T0 (use all cores) is safe. Frame format has no embedded mtime;
+    # output bytes depend only on (input bytes, level).
+    zst_tmp = out_blobs / f"{layer_name}.tar.zst"
+    with tmp_tar.open("rb") as src, zst_tmp.open("wb") as dst:
+        subprocess.run(
+            ["zstd", "-T0", "-19", "--quiet", "--stdout"],
+            stdin=src, stdout=dst, check=True,
+        )
     tmp_tar.unlink()
 
-    digest = "sha256:" + sha256_file(gz_tmp)
-    size = gz_tmp.stat().st_size
+    digest = "sha256:" + sha256_file(zst_tmp)
+    size = zst_tmp.stat().st_size
 
     # Move to content-addressed name
     final = out_blobs / digest.removeprefix("sha256:")
     if not final.exists():
-        gz_tmp.rename(final)
+        zst_tmp.rename(final)
     else:
-        gz_tmp.unlink()  # already there from a prior package with same content
+        zst_tmp.unlink()  # already there from a prior package with same content
 
     return {
-        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+zstd",
         "digest": digest,
         "size": size,
         "_diff_id": diff_id,  # internal; stripped before writing manifest
