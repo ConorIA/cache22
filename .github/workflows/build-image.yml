@@ -120,7 +120,16 @@ jobs:
           # every tar entry's mtime differ between builds, defeating
           # bootc's blob-level dedup on incremental upgrades.
           SDE=0
+          # --hostname pins the build container's hostname so any tool
+          # that calls gethostname() at build time sees a stable value.
+          # NVIDIA's DKMS build embeds the hostname in the module's
+          # .modinfo description string ("Release Build (root@<host>)"),
+          # which then drives a different .note.gnu.build-id and a
+          # different module signature each build. Without this pin the
+          # nvidia.ko + nvidia-modeset.ko layers (~12 MiB) drift every
+          # rebuild even when nothing else changed.
           sudo buildah bud \
+            --hostname=cache22-build \
             --secret id=sbkey,src=/tmp/sbkey.pem \
             --build-arg BASE_IMAGE=${{ matrix.base_image }} \
             --build-arg VARIANT_FAMILY=${{ matrix.family }} \

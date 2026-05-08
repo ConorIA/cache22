@@ -123,6 +123,11 @@ rm -rf /usr/lib/sysimage/pacman/gnupg
 echo "==> Removing unused DKMS mok keypair"
 rm -f /var/lib/dkms/mok.key /var/lib/dkms/mok.pub
 
+# DKMS make.log files capture build-time stdout/stderr with timestamps
+# embedded throughout. Not read at runtime, drift every build.
+echo "==> Removing DKMS build logs"
+find /var/lib/dkms -name make.log -delete 2>/dev/null || true
+
 # /usr/lib/.build-id is a directory of symlinks indexed by binary
 # build-IDs. Every binary rebuild changes its build-ID, so this
 # directory dirties on every package upgrade — and it's rebuildable

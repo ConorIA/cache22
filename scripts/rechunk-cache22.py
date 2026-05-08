@@ -733,28 +733,58 @@ def main():
         print(f"    {len(layers_desc) - before_buckets} bucket layers built")
 
         print("==> Building pacman-db layer")
-        # Normalize %INSTALLDATE% in every package's desc file to SDE.
-        # pacman writes the wall-clock install time at pacstrap, so without
-        # this rewrite the pacman-db layer hash drifts every build even
-        # when the installed package set is byte-identical.
+        # Normalize wall-clock timestamps in pacman's local DB to SDE.
+        #   desc:  %INSTALLDATE% (set by pacman at install) and
+        #          %BUILDDATE%   (set by makepkg at AUR-package build)
+        #   mtree: time=<epoch>.<frac> on every entry (also set by makepkg)
+        # All three drift every build for AUR packages we rebuild fresh
+        # (r8125-dkms, xone-dkms-git, etc.); INSTALLDATE drifts for every
+        # package since pacman runs at image-build time. Without this
+        # rewrite the pacman-db layer hash drifts even when content is
+        # byte-identical.
         db_root_path = src_mnt / "usr/lib/sysimage/pacman/local"
-        normalized = 0
+        EPOCH_FIELDS = {"%INSTALLDATE%", "%BUILDDATE%"}
+        desc_normalized = 0
         for desc_file in db_root_path.glob("*/desc"):
             try:
                 lines = desc_file.read_text().splitlines()
             except OSError:
                 continue
+            changed = False
             for i, line in enumerate(lines):
-                if line == "%INSTALLDATE%" and i + 1 < len(lines):
+                if line in EPOCH_FIELDS and i + 1 < len(lines):
                     if lines[i + 1] != str(SDE):
                         lines[i + 1] = str(SDE)
-                        try:
-                            desc_file.write_text("\n".join(lines) + "\n")
-                            normalized += 1
-                        except OSError:
-                            pass
-                    break
-        print(f"    normalized INSTALLDATE in {normalized} desc files")
+                        changed = True
+            if changed:
+                try:
+                    desc_file.write_text("\n".join(lines) + "\n")
+                    desc_normalized += 1
+                except OSError:
+                    pass
+        print(f"    normalized INSTALL/BUILDDATE in {desc_normalized} desc files")
+
+        # mtree files are gzip-compressed and contain "time=<epoch>.<frac>"
+        # on every entry. Rewrite each entry's time= to SDE.
+        import gzip as _gzip, re as _re
+        time_re = _re.compile(rb"time=\d+(?:\.\d+)?")
+        repl = f"time={SDE}.0".encode()
+        mtree_normalized = 0
+        for mtree_file in db_root_path.glob("*/mtree"):
+            try:
+                with _gzip.open(mtree_file, "rb") as f:
+                    data = f.read()
+            except OSError:
+                continue
+            new_data = time_re.sub(repl, data)
+            if new_data != data:
+                try:
+                    with _gzip.open(mtree_file, "wb", compresslevel=9, mtime=0) as f:
+                        f.write(new_data)
+                    mtree_normalized += 1
+                except OSError:
+                    pass
+        print(f"    normalized time= in {mtree_normalized} mtree files")
 
         db_files: list[Path] = []
         db_arcname: dict[Path, str] = {}
