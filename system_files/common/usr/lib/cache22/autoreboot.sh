@@ -28,8 +28,13 @@ parse_duration() {
 }
 
 is_staged() {
-    bootc status --json 2>/dev/null \
-        | grep -A1 '"staged"' | grep -q -E '"image"|"imageDigest"'
+    # bootc status --json emits compact single-line JSON, so a textual
+    # grep -A1 '"staged"' would match the whole blob and false-positive
+    # on "image"/"imageDigest" appearing in the booted/spec sections.
+    # Use jq for a real null-vs-not check.
+    local staged
+    staged=$(bootc status --json 2>/dev/null | jq -r '.status.staged // "null"' 2>/dev/null)
+    [[ -n "$staged" && "$staged" != "null" ]]
 }
 
 last_update_failed() {
