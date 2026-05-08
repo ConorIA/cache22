@@ -779,8 +779,16 @@ def main():
             new_data = time_re.sub(repl, data)
             if new_data != data:
                 try:
-                    with _gzip.open(mtree_file, "wb", compresslevel=9, mtime=0) as f:
-                        f.write(new_data)
+                    # gzip.open() doesn't take mtime; use GzipFile via
+                    # fileobj. filename="" suppresses the gzip header's
+                    # FNAME field (else it would record this build's
+                    # overlay mount path, defeating determinism). mtime=0
+                    # keeps the header's mtime field stable.
+                    with mtree_file.open("wb") as raw:
+                        with _gzip.GzipFile(filename="", fileobj=raw,
+                                            mode="wb", compresslevel=9,
+                                            mtime=0) as gz:
+                            gz.write(new_data)
                     mtree_normalized += 1
                 except OSError:
                     pass
