@@ -1,18 +1,12 @@
-# Default kernel cmdline kargs for cache22.
-# Per https://github.com/containers/bootc/blob/main/docs/src/building/kernel-arguments.md
-# these are added to every BLS entry bootc generates and propagate
-# across `bootc upgrade`. Users override them via `bootc kargs` or by
-# editing /boot/loader/entries/*.conf directly.
+# Default kernel cmdline kargs for cache22. Applied by bootc to every
+# BLS entry it generates and preserved across `bootc upgrade`. Users
+# override per-host with `bootc kargs` or by editing
+# /boot/loader/entries/*.conf directly.
 #
-# console=ttyS0 was previously here for QEMU -nographic test runs, but
-# on real hardware systemd's getty-generator instantiates
-# serial-getty@ttyS0.service for any console=ttyS0 entry; if the
-# physical serial port has no peer, agetty exits immediately and
-# systemd respawns it every ~10 seconds, generating the audit-log
-# noise that was filling dmesg on installed cache22 systems. The live
-# ISO still has console=ttyS0 baked into its grub.cfg directly (see
-# installer/fedora-live/build-iso.sh) for QEMU testing of the
-# installer itself; the installed system doesn't need it.
+# Adding `console=` entries here causes systemd's getty-generator to
+# instantiate serial-getty@<tty>.service. Don't add a serial console
+# unless the target hardware has one connected, or agetty respawn-
+# loops on the unattached port.
 kargs = [
     "rw",
     "console=tty0",
