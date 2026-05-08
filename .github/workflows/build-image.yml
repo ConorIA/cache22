@@ -242,60 +242,72 @@ jobs:
 
           - Git SHA unchanged: \`$CUR_SHA\`
           - Package set unchanged
-          - The chunked image would be byte-identical to the prior
+          - The rechunked image would be byte-identical to the prior
             build modulo finalize-image.sh stamps; no value in pushing.
           EOF
           fi
 
-      - name: Chunk image with rpm-ostree compose build-chunked-oci
+      - name: Rechunk into ~120 per-package/bucket layers
         if: steps.detect.outputs.has_changes == 'true'
-        # Run rpm-ostree's chunker from inside a Fedora bootc helper image,
-        # consuming the just-built raw image via shared containers-storage
-        # and emitting a chunked-OCI image into the same store. Format
-        # version 2, max 127 layers (OverlayFS hard ceiling). The chunker
-        # writes deterministic blob digests for unchanged file sets, and
-        # bakes its own DiffIDs against the bytes that bootc/podman will
-        # see at decode time, so pushes don't need recompression.
+        # Splits the giant install layer so daily updates only redownload the
+        # layers containing changed packages. See scripts/rechunk-cache22.py
+        # for details. Outputs an OCI image directory at /tmp/rechunked.
+        # SOURCE_DATE_EPOCH = commit timestamp: identical across all four
+        # variants of the same commit (so cross-variant dedup works), but
+        # advances each commit so OCI registries don't reject pushes that
+        # would replace newer manifests with older "created" timestamps.
         run: |
-          sudo podman run --rm --privileged \
-            --volume /var/lib/containers:/var/lib/containers \
-            quay.io/fedora/fedora-bootc:latest \
-            rpm-ostree compose build-chunked-oci \
-              --bootc \
-              --max-layers 127 \
-              --format-version 2 \
-              --from localhost/cache22-${{ matrix.variant }}:raw \
-              --output containers-storage:localhost/cache22-${{ matrix.variant }}:chunked
+          mkdir -p /tmp/rechunked
+          SDE=$(git -C "$GITHUB_WORKSPACE" log -1 --format=%ct)
+          echo "Using SOURCE_DATE_EPOCH=$SDE ($(date -u -d @$SDE))"
+          sudo python3 scripts/rechunk-cache22.py \
+            --src localhost/cache22-${{ matrix.variant }}:raw \
+            --dst /tmp/rechunked \
+            --source-date-epoch "$SDE"
 
       - name: Scrub Secure Boot key
         if: always()
         run: |
           shred -u /tmp/sbkey.pem 2>/dev/null || rm -f /tmp/sbkey.pem
 
-      - name: Push chunked image to ghcr.io
+      - name: Push rechunked image to ghcr.io
         if: steps.detect.outputs.has_changes == 'true'
         run: |
-          # Push the chunked image as-is; no compression flags, since the
-          # chunker already produced final-format zstd:chunked blobs and
-          # any re-encoding would break the deterministic blob digests
-          # that make incremental updates work.
+          # Push the rechunker's gzip-compressed layers as-is. No
+          # --dest-compress-format flag, so skopeo skips re-encoding.
+          # The rechunker writes gzip with mtime=0 and a fixed
+          # compression level; same input bytes produce the same
+          # output bytes, so layer blob digests are stable across
+          # builds with unchanged content, and bootc upgrades only
+          # download layers whose underlying files actually changed.
           echo "==> Pushing :rolling"
           sudo skopeo copy \
             --authfile $HOME/.docker/config.json \
-            "containers-storage:localhost/cache22-${{ matrix.variant }}:chunked" \
+            oci:/tmp/rechunked:rechunked \
             "docker://${{ steps.tags.outputs.tag_rolling }}"
 
-          # Add the date and sha tags via crane — a registry-protocol
-          # manifest-write that points the new tag at the same blob
-          # digest, no upload involved.
+          # For the date and sha tags, use `crane tag` — registry-protocol
+          # primitive that writes a new manifest reference pointing at the
+          # same digest. No blob re-upload, no re-encoding; just a manifest
+          # write (a few KB). Three full skopeo copies took ~30 min wall
+          # time; this is ~30 min + ~2 sec.
+          #
+          # Background: skopeo's --additional-tag option silently no-ops on
+          # ghcr.io — only the primary destination becomes a real tag, the
+          # additional ones never materialise. Per-tag skopeo copies work
+          # but pay the gzip→zstd re-encode for each. crane tag avoids both
+          # problems by speaking the registry protocol directly.
           echo "==> Installing crane"
           curl -fsSL "https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_x86_64.tar.gz" \
             | sudo tar -xz -C /usr/local/bin crane
 
+          # crane reads ghcr.io credentials from the same auth file skopeo wrote.
           export DOCKER_CONFIG="$HOME/.docker"
 
           for tag in "${{ steps.tags.outputs.tag_date }}" "${{ steps.tags.outputs.tag_sha }}"; do
               echo "==> Tagging ${tag##*:}"
+              # crane tag IMAGE:OLDTAG NEWTAG  →  copies the manifest reference
+              # The first arg is the source image, second is JUST the new tag name.
               crane tag "${{ steps.tags.outputs.tag_rolling }}" "${tag##*:}"
           done
 
@@ -399,5 +411,5 @@ jobs:
       - name: Free disk
         if: always()
         run: |
-          sudo rm -rf /var/lib/containers/storage 2>/dev/null || true
+          sudo rm -rf /tmp/rechunked /var/lib/containers/storage 2>/dev/null || true
           df -h
