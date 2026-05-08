@@ -44,21 +44,19 @@ cmd_enroll() {
     cat <<EOF
 About to enroll TPM2 unlock for $device.
 
-Sealing to PCR 0+7+8 (firmware + Secure Boot policy + kernel cmdline).
-- Survives:    kernel/initramfs updates, package updates
-- Falls back:  firmware updates, SB toggles, cmdline changes
-               (e.g. \`cache22-karg add ...\`), boot from another disk
-
-PCR 8 binding catches anyone editing the BLS entry to inject a
-malicious cmdline (e.g. init=/bin/sh) — TPM refuses to release the
-key, attacker has to know the passphrase to proceed.
+Sealing to PCR 0+7 (firmware code + Secure Boot policy).
+- Survives:    kernel/initramfs/cmdline updates, bootc deployments,
+               package updates
+- Falls back:  firmware updates, Secure Boot toggles, boot from
+               another disk — TPM refuses to release the key,
+               passphrase prompt appears instead
 
 You will be prompted for the existing LUKS passphrase.
 EOF
     read -rp "Continue? [y/N] " confirm
     [[ "${confirm,,}" == "y" ]] || { echo "Aborted."; exit 0; }
 
-    systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7+8 "$device"
+    systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7 "$device"
     echo "[OK] TPM2 enrolled. Reboot to use it."
 }
 
