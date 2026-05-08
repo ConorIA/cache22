@@ -45,7 +45,9 @@ ARG SOURCE_DATE_EPOCH=0
 ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
     KBUILD_BUILD_TIMESTAMP="@${SOURCE_DATE_EPOCH}" \
     KBUILD_BUILD_USER=cache22 \
-    KBUILD_BUILD_HOST=cache22
+    KBUILD_BUILD_HOST=cache22 \
+    NV_BUILD_USER=cache22 \
+    NV_BUILD_HOST=cache22-build
 
 COPY scripts/  /tmp/cache22-build/scripts/
 COPY packages/ /tmp/cache22-build/packages/
@@ -66,7 +68,9 @@ ARG SOURCE_DATE_EPOCH=0
 ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
     KBUILD_BUILD_TIMESTAMP="@${SOURCE_DATE_EPOCH}" \
     KBUILD_BUILD_USER=cache22 \
-    KBUILD_BUILD_HOST=cache22
+    KBUILD_BUILD_HOST=cache22 \
+    NV_BUILD_USER=cache22 \
+    NV_BUILD_HOST=cache22-build
 
 LABEL containers.bootc=1
 LABEL org.opencontainers.image.source=https://github.com/cmspam/cache22
