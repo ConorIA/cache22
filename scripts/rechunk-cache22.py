@@ -384,8 +384,8 @@ def add_layer_from_files(
 
     # zstd compression. The zstd CLI is deterministic regardless of
     # thread count (a design goal — Arch's pacman relies on it), so
-    # -T0 (use all cores) is safe. Frame format has no embedded mtime;
-    # output bytes depend only on (input bytes, level).
+    # -T0 (use all cores) is safe. The zstd frame has no embedded
+    # mtime; output bytes depend only on input bytes and level.
     zst_tmp = out_blobs / f"{layer_name}.tar.zst"
     with tmp_tar.open("rb") as src, zst_tmp.open("wb") as dst:
         subprocess.run(
