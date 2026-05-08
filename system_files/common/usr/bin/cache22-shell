@@ -163,11 +163,14 @@ cmd_remove() {
 }
 
 # ─── Dispatch ───
+# Each subcommand exits after handling; the fall-through path below is
+# only for the bare `cache22-shell [cmd args …]` invocation that enters
+# the active container.
 case "${1:-}" in
-    --new)     shift; cmd_new "$@" ;;
-    --switch)  cmd_switch ;;
-    --list)    cmd_list ;;
-    --remove)  cmd_remove ;;
+    --new)     shift; cmd_new "$@"; exit 0 ;;
+    --switch)  cmd_switch;          exit 0 ;;
+    --list)    cmd_list;            exit 0 ;;
+    --remove)  cmd_remove;          exit 0 ;;
     -h|--help)
         sed -n '2,/^$/p' "$0" | sed 's/^# //; s/^#//'
         exit 0 ;;
