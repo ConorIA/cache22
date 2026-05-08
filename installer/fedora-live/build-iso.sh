@@ -378,8 +378,8 @@ menuentry 'cache22 Installer (live)' {
     initrdefi /images/initramfs.img
 }
 
-menuentry 'cache22 Installer (live, troubleshoot - serial debug)' {
-    linuxefi /images/vmlinuz root=live:CDLABEL=${ISO_LABEL} rd.live.image selinux=0 enforcing=0 audit=0 console=ttyS0,115200n8 console=tty0 rd.shell rd.debug plymouth.enable=0
+menuentry 'cache22 Installer (live, troubleshoot - rd.shell)' {
+    linuxefi /images/vmlinuz root=live:CDLABEL=${ISO_LABEL} rd.live.image selinux=0 enforcing=0 audit=0 console=tty0 rd.shell rd.debug plymouth.enable=0
     initrdefi /images/initramfs.img
 }
 EOF
