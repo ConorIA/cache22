@@ -3,7 +3,7 @@ name: Build cache22 image
 on:
   schedule:
     # Daily at 18:00 UTC. CachyOS rebuilds its base image at 13:41 UTC,
-    # so this cadence picks up their freshest layers each day.
+    # so this cadence picks up their freshest layers.
     - cron: '0 18 * * *'
   workflow_dispatch:
   push:
