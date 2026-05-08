@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# cache22-changelog — show what changed between the booted deployment and
+# the staged one (if any).
+#
+# Usage:
+#   cache22-changelog            full diff (default; needs sudo for /sysroot)
+#   cache22-changelog --check    silent; exit 0 if a diff exists, 1 otherwise
+#                                (used by login banners — runs as user)
+#   cache22-changelog --help
+
+set -uo pipefail
+
+CHECK=0
+case "${1:-}" in
+    --check)   CHECK=1 ;;
+    -h|--help) sed -n '2,11p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    "")        ;;
+    *)         echo "Unknown arg: $1" >&2; exit 2 ;;
+esac
+
+# ostree admin status output (stable across libostree 2024-2025):
+#   * default <booted_csum>.<idx>
+#       origin: ...
+#     default <staged_csum>.<idx>
+#       origin: ...
+#     default <rollback_csum>.<idx> (rollback)
+#       origin: ...
+# Booted is `*`-prefixed; rollback has the literal "(rollback)" tag;
+# anything else with a `<hex>.<digits>` field is a staged/pending deploy.
+#
+# We parse this rather than `bootc status` because (a) bootc status
+# requires root and the login-banner --check path runs unprivileged, and
+# (b) the libostree text format has been stable for years while bootc's
+# output changed shape between 0.x and 1.x.
+status_text=$(ostree admin status 2>/dev/null) || {
+    (( CHECK )) && exit 1
+    echo "ostree admin status failed"
+    exit 1
+}
+
+extract_id() {
+    # Pick the first <hex>.<digits> field on the line. Keep BOTH the
+    # csum and the .idx — same csum can appear twice (e.g. rollback at
+    # .0 + freshly-staged at .1 when the staged content is a re-deploy
+    # of the rollback target), and only the full csum.idx maps to a
+    # unique deploy directory + .origin file.
+    awk '{
+        for (i=1; i<=NF; i++) {
+            if ($i ~ /^[0-9a-f]+\.[0-9]+$/) { print $i; exit }
+        }
+    }'
+}
+
+booted_id=$(awk '/^\*/' <<<"$status_text" | extract_id)
+# Staged = any non-booted, non-rollback deploy. Pick the first such line.
+staged_id=$(awk '!/^\*/ && !/\(rollback\)/' <<<"$status_text" | extract_id)
+
+if [[ -z "$staged_id" ]]; then
+    if (( CHECK )); then exit 1; fi
+    cat <<'EOF'
+══════════════════════════════════════════════════════════
+  No pending update — running the latest staged image.
+  Run `sudo cache22-update` to check for new builds.
+══════════════════════════════════════════════════════════
+EOF
+    exit 0
+fi
+
+if (( CHECK )); then exit 0; fi
+
+# Beyond here we're producing the full diff, which needs to read pacman
+# dbs out of /sysroot/ostree/deploy/.../usr/lib/sysimage/pacman/local —
+# that path is root-only on a default ostree install. Re-exec under
+# sudo if we're not root yet.
+if [[ ${EUID} -ne 0 ]]; then
+    exec sudo "$0" "$@"
+fi
+
+stateroot_dir=$(ls -d /sysroot/ostree/deploy/*/deploy 2>/dev/null | head -1)
+[[ -d "$stateroot_dir" ]] || { echo "no /sysroot/ostree/deploy found"; exit 1; }
+
+booted_root=/
+staged_root="$stateroot_dir/$staged_id"
+[[ -d "$staged_root" ]] || { echo "staged deploy dir $staged_root not found"; exit 1; }
+
+# Both deployments use /usr/lib/sysimage/pacman/local/ (relocated from
+# /var/lib/pacman by rewrite-pacman-paths.sh at image-build time). Each
+# subdir is named pkgname-version-release. Parse those.
+list_pkgs() {
+    local root="$1"
+    ls "$root/usr/lib/sysimage/pacman/local/" 2>/dev/null | sed -E 's/^([^[:space:]]+)-([0-9][^-]*-[0-9]+)$/\1\t\2/'
+}
+
+booted_pkgs=$(list_pkgs "$booted_root" | sort)
+staged_pkgs=$(list_pkgs "$staged_root" | sort)
+
+added=$(comm -13 <(cut -f1 <<<"$booted_pkgs") <(cut -f1 <<<"$staged_pkgs"))
+removed=$(comm -23 <(cut -f1 <<<"$booted_pkgs") <(cut -f1 <<<"$staged_pkgs"))
+common=$(comm -12 <(cut -f1 <<<"$booted_pkgs") <(cut -f1 <<<"$staged_pkgs"))
+
+upgraded=()
+while IFS= read -r pkg; do
+    [[ -z "$pkg" ]] && continue
+    bv=$(awk -v p="$pkg" -F'\t' '$1==p{print $2}' <<<"$booted_pkgs")
+    sv=$(awk -v p="$pkg" -F'\t' '$1==p{print $2}' <<<"$staged_pkgs")
+    [[ "$bv" != "$sv" ]] && upgraded+=("$pkg|$bv|$sv")
+done <<<"$common"
+
+added_count=$(echo -n "$added" | grep -c . || true)
+removed_count=$(echo -n "$removed" | grep -c . || true)
+upgraded_count=${#upgraded[@]}
+total=$(( added_count + removed_count + upgraded_count ))
+
+if (( total == 0 )); then
+    echo "Update is staged but no pacman-tracked package differences detected."
+    exit 0
+fi
+
+# Image refs come from the .origin files of each deploy — bootc status
+# would also work but needs to round-trip through systemd and JSON
+# parsing for very little gain. The .origin format is:
+#   [origin]
+#   container-image-reference=ostree-remote-registry:...:ghcr.io/foo/bar:tag
+booted_origin="$stateroot_dir/$booted_id.origin"
+staged_origin="$stateroot_dir/$staged_id.origin"
+extract_image() {
+    [[ -f "$1" ]] || { echo "(unknown)"; return; }
+    # Origin format: container-image-reference=<transport>:<actual-ref>
+    # where <transport> is e.g. ostree-unverified-registry. Just strip
+    # the first colon-prefixed transport; the image ref itself contains
+    # colons (host:port, image:tag) which we must preserve.
+    awk -F= '/^container-image-reference=/ {
+        val=$2; sub(/^[^:]+:/, "", val); print val; exit
+    }' "$1"
+}
+booted_img=$(extract_image "$booted_origin")
+staged_img=$(extract_image "$staged_origin")
+
+cat <<EOF
+══════════════════════════════════════════════════════════
+  cache22 update pending — reboot to apply
+
+  Booted: ${booted_img:-(unknown)}
+  Staged: ${staged_img:-(unknown)}
+
+  Package changes ($total):
+EOF
+
+for entry in "${upgraded[@]}"; do
+    pkg="${entry%%|*}"; rest="${entry#*|}"
+    bv="${rest%%|*}";  sv="${rest#*|}"
+    printf "    upgraded  %-40s %s → %s\n" "$pkg" "$bv" "$sv"
+done
+while IFS= read -r pkg; do
+    [[ -z "$pkg" ]] && continue
+    sv=$(awk -v p="$pkg" -F'\t' '$1==p{print $2}' <<<"$staged_pkgs")
+    printf "    added     %-40s %s\n" "$pkg" "$sv"
+done <<<"$added"
+while IFS= read -r pkg; do
+    [[ -z "$pkg" ]] && continue
+    bv=$(awk -v p="$pkg" -F'\t' '$1==p{print $2}' <<<"$booted_pkgs")
+    printf "    removed   %-40s %s\n" "$pkg" "$bv"
+done <<<"$removed"
+
+cat <<'EOF'
+
+  Reboot:    sudo systemctl reboot
+  Cancel:    sudo bootc rollback
+══════════════════════════════════════════════════════════
+EOF

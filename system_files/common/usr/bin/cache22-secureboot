@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+# cache22-secureboot — manage Secure Boot enrollment for cache22.
+#
+# In the cache22 chain the kernel is signed with cache22's CI key.
+# That key is enrolled into MOK (Machine Owner Keys) via shim. The
+# installer queues MOK enrollment automatically on first install; this
+# tool is for users who skipped enrollment, want to re-queue it after
+# rotating the cache22 key, or want to remove it.
+#
+# Subcommands:
+#   status                  Show SB state, MOK enrollment, kernel sigs.
+#   enroll                  Queue cache22 cert for MOK enrollment AND
+#                           set BootNext to the cache22 EFI entry so
+#                           the next reboot lands at MokManager directly.
+#   unenroll                Queue cache22 cert removal from MOK.
+#   --help
+
+set -euo pipefail
+
+CERT_PEM=/usr/share/cache22/secureboot.crt
+CERT_DER=/usr/share/cache22/secureboot.cer
+ESP_CERT=/boot/efi/EFI/BOOT/sbcert.der
+DEFAULT_PASSWORD="cache22sb"
+
+require_root() {
+    if [[ ${EUID} -ne 0 ]]; then
+        echo "Error: must run as root (try: sudo cache22-secureboot $*)" >&2
+        exit 1
+    fi
+}
+
+die() { echo "Error: $*" >&2; exit 1; }
+
+# Resolve a usable .der of the cache22 cert. Prefer the image-staged
+# /usr/share/cache22/secureboot.cer (built by build-sb-enrollment.sh);
+# fall back to the ESP copy the installer drops; finally derive from
+# the .pem if neither .der is present.
+get_cert_der() {
+    if [[ -f "$CERT_DER" ]]; then echo "$CERT_DER"; return 0; fi
+    if [[ -f "$ESP_CERT" ]]; then echo "$ESP_CERT"; return 0; fi
+    if [[ -f "$CERT_PEM" ]]; then
+        local tmp; tmp=$(mktemp --suffix=.der)
+        openssl x509 -in "$CERT_PEM" -outform DER -out "$tmp" 2>/dev/null \
+            || { rm -f "$tmp"; return 1; }
+        echo "$tmp"; return 0
+    fi
+    return 1
+}
+
+# Set the firmware's BootNext to the cache22 boot entry so the very
+# next reboot loads shim, which then sees the pending MOK and launches
+# MokManager. Without this the user might land in their default boot
+# entry (not necessarily cache22 if they dual-boot), which still works
+# — shim catches MokListNew on any cache22 boot — but BootNext makes
+# it deterministic.
+set_bootnext_to_cache22() {
+    if ! command -v efibootmgr >/dev/null 2>&1; then
+        echo "    (efibootmgr not installed; skipping BootNext)" >&2
+        return 0
+    fi
+    local idx
+    idx=$(efibootmgr 2>/dev/null \
+        | awk 'tolower($0) ~ /^boot[0-9a-f]{4}\*?[ \t]+cache22\b/ {
+                  s=$1; sub(/^[Bb]oot/,"",s); sub(/\*$/,"",s); print s; exit
+              }')
+    if [[ -z "$idx" ]]; then
+        echo "    (no UEFI boot entry labelled 'cache22' found; relying on default boot order)"
+        return 0
+    fi
+    efibootmgr --bootnext "$idx" 2>&1 | sed 's/^/    /'
+}
+
+cmd_status() {
+    echo "─── Firmware ───"
+    if [[ ! -d /sys/firmware/efi ]]; then
+        echo "Not booted in UEFI mode."
+        return
+    fi
+    bootctl status 2>/dev/null | grep -iE 'secure boot|setup mode' | sed 's/^/  /' || true
+    if command -v mokutil >/dev/null 2>&1; then
+        echo "  $(mokutil --sb-state 2>&1)"
+    fi
+
+    echo
+    echo "─── cache22 SB cert ───"
+    if [[ -f "$CERT_PEM" ]]; then
+        openssl x509 -in "$CERT_PEM" -noout -subject -dates 2>/dev/null | sed 's/^/  /'
+    else
+        echo "  Missing — image overlay incomplete."
+    fi
+
+    echo
+    echo "─── MOK enrollment ───"
+    if ! command -v mokutil >/dev/null 2>&1; then
+        echo "  mokutil not installed."
+        return
+    fi
+    if mokutil --list-enrolled 2>&1 | grep -qiE 'cache22|cache 22'; then
+        echo "  cache22 cert: ENROLLED in MOK"
+    else
+        echo "  cache22 cert: NOT enrolled in MOK"
+        echo "    → run 'sudo cache22-secureboot enroll' to queue enrollment"
+    fi
+    if mokutil --list-new 2>&1 | grep -qi 'sha'; then
+        echo "  pending MOK requests: yes (presented on next reboot)"
+    fi
+
+    echo
+    echo "─── Kernel signature ───"
+    local current_kver
+    current_kver=$(uname -r)
+    local vmlinuz=/usr/lib/modules/${current_kver}/vmlinuz
+    if [[ -f "$vmlinuz" ]]; then
+        if sbverify --list "$vmlinuz" 2>&1 | grep -q 'image signature issuers'; then
+            sbverify --list "$vmlinuz" 2>&1 | grep -E 'subject|issuer' | head -2 | sed 's/^/  /'
+        else
+            echo "  $vmlinuz: UNSIGNED"
+        fi
+    else
+        echo "  $vmlinuz not found (custom kernel install?)"
+    fi
+}
+
+cmd_enroll() {
+    require_root enroll
+    command -v mokutil >/dev/null 2>&1 || die "mokutil not installed."
+    local der; der=$(get_cert_der) || die "cache22 cert not found at $CERT_DER, $ESP_CERT, or $CERT_PEM"
+
+    echo "==> Queuing cache22 cert for MOK enrollment ($der)"
+    printf '%s\n%s\n' "$DEFAULT_PASSWORD" "$DEFAULT_PASSWORD" \
+        | mokutil --import "$der" \
+        | sed 's/^/    /'
+
+    echo "==> Setting BootNext to cache22 entry so MokManager launches on next reboot"
+    set_bootnext_to_cache22
+
+    cat <<EOF
+
+[OK] MOK enrollment queued.
+
+On next reboot:
+  1. MokManager (blue screen) appears.
+  2. Choose "Enroll MOK" → "Continue" → "Yes".
+  3. Enter the password: ${DEFAULT_PASSWORD}
+  4. Choose "Reboot".
+
+If the password fails or MokManager doesn't auto-launch, choose
+"Enroll key from disk" and select /EFI/BOOT/sbcert.der instead.
+
+Reboot now with: sudo systemctl reboot
+EOF
+}
+
+cmd_unenroll() {
+    require_root unenroll
+    command -v mokutil >/dev/null 2>&1 || die "mokutil not installed."
+    local der; der=$(get_cert_der) || die "cache22 cert not found"
+
+    echo "==> Queuing cache22 cert removal from MOK"
+    printf '%s\n%s\n' "$DEFAULT_PASSWORD" "$DEFAULT_PASSWORD" \
+        | mokutil --delete "$der" \
+        | sed 's/^/    /'
+
+    cat <<EOF
+
+[OK] Removal queued. On next reboot, MokManager prompts for the same
+password (${DEFAULT_PASSWORD}) to confirm removal.
+
+After removal, cache22-signed kernels will fail shim verification on
+boots with SB on. Either disable SB in firmware or re-enroll before
+rebooting again.
+EOF
+}
+
+case "${1:-status}" in
+    status)             cmd_status ;;
+    enroll|enable)      cmd_enroll ;;
+    unenroll|disable)   cmd_unenroll ;;
+    -h|--help)
+        sed -n '2,16p' "$0" | sed 's/^# \?//'
+        ;;
+    *)
+        echo "Usage: cache22-secureboot [status|enroll|unenroll|--help]" >&2
+        exit 1
+        ;;
+esac

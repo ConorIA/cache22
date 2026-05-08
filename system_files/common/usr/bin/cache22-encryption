@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# cache22-encryption — manage TPM2 auto-unlock for LUKS volumes.
+#
+# The installer puts `tpm2-device=auto` in rd.luks.options by default,
+# so this script just enrolls (or wipes) the TPM2 keyslot.
+#
+# Subcommands:
+#   list                 show encrypted volumes and TPM2 status
+#   enroll <device>      enroll TPM2 unlock; reboot to use it
+#   remove <device>      wipe the TPM2 keyslot
+
+set -euo pipefail
+
+require_root() {
+    [[ ${EUID} -eq 0 ]] || { echo "Error: must run as root (try: sudo cache22-encryption $*)" >&2; exit 1; }
+}
+
+die() { echo "Error: $*" >&2; exit 1; }
+
+cmd_list() {
+    echo "─── Encrypted volumes ───"
+    lsblk -o NAME,TYPE,FSTYPE,MOUNTPOINTS | awk 'NR==1 || /crypt|LUKS/'
+    echo
+    echo "─── TPM2 ───"
+    if [[ -c /dev/tpm0 || -c /dev/tpmrm0 ]]; then
+        ls /dev/tpm* 2>/dev/null
+        systemd-cryptenroll --tpm2-device=list 2>/dev/null || true
+    else
+        echo "No TPM2 device detected."
+    fi
+    echo
+    echo "─── rd.luks.options on /proc/cmdline ───"
+    grep -oE 'rd\.luks\.options=[^ ]+' /proc/cmdline || echo "(none)"
+}
+
+cmd_enroll() {
+    require_root enroll "$@"
+    local device="${1:-}"
+    [[ -n "$device" ]] || die "Usage: cache22-encryption enroll <device>"
+    [[ -b "$device" ]] || die "$device is not a block device."
+    [[ -c /dev/tpm0 || -c /dev/tpmrm0 ]] || die "No TPM2 device detected."
+    cryptsetup isLuks "$device" 2>/dev/null || die "$device is not a LUKS volume."
+
+    cat <<EOF
+About to enroll TPM2 unlock for $device.
+
+Sealing to PCR 0+7+8 (firmware + Secure Boot policy + kernel cmdline).
+- Survives:    kernel/initramfs updates, package updates
+- Falls back:  firmware updates, SB toggles, cmdline changes
+               (e.g. \`cache22-karg add ...\`), boot from another disk
+
+PCR 8 binding catches anyone editing the BLS entry to inject a
+malicious cmdline (e.g. init=/bin/sh) — TPM refuses to release the
+key, attacker has to know the passphrase to proceed.
+
+You will be prompted for the existing LUKS passphrase.
+EOF
+    read -rp "Continue? [y/N] " confirm
+    [[ "${confirm,,}" == "y" ]] || { echo "Aborted."; exit 0; }
+
+    systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=0+7+8 "$device"
+    echo "[OK] TPM2 enrolled. Reboot to use it."
+}
+
+cmd_remove() {
+    require_root remove "$@"
+    local device="${1:-}"
+    [[ -n "$device" ]] || die "Usage: cache22-encryption remove <device>"
+    [[ -b "$device" ]] || die "$device is not a block device."
+    systemd-cryptenroll --wipe-slot=tpm2 "$device"
+}
+
+case "${1:-list}" in
+    list)         cmd_list ;;
+    enroll)       shift; cmd_enroll "$@" ;;
+    remove)       shift; cmd_remove "$@" ;;
+    -h|--help)    sed -n '2,11p' "$0" | sed 's/^# \?//' ;;
+    *)            echo "Usage: cache22-encryption [list|enroll <device>|remove <device>|--help]" >&2; exit 1 ;;
+esac

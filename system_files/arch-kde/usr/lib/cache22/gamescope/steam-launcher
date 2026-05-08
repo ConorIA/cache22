@@ -1,0 +1,5 @@
+#!/bin/bash
+# Launch Steam in Big Picture (Deck UI). The -steamdeck/-steampal/-steamos3
+# flags make Steam show a "Switch to Desktop" entry in its power menu;
+# clicking that runs cache22-session-select (registered via $STEAMOS_SESSION_SELECT).
+exec steam -steamos3 -steampal -steamdeck -gamepadui

@@ -1,0 +1,30 @@
+# bash-completion for cache22-shell
+# Behaves like `sudo`: complete the first arg as a command, subsequent
+# args via the appropriate command's own completion. Names resolve
+# against host PATH — most tools exist in the distrobox container too.
+_cache22_shell() {
+    local cur prev words cword
+    _init_completion || return
+
+    if [[ $cword -eq 1 ]]; then
+        # First arg can be a cache22-shell subcommand or a host command
+        # (the latter gets exec'd in the active container).
+        local subcmds="--new --switch --list --remove --help -h"
+        compopt -o filenames 2>/dev/null
+        COMPREPLY=( $(compgen -W "$subcmds" -- "$cur") $(compgen -c -- "$cur") )
+        return
+    fi
+
+    local cmd="${words[1]}"
+    local cspec
+    cspec=$(complete -p "$cmd" 2>/dev/null | sed -E 's/.* -F ([^ ]+).*/\1/')
+    if [[ -n "$cspec" && "$cspec" != "complete -p $cmd" ]]; then
+        words=( "${words[@]:1}" )
+        cword=$(( cword - 1 ))
+        "$cspec"
+        return
+    fi
+
+    _filedir
+}
+complete -F _cache22_shell cache22-shell

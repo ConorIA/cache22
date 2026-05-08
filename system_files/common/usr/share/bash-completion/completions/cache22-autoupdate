@@ -1,0 +1,27 @@
+# bash-completion for cache22-autoupdate
+_cache22_autoupdate() {
+    local cur prev words cword
+    _init_completion || return
+
+    local subs="enable disable status --help"
+
+    if [[ $cword -eq 1 ]]; then
+        COMPREPLY=( $(compgen -W "$subs" -- "$cur") )
+        return
+    fi
+
+    if [[ "${words[1]}" == "enable" ]]; then
+        case "$prev" in
+            --profile)
+                COMPREPLY=( $(compgen -W "default-desktop default-server" -- "$cur") )
+                return
+                ;;
+            --schedule)
+                COMPREPLY=( $(compgen -W "hourly daily weekly monthly" -- "$cur") )
+                return
+                ;;
+        esac
+        COMPREPLY=( $(compgen -W "--profile --schedule --no-app-updates --app-updates" -- "$cur") )
+    fi
+}
+complete -F _cache22_autoupdate cache22-autoupdate

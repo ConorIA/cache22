@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+# cache22-shell — frontend to distrobox. Drop into a distrobox container
+# with full pacman/dnf/apt/apk + AUR/COPR/PPA access. The recommended
+# way to run ad-hoc CLI tools (strace, gdb, scientific Python stacks,
+# language toolchains, dev environments, etc.) on cache22 without
+# modifying the immutable host.
+#
+# First launch: presents a menu of distros and creates a container of
+# the chosen flavour. Remembers the choice in
+# ~/.config/cache22-shell/active so future invocations enter that
+# container directly.
+#
+# Subcommands:
+#   (none)              enter the active container (or pick one if first run)
+#   --new               always show the picker, even if a container exists
+#   --switch            pick a different existing container as active
+#   --list              list all cache22-shell-managed containers
+#   --remove            delete the active container
+#   --help              show this message
+#
+# Env overrides (mostly for advanced users):
+#   CACHE22_SHELL_IMAGE    image ref to use, bypasses the picker
+#   CACHE22_SHELL_NAME     container name, default cache22-<distro>
+#
+# Default is CachyOS v3 for the perf benefit (matches the host). If
+# the cachyos mirrors are misbehaving on a given network path (rare,
+# but it happens — libcurl has no stall-timeout, so an unresponsive
+# mirror connection can hang first-run), pick another distro from the
+# picker; the picker also handles multiple coexisting containers.
+
+set -euo pipefail
+
+STATE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/cache22-shell"
+ACTIVE_FILE="$STATE_DIR/active"
+mkdir -p "$STATE_DIR"
+
+# distro_id : Display label : OCI image    (#1 is the default — bare Enter picks it)
+DISTROS=(
+    "cachyos | CachyOS v3 (x86-64-v3 builds)   | docker.io/cachyos/cachyos-v3:latest"
+    "arch    | Arch Linux                      | docker.io/library/archlinux:latest"
+    "fedora  | Fedora (toolbox)                | registry.fedoraproject.org/fedora-toolbox:latest"
+    "ubuntu  | Ubuntu LTS                      | docker.io/library/ubuntu:latest"
+    "debian  | Debian stable                   | docker.io/library/debian:stable"
+    "alpine  | Alpine Linux                    | docker.io/library/alpine:latest"
+    "opensuse| openSUSE Tumbleweed             | registry.opensuse.org/opensuse/distrobox:latest"
+    "rocky   | Rocky Linux                     | quay.io/toolbx-images/rockylinux-toolbox:latest"
+    "alma    | AlmaLinux                       | quay.io/toolbx-images/almalinux-toolbox:latest"
+)
+
+print_picker() {
+    cat <<EOF
+
+  cache22-shell — pick a distro for your container
+  (each is a separate distrobox; you can have several side by side)
+
+EOF
+    local i=1
+    for entry in "${DISTROS[@]}"; do
+        local label="$(echo "$entry" | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$2); print $2}')"
+        printf "    %d) %s\n" "$i" "$label"
+        ((i++))
+    done
+    printf "\n    q) cancel\n\n"
+}
+
+resolve_pick() {
+    local n="$1"
+    [[ "$n" =~ ^[0-9]+$ ]] || return 1
+    (( n >= 1 && n <= ${#DISTROS[@]} )) || return 1
+    local entry="${DISTROS[n-1]}"
+    DISTRO_ID=$(echo "$entry"   | awk -F'|' '{gsub(/[ \t]+/,"",$1); print $1}')
+    DISTRO_LABEL=$(echo "$entry" | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$2); print $2}')
+    DISTRO_IMAGE=$(echo "$entry" | awk -F'|' '{gsub(/[ \t]+/,"",$3); print $3}')
+}
+
+pick_distro() {
+    print_picker
+    local reply
+    while :; do
+        read -r -p "  [1] > " reply
+        # Bare Enter → default (#1 in the list)
+        [[ -z "$reply" ]] && reply=1
+        case "$reply" in
+            q|Q|quit) echo "  cancelled."; exit 1 ;;
+        esac
+        if resolve_pick "$reply"; then
+            return 0
+        fi
+        printf "  pick a number 1-%d, or q to cancel.\n" "${#DISTROS[@]}"
+    done
+}
+
+list_managed_containers() {
+    # All cache22-shell-managed containers are named cache22-<distro>.
+    distrobox list 2>/dev/null | awk '/^[0-9a-f]/{print $3}' | grep '^cache22-' || true
+}
+
+ensure_container() {
+    local name="$1" image="$2"
+    if distrobox list 2>/dev/null | awk '{print $3}' | grep -qx "$name"; then
+        return 0
+    fi
+    echo "Creating $name from $image (one-time setup, ~30 seconds)..."
+    distrobox create --name "$name" --image "$image" --yes >/dev/null
+}
+
+enter_container() {
+    local name="$1"; shift
+    if (( $# == 0 )); then
+        exec distrobox enter "$name"
+    else
+        exec distrobox enter "$name" -- "$@"
+    fi
+}
+
+cmd_new() {
+    pick_distro
+    local name="cache22-${DISTRO_ID}"
+    [[ -n "${CACHE22_SHELL_NAME:-}" ]] && name="$CACHE22_SHELL_NAME"
+    ensure_container "$name" "$DISTRO_IMAGE"
+    echo "$name" > "$ACTIVE_FILE"
+    enter_container "$name" "$@"
+}
+
+cmd_switch() {
+    local containers; containers=$(list_managed_containers)
+    if [[ -z "$containers" ]]; then
+        echo "No cache22-shell containers exist yet. Run cache22-shell to create one."
+        exit 1
+    fi
+    echo
+    echo "  Existing cache22-shell containers:"
+    local i=1 selected=()
+    while IFS= read -r c; do
+        printf "    %d) %s\n" "$i" "$c"
+        selected+=("$c")
+        ((i++))
+    done <<< "$containers"
+    echo
+    local reply
+    read -r -p "  Make active > " reply
+    [[ "$reply" =~ ^[0-9]+$ ]] && (( reply >= 1 && reply <= ${#selected[@]} )) \
+        || { echo "  cancelled"; exit 1; }
+    echo "${selected[reply-1]}" > "$ACTIVE_FILE"
+    echo "  active: ${selected[reply-1]}"
+}
+
+cmd_list() {
+    echo "Active container: $([[ -s "$ACTIVE_FILE" ]] && cat "$ACTIVE_FILE" || echo '(none)')"
+    echo
+    echo "All cache22-shell containers:"
+    list_managed_containers | sed 's/^/  /'
+}
+
+cmd_remove() {
+    [[ -s "$ACTIVE_FILE" ]] || { echo "No active container."; exit 1; }
+    local name; name=$(cat "$ACTIVE_FILE")
+    echo "About to remove distrobox container: $name"
+    read -r -p "Confirm? [y/N] " ans
+    [[ "$ans" =~ ^[yY] ]] || { echo "cancelled"; exit 1; }
+    distrobox rm -f "$name"
+    rm -f "$ACTIVE_FILE"
+}
+
+# ─── Dispatch ───
+case "${1:-}" in
+    --new)     shift; cmd_new "$@" ;;
+    --switch)  cmd_switch ;;
+    --list)    cmd_list ;;
+    --remove)  cmd_remove ;;
+    -h|--help)
+        sed -n '2,/^$/p' "$0" | sed 's/^# //; s/^#//'
+        exit 0 ;;
+esac
+
+# Default path: enter the active container, prompt for one if no active
+if [[ -n "${CACHE22_SHELL_IMAGE:-}" ]]; then
+    # Power-user override: image specified directly. Container name
+    # defaults to cache22-custom; user can also set CACHE22_SHELL_NAME.
+    NAME="${CACHE22_SHELL_NAME:-cache22-custom}"
+    ensure_container "$NAME" "$CACHE22_SHELL_IMAGE"
+    enter_container "$NAME" "$@"
+fi
+
+if [[ -s "$ACTIVE_FILE" ]]; then
+    NAME=$(cat "$ACTIVE_FILE")
+    if distrobox list 2>/dev/null | awk '{print $3}' | grep -qx "$NAME"; then
+        enter_container "$NAME" "$@"
+    fi
+    # Active container vanished — fall through to picker
+    rm -f "$ACTIVE_FILE"
+fi
+
+cmd_new "$@"

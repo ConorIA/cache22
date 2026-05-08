@@ -1,0 +1,12 @@
+[Unit]
+Description=cache22 unattended reboot timer
+ConditionPathExists=/etc/cache22/autoreboot.conf
+
+[Timer]
+# Placeholder; cache22-autoreboot enable writes a drop-in that
+# overrides this with the user-configured --at OnCalendar.
+OnCalendar=*-*-* 04:00:00
+Persistent=false
+
+[Install]
+WantedBy=timers.target

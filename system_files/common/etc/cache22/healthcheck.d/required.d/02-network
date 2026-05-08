@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# NetworkManager active. Network must come up SOMETIME for upgrades to
+# work; not having any link at all after boot indicates a real problem.
+systemctl is-active NetworkManager.service >/dev/null

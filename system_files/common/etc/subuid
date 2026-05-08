@@ -1,0 +1,16 @@
+# Sub-uid mappings. Each line: <user>:<start>:<count>
+#
+# Per the Incus production-deployment guide, root needs a large sub-id
+# range to launch user-namespaced (unprivileged) containers — without
+# this entry, incusd warns "Unable to parse system idmap: No map found
+# for user" at startup and rootful Incus can't create unpriv containers.
+#
+# https://linuxcontainers.org/incus/docs/main/reference/server_settings/
+#
+# Per-user mappings are appended by cache22-install when an account is
+# created (see installer/cache22-install — SUB_BASE = 524288 + UID*65536),
+# placing user 1000 at 66060288 (well inside root's billion-range so
+# overlap doesn't matter for shadow-utils — each line authorises a
+# separate user, ranges aren't exclusive).
+
+root:1000000:1000000000

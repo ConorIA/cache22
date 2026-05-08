@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# cache22-gamescope-mode {on,off,status} — toggle SteamOS-style gamescope
+# autologin via plasma-login-manager. The session files themselves ship
+# always-installed under /usr/lib/cache22/gamescope/ + /usr/share/wayland-sessions/;
+# this only writes/removes /etc/plasmalogin.conf.d/zz-cache22-gamescope-autologin.conf.
+#
+# Steam's "Switch to Desktop" gives a one-shot plasma session — next boot
+# returns to gamescope until you run `cache22-gamescope-mode off`.
+
+set -euo pipefail
+
+CONF=/etc/plasmalogin.conf.d/zz-cache22-gamescope-autologin.conf
+QUIET=0
+[[ "${2:-}" == "--quiet" ]] && QUIET=1
+
+require_root() {
+    if [[ ${EUID} -ne 0 ]]; then
+        echo "Error: must run as root (try: sudo cache22-gamescope-mode $*)" >&2
+        exit 1
+    fi
+}
+
+ensure_kde() {
+    [[ -d /etc/plasmalogin.conf.d || -e /usr/lib/systemd/system/plasmalogin.service ]] \
+        || { echo "Error: plasma-login-manager not installed (KDE variant required)." >&2; exit 1; }
+    [[ -x /usr/bin/start-gamescope-session || -x /usr/lib/cache22/gamescope/start-gamescope-session ]] \
+        || { echo "Error: gamescope session files missing — image overlay incomplete." >&2; exit 1; }
+}
+
+pick_user() {
+    local u
+    u=$(getent passwd | awk -F: '$3 == 1000 {print $1; exit}')
+    [[ -n "$u" ]] || { echo "Error: no UID 1000 user found" >&2; exit 1; }
+    echo "$u"
+}
+
+cmd_on() {
+    require_root on
+    ensure_kde
+    local user; user=$(pick_user)
+    install -d -m0755 "$(dirname "$CONF")"
+    cat > "$CONF" <<EOF
+[Autologin]
+Session=gamescope-session.desktop
+User=$user
+Relogin=true
+EOF
+    if (( QUIET == 0 )); then
+        cat <<EOF
+[OK] Gamescope mode enabled (autologin = $user → gamescope-session).
+
+  Reboot to land in Steam Big Picture. Use Steam's power menu →
+  "Switch to Desktop" for a one-shot plasma session, or run
+  'sudo cache22-gamescope-mode off' to turn this off permanently.
+EOF
+    fi
+}
+
+cmd_off() {
+    require_root off
+    rm -f "$CONF" /var/lib/cache22/gamescope-restore-on-next-boot
+    echo "[OK] Gamescope autologin removed; next boot uses the regular plasma greeter."
+}
+
+cmd_status() {
+    if [[ -f "$CONF" ]]; then
+        echo "Gamescope mode: ON"
+        printf '  config: %s\n' "$CONF"
+        sed 's/^/    /' "$CONF"
+    else
+        echo "Gamescope mode: OFF (no $CONF)"
+    fi
+    if [[ -f /var/lib/cache22/gamescope-restore-on-next-boot ]]; then
+        echo "  one-shot plasma marker present — gamescope autologin will be re-applied at next boot."
+    fi
+}
+
+case "${1:-status}" in
+    on)     cmd_on ;;
+    off)    cmd_off ;;
+    status) cmd_status ;;
+    -h|--help) sed -n '2,9p' "$0" | sed 's/^# \?//' ;;
+    *)      echo "Usage: cache22-gamescope-mode {on|off|status}" >&2; exit 1 ;;
+esac

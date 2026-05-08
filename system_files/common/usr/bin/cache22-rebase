@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# cache22-rebase — switch the booted system to a different cache22 variant
+# (cachy ↔ arch, server ↔ kde) or any other bootc OCI image. Wraps
+# `bootc switch` and runs the same finalize chain as cache22-update so
+# the new BLS entry lands on /boot before this returns.
+#
+# Usage:
+#   cache22-rebase                  interactive picker (variants.json)
+#   cache22-rebase --variant ID     pick by id (cachy-kde, arch-server, ...)
+#   cache22-rebase --image REF      arbitrary OCI ref
+#   cache22-rebase --reboot         reboot after switch
+#   cache22-rebase --list-variants  print variants and exit
+#   cache22-rebase --help
+
+set -euo pipefail
+
+VARIANTS_URL="https://raw.githubusercontent.com/cmspam/cache22/main/variants.json"
+VARIANTS_FALLBACK="/etc/cache22/variants.json"
+VARIANTS_JSON=""
+
+require_root() {
+    if [[ ${EUID} -ne 0 ]]; then
+        echo "Error: must run as root (try: sudo cache22-rebase $*)" >&2
+        exit 1
+    fi
+}
+
+load_variants() {
+    [[ -n "$VARIANTS_JSON" ]] && return 0
+    local cache=/tmp/cache22-variants.json
+    if [[ -s "$cache" ]]; then
+        VARIANTS_JSON=$(cat "$cache")
+        return 0
+    fi
+    if curl -sfLo "$cache" --max-time 5 "$VARIANTS_URL" 2>/dev/null; then
+        VARIANTS_JSON=$(cat "$cache")
+    elif [[ -s "$VARIANTS_FALLBACK" ]]; then
+        echo "NOTE: variants.json fetch failed; using local fallback" >&2
+        VARIANTS_JSON=$(cat "$VARIANTS_FALLBACK")
+    else
+        echo "ERROR: no variants.json available (network down + no fallback at $VARIANTS_FALLBACK)" >&2
+        exit 1
+    fi
+}
+
+variant_image() {
+    load_variants
+    python3 -c "
+import json, sys
+d = json.loads(sys.stdin.read())
+for v in d.get('variants', []):
+    if v['id'] == sys.argv[1]:
+        print(v['image']); sys.exit(0)
+sys.exit(1)
+" "$1" <<<"$VARIANTS_JSON"
+}
+
+print_variant_picker() {
+    load_variants
+    python3 -c "
+import json, sys, textwrap
+d = json.loads(sys.stdin.read())
+for i, v in enumerate(d.get('variants', []), 1):
+    print(f'  {i}) {v[\"label\"]}  ({v[\"id\"]})')
+    desc = v.get('description', '')
+    if desc:
+        for line in textwrap.wrap(desc, width=70, initial_indent='     ', subsequent_indent='     '):
+            print(line)
+    print()
+" <<<"$VARIANTS_JSON"
+}
+
+variant_count() {
+    load_variants
+    python3 -c "
+import json, sys
+print(len(json.loads(sys.stdin.read()).get('variants', [])))
+" <<<"$VARIANTS_JSON"
+}
+
+interactive_pick() {
+    load_variants
+    local count; count=$(variant_count)
+    print_variant_picker
+    while :; do
+        read -r -p "Pick a variant (1-${count}, or paste OCI ref; q to quit) > " reply
+        case "$reply" in
+            q|quit) exit 0 ;;
+        esac
+        if [[ "$reply" =~ ^[0-9]+$ ]] && (( reply >= 1 && reply <= count )); then
+            local id; id=$(load_variants; python3 -c "
+import json, sys
+print(json.loads(sys.stdin.read())['variants'][$reply-1]['id'])
+" <<<"$VARIANTS_JSON")
+            IMAGE=$(variant_image "$id")
+            return 0
+        fi
+        if [[ "$reply" == *":"* && "$reply" == *"/"* ]]; then
+            IMAGE="$reply"
+            return 0
+        fi
+        echo "  Pick a number 1-${count}, or paste a full image ref."
+    done
+}
+
+IMAGE=""
+REBOOT=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --variant) IMAGE=$(variant_image "$2") || { echo "Unknown variant: $2" >&2; exit 1; }; shift 2 ;;
+        --image)   IMAGE="$2"; shift 2 ;;
+        --reboot)  REBOOT=1; shift ;;
+        --list-variants) load_variants; print_variant_picker; exit 0 ;;
+        -h|--help) sed -n '2,12p' "$0" | sed 's/^# \?//'; exit 0 ;;
+        *)         echo "Unknown arg: $1" >&2; exit 1 ;;
+    esac
+done
+
+[[ -z "$IMAGE" ]] && interactive_pick
+
+require_root
+current=$(bootc status --json 2>/dev/null | python3 -c "
+import json, sys
+try: print(json.loads(sys.stdin.read())['status']['booted']['image']['image']['image'])
+except: pass" 2>/dev/null || true)
+echo "==> Current image:  ${current:-(unknown)}"
+echo "==> Switching to:   $IMAGE"
+
+if [[ "$current" == "$IMAGE" ]]; then
+    echo "[OK] Already on that image; nothing to do."
+    exit 0
+fi
+
+if ! bootc switch "$IMAGE"; then
+    echo "ERROR: bootc switch failed" >&2
+    exit 1
+fi
+
+. /usr/lib/cache22/bootc-finalize.sh
+
+if (( REBOOT )); then
+    echo "==> Rebooting"
+    systemctl reboot
+fi

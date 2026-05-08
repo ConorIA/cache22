@@ -1,0 +1,14 @@
+# cache22 — cachy-server additions on top of cachy-common.txt.
+#
+# Headless. No display manager, no Plasma, no fonts, no IMEs, no
+# printing, no gaming, no browser. Anything you'd want on a Fedora-
+# CoreOS-like host is in cachy-common.txt already (podman, docker,
+# distrobox, incus, libvirt, qemu-base, nftables, sshd). The only
+# server-only addition is cockpit (web admin UI), which would be
+# wasted bytes in the desktop variant.
+
+# ─── Web admin (optional, but standard for headless boxes) ─
+cockpit
+cockpit-podman
+cockpit-machines     # libvirt/qemu management
+cockpit-storaged     # disks/lvm/btrfs

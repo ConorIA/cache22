@@ -1,0 +1,7 @@
+# bash-completion for cache22-changelog
+_cache22_changelog() {
+    local cur prev words cword
+    _init_completion || return
+    COMPREPLY=( $(compgen -W "--check --help" -- "$cur") )
+}
+complete -F _cache22_changelog cache22-changelog

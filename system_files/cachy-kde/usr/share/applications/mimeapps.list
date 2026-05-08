@@ -1,0 +1,4 @@
+[Default Applications]
+application/x-rpm=cache22-foreign-pkg.desktop
+application/vnd.debian.binary-package=cache22-foreign-pkg.desktop
+application/x-ms-dos-executable=cache22-foreign-pkg.desktop

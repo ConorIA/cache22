@@ -1,0 +1,198 @@
+# cache22 — cachy-kde additions on top of cachy-common.txt.
+#
+# KDE Plasma 6 + curated apps for daily-driver workstation use.
+# Anything not here can be installed via flatpak (flathub
+# pre-configured) or distrobox.
+
+# ─── Desktop GPU userland (X11 / Wayland / 32-bit Steam) ──
+nvidia-settings
+egl-wayland
+nvidia-prime
+switcheroo-control
+xf86-video-amdgpu
+mesa-utils                 # glxgears, glxinfo
+vulkan-tools               # vkcube, vulkaninfo
+vulkan-mesa-layers
+vulkan-swrast
+lib32-mesa
+lib32-nvidia-utils
+lib32-opencl-nvidia
+lib32-vulkan-icd-loader
+lib32-vulkan-radeon
+lib32-vulkan-intel
+lib32-vulkan-virtio
+
+# ─── User-facing apps that aren't KDE per se ──────────────
+firefox                  # well-tested on Wayland; other browsers via flatpak
+bazaar                   # GUI flatpak storefront
+pavucontrol              # GUI volume / device picker
+virt-manager             # GUI for libvirt
+qemu-desktop             # SDL/GTK display backends on top of qemu-base
+
+# ─── Printing + scanning ──────────────────────────────────
+cups
+cups-pdf
+cups-pk-helper
+sane
+sane-airscan
+
+# ─── Fonts (general + CJK + emoji) ────────────────────────
+noto-fonts
+noto-fonts-cjk
+noto-fonts-emoji
+noto-fonts-extra
+ttf-dejavu
+ttf-liberation
+ttf-meslo-nerd
+ttf-bitstream-vera
+ttf-fira-code
+cantarell-fonts
+
+# ─── Asian language input methods (fcitx5) ────────────────
+# fcitx5-im is a CachyOS-only meta package; the arch-kde variant
+# expands it inline.
+fcitx5-im
+fcitx5-mozc
+fcitx5-chinese-addons
+fcitx5-hangul
+
+# ─── Tesseract OCR data ───────────────────────────────────
+tesseract-data-eng
+tesseract-data-jpn
+tesseract-data-chi_sim
+tesseract-data-chi_tra
+tesseract-data-kor
+
+# ─── Plasma desktop core ──────────────────────────────────
+plasma-desktop
+plasma-workspace
+plasma-pa
+plasma-nm
+plasma-systemmonitor
+plasma-thunderbolt
+plasma-firewall
+plasma-disks
+plasma-browser-integration
+plasma-login-manager
+kdeplasma-addons
+kwin
+kwayland-integration
+kactivitymanagerd
+kglobalacceld
+kpipewire
+kscreen
+bluedevil
+powerdevil
+breeze
+breeze-gtk
+breeze-icons
+oxygen-sounds
+xdg-desktop-portal-kde
+qt5-wayland
+qt6-wayland
+xorg-xwayland
+
+# ─── Settings + system management ─────────────────────────
+systemsettings
+kinfocenter
+kcmutils
+kde-cli-tools
+discover
+
+# ─── Wallets / auth / secrets ─────────────────────────────
+kwallet-pam
+kwalletmanager
+ksshaskpass
+polkit-kde-agent
+
+# ─── GTK/X11 cross-toolkit integration ────────────────────
+kde-gtk-config
+xsettingsd
+
+# ─── Daily-driver applications ────────────────────────────
+dolphin
+dolphin-plugins
+ark
+konsole
+kate
+kcalc
+kfind
+kgpg
+gwenview
+okular
+spectacle
+partitionmanager
+filelight
+kcolorchooser
+veracrypt        # cross-platform container/disk encryption (TrueCrypt-compatible)
+
+# ─── Media playback ───────────────────────────────────────
+haruna
+phonon-qt6-vlc
+ffmpegthumbs
+kdegraphics-thumbnailers
+
+# ─── Image format plugins (HEIC/AVIF/JXL in Dolphin/Gwenview) ──
+# kimageformats adds Qt image-plugin support for HEIF, AVIF, JXL, KRA,
+# ORA, PSD, EXR, HDR, etc. — gives Dolphin thumbnails and Gwenview
+# previews for everything modern phones produce. qt6-imageformats
+# covers the rest (TIFF, JPEG2000, MNG, ICNS, WBMP, …). The libheif/
+# libavif/libjxl deps come along automatically; listed here only as
+# defensive pins in case the plugin metapackage drifts.
+kimageformats
+qt6-imageformats
+libheif
+libavif
+libjxl
+libraw                   # camera raw (CR2/CR3/NEF/ARW/…) thumbnails
+webp-pixbuf-loader       # GTK app .webp support (GIMP, Eye of GNOME, …)
+
+# ─── GStreamer codec stack (system-wide audio/video decode) ────
+# cachy-common already ships gst-plugin-va for VA-API hardware accel;
+# these add the software codec coverage that any GStreamer-using app
+# (KDE thumbnails, Phonon-gstreamer fallback, GTK media apps, browsers'
+# VA-API path) needs to decode the formats people actually have.
+gst-plugins-base
+gst-plugins-good
+gst-plugins-bad
+gst-plugins-ugly
+gst-libav
+
+# ─── Connectivity ─────────────────────────────────────────
+kdeconnect
+sshfs
+
+# ─── Gaming ───────────────────────────────────────────────
+steam
+gamemode
+lib32-gamemode
+mangohud
+lib32-mangohud
+gamescope
+lutris
+goverlay
+xdg-desktop-portal-gtk     # Big Picture file pickers + non-KDE Flatpaks
+
+# ─── Xbox controller (xone-dkms-git in arch-kde.txt) ─
+xone-dkms
+
+# ─── Flatpak runtime + portal ─────────────────────────────
+flatpak-kcm
+packagekit-qt6
+
+# ─── Quality-of-life additions (KDE Linux-inspired) ───────
+kup               # KDE-native off-device backup
+usbmuxd           # iOS device support in Dolphin
+drm-info          # GPU/display debug
+plocate
+fzf
+
+# ─── Hybrid GPU control (laptop dGPU/iGPU switching) ──────
+# Daemon installed but service NOT enabled by default; flip with
+# `sudo systemctl enable --now supergfxd` when you want it.
+supergfxctl
+plasma6-applets-supergfxctl
+
+# ─── Game streaming server (Moonlight/Steam-Link compatible) ──
+# Disabled by default; `sudo systemctl enable --now sunshine` to start.
+sunshine

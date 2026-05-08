@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=cache22 foreign-package handler
+Comment=Explain why .rpm/.deb/.exe files can't install on an immutable image
+Exec=/usr/bin/cache22-foreign-pkg %f
+Icon=dialog-warning
+NoDisplay=true
+MimeType=application/x-rpm;application/vnd.debian.binary-package;application/x-ms-dos-executable;

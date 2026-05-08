@@ -1,0 +1,1706 @@
+#!/usr/bin/env bash
+# cache22-install — interactive installer. See docs/INSTALLER.md.
+
+set -uo pipefail
+
+DEFAULT_VARIANT="arch-kde"
+DEFAULT_IMAGE="ghcr.io/cmspam/cache22-${DEFAULT_VARIANT}:rolling"
+DEFAULT_HOSTNAME="cache22"
+DEFAULT_FS="btrfs"
+DEFAULT_TZ="Asia/Tokyo"
+DEFAULT_LOCALE="en_US.UTF-8"
+DEFAULT_ESP_SIZE="512M"
+DEFAULT_BOOT_SIZE="2G"
+DEFAULT_SCRATCH_SIZE="30G"
+TARGET=/var/mnt/target
+LOG=/var/log/cache22-install.log
+
+# Variants are fetched at runtime so adding/removing one doesn't need
+# an ISO rebuild. /etc/cache22/variants.json is the offline fallback.
+VARIANTS_URL="https://raw.githubusercontent.com/cmspam/cache22/main/variants.json"
+VARIANTS_FALLBACK="/etc/cache22/variants.json"
+VARIANTS_JSON=""
+
+COMMON_LOCALES=(
+    en_US.UTF-8  en_GB.UTF-8  de_DE.UTF-8  fr_FR.UTF-8
+    es_ES.UTF-8  it_IT.UTF-8  pt_BR.UTF-8  ja_JP.UTF-8
+    ko_KR.UTF-8  zh_CN.UTF-8  zh_TW.UTF-8  ru_RU.UTF-8
+)
+
+COMMON_TZS=(
+    UTC
+    America/Los_Angeles  America/Denver  America/Chicago  America/New_York
+    America/Toronto      America/Sao_Paulo
+    Europe/London  Europe/Berlin  Europe/Paris  Europe/Moscow
+    Africa/Johannesburg
+    Asia/Dubai  Asia/Kolkata  Asia/Shanghai  Asia/Tokyo  Asia/Seoul
+    Asia/Singapore
+    Australia/Sydney  Pacific/Auckland
+)
+
+declare -A CFG=(
+    [image]="$DEFAULT_IMAGE"
+    [mode]=""
+    [disk]=""
+    [esp_part]=""
+    [boot_part]=""
+    [root_part]=""
+    [scratch_part]=""
+    [filesystem]="$DEFAULT_FS"
+    [esp_size]="$DEFAULT_ESP_SIZE"
+    [boot_size]="$DEFAULT_BOOT_SIZE"
+    [scratch_size]="$DEFAULT_SCRATCH_SIZE"
+    [reserve_size]=""
+    [luks]="no"
+    [luks_password]=""
+    [hostname]="$DEFAULT_HOSTNAME"
+    [username]=""
+    [fullname]=""
+    [password]=""
+    [locale]="$DEFAULT_LOCALE"
+    [timezone]="$DEFAULT_TZ"
+    [reboot]="no"
+)
+
+# Set to 1 if maybe_setup_ipv6_github_proxy added entries to /etc/hosts.
+USED_IPV6_PROXY=0
+
+NO_PROMPT=0
+
+# ─── Utility ───────────────────────────────────────────────────────────
+say()   { printf '\n%s\n' "$*"; }
+hr()    { printf -- '────────────────────────────────────────────────\n'; }
+banner(){ printf '\n══ %s ══\n' "$*"; }
+die()   { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+confirm_destructive() {
+    (( NO_PROMPT )) && return 0
+    local target extra=""
+    case "${CFG[mode]}" in
+        custom)
+            target="partitions ${CFG[esp_part]}, ${CFG[boot_part]}, ${CFG[root_part]}, ${CFG[scratch_part]}" ;;
+        freespace)
+            target="cache22's new partitions inside the existing free space on ${CFG[disk]}"
+            extra="  Existing partitions on ${CFG[disk]} will NOT be touched." ;;
+        auto-reserve)
+            target="the entire disk ${CFG[disk]}"
+            extra="  Layered storage (LVM/mdraid/LUKS/ZFS/bcache) on this disk will be dismantled.
+  Final layout will leave ${CFG[reserve_size]} unallocated at the end of the disk." ;;
+        *)
+            target="the entire disk ${CFG[disk]}"
+            extra="  Layered storage (LVM/mdraid/LUKS/ZFS/bcache) on this disk will be dismantled." ;;
+    esac
+    cat <<EOF
+
+═══ ABOUT TO ERASE DATA ═══
+
+  Installing cache22 will WIPE $target.
+  All existing data on the target will be permanently lost.
+$extra
+
+EOF
+    local ans
+    read -rp "Type YES (uppercase) to proceed: " ans
+    [[ "$ans" == "YES" ]] || die "Aborted by user."
+}
+
+load_variants() {
+    [[ -n "$VARIANTS_JSON" ]] && return 0
+    local cache=/tmp/cache22-variants.json
+    if [[ -s "$cache" ]]; then
+        VARIANTS_JSON=$(cat "$cache")
+        return 0
+    fi
+    if curl -sfLo "$cache" --max-time 5 "$VARIANTS_URL" 2>/dev/null; then
+        VARIANTS_JSON=$(cat "$cache")
+    elif [[ -s "$VARIANTS_FALLBACK" ]]; then
+        printf 'NOTE: variants.json fetch failed; using ISO-baked copy\n' >&2
+        VARIANTS_JSON=$(cat "$VARIANTS_FALLBACK")
+    else
+        VARIANTS_JSON='{"schema_version":1,"variants":[{"id":"cachy-kde","label":"CachyOS-based KDE","image":"ghcr.io/cmspam/cache22-cachy-kde:rolling"}]}'
+        printf 'WARNING: no variants.json available; offering only cachy-kde\n' >&2
+    fi
+}
+
+variant_image() {
+    load_variants
+    python3 -c "
+import json, sys
+d = json.loads(sys.stdin.read())
+for v in d.get('variants', []):
+    if v['id'] == sys.argv[1]:
+        print(v['image']); sys.exit(0)
+sys.exit(1)
+" "$1" <<<"$VARIANTS_JSON"
+}
+
+variant_ids() {
+    load_variants
+    python3 -c "
+import json, sys
+d = json.loads(sys.stdin.read())
+for v in d.get('variants', []):
+    print(v['id'])
+" <<<"$VARIANTS_JSON"
+}
+
+print_variant_picker() {
+    load_variants
+    python3 -c "
+import json, sys, textwrap
+d = json.loads(sys.stdin.read())
+for i, v in enumerate(d.get('variants', []), 1):
+    print(f'  {i}) {v[\"label\"]}')
+    desc = v.get('description', '')
+    if desc:
+        for line in textwrap.wrap(desc, width=70, initial_indent='     ',
+                                   subsequent_indent='     '):
+            print(line)
+    print()
+" <<<"$VARIANTS_JSON"
+}
+
+usage() {
+    cat <<USAGE
+cache22-install — interactive installer
+
+Usage:
+  cache22-install                       fully interactive
+  cache22-install --disk /dev/sdX ...   prompt only for missing values
+  cache22-install --no-prompt --disk... fully scripted (fail if any
+                                        required value is missing)
+
+Common flags:
+  --variant ID         shortcut: looks up the OCI image for the given
+                       variant id from variants.json (fetched from
+                       GitHub at runtime). Common ids: cachy-kde,
+                       cachy-server, arch-kde, arch-server. Default
+                       $DEFAULT_VARIANT.
+  --image REF          OCI image (default: $DEFAULT_IMAGE).
+                       --image overrides --variant.
+  --list-variants      print the available variants and exit.
+  --mode MODE          auto | auto-reserve | freespace | custom
+                         auto         — wipe whole disk
+                         auto-reserve — wipe + leave free space at end
+                                        (--reserve-size required)
+                         freespace    — install into existing unallocated
+                                        space (don't wipe other partitions)
+                         custom       — pre-existing partitions
+  --disk DEV           target disk (auto / auto-reserve / freespace)
+  --esp DEV            ESP partition (custom mode)
+  --boot DEV           XBOOTLDR /boot partition (custom mode)
+  --root DEV           root partition (custom mode)
+  --scratch DEV|tmpfs  scratch partition (custom mode) OR force RAM-backed
+                       tmpfs in auto mode (overrides the auto-detect that
+                       picks tmpfs when MemAvailable >= 14 GB for server
+                       variants or 20 GB for KDE variants).
+  --filesystem FS      btrfs | xfs | ext4 (default: $DEFAULT_FS)
+                       btrfs creates root + home subvolumes with
+                       compress=zstd:1, noatime, space_cache=v2,
+                       discard=async; /var/home preserved across
+                       cache22-repair. xfs/ext4 are single-volume.
+  --esp-size SIZE      ESP size in auto mode (default: $DEFAULT_ESP_SIZE)
+  --boot-size SIZE     /boot size in auto mode (default: $DEFAULT_BOOT_SIZE)
+  --scratch-size SIZE  scratch size in auto mode (default: $DEFAULT_SCRATCH_SIZE)
+  --reserve-size SIZE  free space to leave at end of disk (auto-reserve;
+                       e.g. 100G, 200GiB)
+  --luks               LUKS-encrypt root
+  --hostname NAME      (default: $DEFAULT_HOSTNAME)
+  --user NAME          primary username
+  --fullname NAME      display name (default: same as --user)
+  --password PASS      password (use - to read from stdin)
+  --locale LOCALE      LANG value (default: $DEFAULT_LOCALE)
+  --timezone TZ        Region/City (default: $DEFAULT_TZ)
+  --reboot             reboot when done
+  --no-prompt          fail instead of prompting for missing values
+  -h, --help           this help
+
+Password and LUKS passphrase are never accepted on the command line as
+plaintext args; use --password - to feed via stdin, or
+CACHE22_LUKS_PASSWORD env for LUKS.
+USAGE
+}
+
+# ─── Prompt helpers ────────────────────────────────────────────────────
+# Each sets REPLY and returns 0=ok, 1=back, 2=quit.
+prompt() {
+    local q="$1" default="${2:-}"
+    local p
+    if [[ -n "$default" ]]; then p="$q [$default]"; else p="$q"; fi
+    printf '%s\n' "  (b=back, q=quit)"
+    read -r -p "$p > " REPLY
+    case "$REPLY" in
+        b|back)  return 1 ;;
+        q|quit)  return 2 ;;
+        '')      REPLY="$default"; return 0 ;;
+        *)       return 0 ;;
+    esac
+}
+
+prompt_secret() {
+    local q="$1"
+    printf '%s\n' "  (b=back, q=quit)"
+    read -r -s -p "$q > " REPLY
+    printf '\n'
+    case "$REPLY" in
+        b|back)  return 1 ;;
+        q|quit)  return 2 ;;
+    esac
+    return 0
+}
+
+# pick_from PROMPT DEFAULT_NUM_OR_VALUE OPT1 [OPT2 ...]
+pick_from() {
+    local q="$1" default="$2"; shift 2
+    local opts=("$@") i=1
+    for o in "${opts[@]}"; do
+        printf '  %2d) %s\n' "$i" "$o"
+        ((i++))
+    done
+    printf '%s\n' "  (or type a value not listed; b=back, q=quit)"
+    read -r -p "$q [$default] > " REPLY
+    case "$REPLY" in
+        b|back)  return 1 ;;
+        q|quit)  return 2 ;;
+        '')      REPLY="$default" ;;
+    esac
+    if [[ "$REPLY" =~ ^[0-9]+$ ]] && (( REPLY >= 1 && REPLY <= ${#opts[@]} )); then
+        REPLY="${opts[REPLY-1]}"
+    fi
+    return 0
+}
+
+# ─── Wizard steps ──────────────────────────────────────────────────────
+# Each prompts, validates, stores in CFG, returns 0=ok 1=back 2=quit.
+
+step_variant() {
+    banner "Step 1/10 — Variant"
+    load_variants
+    local count
+    count=$(variant_ids | wc -l)
+    if [[ "$count" -le 0 ]]; then
+        say "No variants advertised; using default ($DEFAULT_VARIANT)"
+        CFG[image]="$DEFAULT_IMAGE"
+        return 0
+    fi
+    say "Available cache22 variants:"
+    print_variant_picker
+    local default_idx=1 i=0 ids cur
+    mapfile -t ids < <(variant_ids)
+    cur="${CFG[image]}"
+    for ((i=0; i<${#ids[@]}; i++)); do
+        if [[ "$cur" == *"${ids[i]}"* ]]; then default_idx=$((i+1)); break; fi
+    done
+    while :; do
+        prompt "Pick a variant (1-${count}, or paste an OCI image ref)" \
+            "$default_idx" || return $?
+        if [[ "$REPLY" =~ ^[0-9]+$ ]] && (( REPLY >= 1 && REPLY <= count )); then
+            local picked="${ids[REPLY-1]}"
+            CFG[image]=$(variant_image "$picked")
+            return 0
+        fi
+        if [[ "$REPLY" == *":"* && "$REPLY" == *"/"* ]]; then
+            CFG[image]="$REPLY"
+            return 0
+        fi
+        printf '  Pick a number 1-%d, or paste a full image ref.\n' "$count"
+    done
+}
+
+step_mode() {
+    banner "Step 2/10 — Install mode"
+    cat <<'EOF'
+How should the disk be partitioned?
+
+  1) Whole disk (auto)         — wipe the disk, use everything
+  2) Whole disk, reserve free  — wipe + leave free space at end for another OS
+  3) Use existing empty space  — install into unallocated space (don't wipe other partitions)
+  4) Custom partitions         — you've already partitioned the disk; pick which is which
+EOF
+    local default="${CFG[mode]:-auto}"
+    while :; do
+        prompt "Mode (auto/auto-reserve/freespace/custom)" "$default" || return $?
+        case "$REPLY" in
+            1|auto)           CFG[mode]="auto";         break ;;
+            2|auto-reserve)   CFG[mode]="auto-reserve"; break ;;
+            3|freespace|free) CFG[mode]="freespace";    break ;;
+            4|custom)         CFG[mode]="custom";       break ;;
+            *) printf '  Please pick 1-4 (or auto / auto-reserve / freespace / custom).\n' ;;
+        esac
+    done
+    # auto-reserve needs a size; ask for it inline so it doesn't become
+    # a separate wizard step (which would dead-loop on back-navigation
+    # when the mode isn't auto-reserve).
+    if [[ "${CFG[mode]}" == "auto-reserve" ]]; then
+        step_reserve_size || return $?
+    fi
+    return 0
+}
+
+# Prompt for the size to leave unallocated at the disk end (auto-reserve
+# mode). Stored in CFG[reserve_size] in the same human format the other
+# size fields use ("100G", "50GiB", etc.). Called inline from step_mode.
+step_reserve_size() {
+    banner "Step 2b — Reserve size"
+    say "Leaves free space at the END of the disk so you can install another"
+    say "OS into it later. The scratch partition still uses this region during"
+    say "the cache22 install (for the podman pull); after install it's freed,"
+    say "and the requested amount is left as unallocated free space."
+    while :; do
+        prompt "Free space to reserve at end (e.g. 100G, 200GiB)" "${CFG[reserve_size]:-100G}" || return $?
+        if [[ "$REPLY" =~ ^[0-9]+([KMGTP]i?B?)?$ ]]; then
+            CFG[reserve_size]="$REPLY"
+            return 0
+        fi
+        printf '  Format: <number>[K|M|G|T][i][B]. Examples: 100G, 50GiB, 200000M.\n'
+    done
+}
+
+step_disk() {
+    banner "Step 2/9 — Target disk"
+    if [[ "${CFG[mode]}" == "custom" ]]; then
+        say "Available block devices:"
+        lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS | sed 's/^/  /'
+        say "If you need to (re)partition first, type 'shell' to drop to bash"
+        say "(cfdisk + parted are available). Then type 'exit' to come back."
+        printf '\n'
+        say "cache22 uses a four-partition layout (bazzite/Silverblue style):"
+        say "  ESP        FAT32, ~512 MB, mounted at /boot/efi"
+        say "  /boot      ext4 XBOOTLDR, ~2 GB, holds kernel + initramfs + BLS"
+        say "             entries (size for ~10 rollback slots)"
+        say "  root       btrfs/xfs/ext4, optionally LUKS"
+        say "  scratch    ext4, freed after install"
+        printf '\n'
+        while :; do
+            prompt "ESP partition (e.g. /dev/sda1)" "${CFG[esp_part]}" || return $?
+            if [[ "$REPLY" == "shell" ]]; then bash; lsblk -o NAME,SIZE,TYPE,FSTYPE | sed 's/^/  /'; continue; fi
+            [[ -b "$REPLY" ]] || { printf '  Not a block device.\n'; continue; }
+            CFG[esp_part]="$REPLY"; break
+        done
+        while :; do
+            prompt "/boot partition (XBOOTLDR ext4, e.g. /dev/sda2)" "${CFG[boot_part]}" || return $?
+            [[ -b "$REPLY" ]] || { printf '  Not a block device.\n'; continue; }
+            CFG[boot_part]="$REPLY"; break
+        done
+        while :; do
+            prompt "Root partition (e.g. /dev/sda3)" "${CFG[root_part]}" || return $?
+            [[ -b "$REPLY" ]] || { printf '  Not a block device.\n'; continue; }
+            CFG[root_part]="$REPLY"; break
+        done
+        say "Scratch partition holds podman storage during install (~25 GB during"
+        say "the pull). After install it's freed. If you have ≥32 GB RAM you can"
+        say "type 'tmpfs' to use a RAM-backed scratch instead of a partition."
+        while :; do
+            prompt "Scratch partition (or 'tmpfs')" "${CFG[scratch_part]:-tmpfs}" || return $?
+            if [[ "$REPLY" == "tmpfs" ]]; then CFG[scratch_part]="tmpfs"; break; fi
+            [[ -b "$REPLY" ]] || { printf '  Not a block device.\n'; continue; }
+            CFG[scratch_part]="$REPLY"; break
+        done
+        # Derive parent disk from ESP partition for the bootloader's NVRAM entry.
+        CFG[disk]=$(lsblk -no PKNAME "${CFG[esp_part]}" 2>/dev/null | head -1)
+        [[ -n "${CFG[disk]}" ]] && CFG[disk]="/dev/${CFG[disk]}"
+        return 0
+    fi
+
+    # MODEL alone is ambiguous when two identical drives are present;
+    # VENDOR + SERIAL make the picker unambiguous (and SERIAL matches
+    # what's printed on the drive's physical label). lsblk pads VENDOR
+    # to fixed width, so re-tokenize to collapse whitespace.
+    local opts=()
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        local NAME SIZE TYPE VENDOR MODEL SERIAL
+        eval "$line"
+        [[ "$TYPE" == "disk" ]] || continue
+        local -a label_parts
+        read -r -a label_parts <<< "$VENDOR $MODEL"
+        local label="${label_parts[*]}"
+        [[ -z "$label" ]] && label="no model"
+        if [[ -n "$SERIAL" ]]; then
+            opts+=( "/dev/$NAME ($SIZE  $label  s/n: $SERIAL)" )
+        else
+            opts+=( "/dev/$NAME ($SIZE  $label)" )
+        fi
+    done < <(lsblk -dnP -o NAME,SIZE,VENDOR,MODEL,SERIAL,TYPE)
+    [[ ${#opts[@]} -eq 0 ]] && die "No disks detected."
+
+    while :; do
+        local default="${CFG[disk]}"
+        [[ -z "$default" ]] && default="${opts[0]%% *}"
+        say "WARNING: the selected disk WILL BE WIPED."
+        pick_from "Disk" "$default" "${opts[@]}" || return $?
+        local dev="${REPLY%% *}"
+        if [[ ! -b "$dev" ]]; then printf '  Not a block device: %s\n' "$dev"; continue; fi
+        CFG[disk]="$dev"
+        local bytes gb
+        bytes=$(blockdev --getsize64 "$dev" 2>/dev/null || echo 0)
+        gb=$(( bytes / 1024 / 1024 / 1024 ))
+        if (( gb > 0 && gb < 50 )); then
+            say "WARNING: $dev is only ${gb} GB. cache22 + scratch realistically need 50+ GB."
+            prompt "Continue anyway? (y/N)" "n" || return $?
+            [[ "$REPLY" =~ ^[Yy] ]] || continue
+        fi
+        return 0
+    done
+}
+
+step_filesystem() {
+    banner "Step 3/9 — Root filesystem"
+    pick_from "Filesystem" "${CFG[filesystem]}" \
+        "btrfs (recommended, supports snapshots)" \
+        "xfs   (large-file friendly)" \
+        "ext4  (classic, simplest)" \
+        || return $?
+    case "${REPLY,,}" in
+        btrfs*) CFG[filesystem]="btrfs" ;;
+        xfs*)   CFG[filesystem]="xfs"   ;;
+        ext4*)  CFG[filesystem]="ext4"  ;;
+        btrfs|xfs|ext4) CFG[filesystem]="$REPLY" ;;
+        *) printf '  Unsupported filesystem: %s\n' "$REPLY"; return 1 ;;
+    esac
+    return 0
+}
+
+step_encryption() {
+    banner "Step 4/9 — Disk encryption"
+    say "Encrypt the root partition with LUKS2? You'll be prompted for the"
+    say "passphrase at every boot until TPM2 auto-unlock is configured."
+    local default="${CFG[luks]}"
+    while :; do
+        prompt "Encrypt? (y/N)" "$default" || return $?
+        case "${REPLY,,}" in
+            y|yes) CFG[luks]="yes"; break ;;
+            n|no)  CFG[luks]="no"; CFG[luks_password]=""; return 0 ;;
+            *)     printf '  Please answer y or n.\n' ;;
+        esac
+    done
+    while :; do
+        prompt_secret "LUKS passphrase" || return $?
+        local p1="$REPLY"
+        [[ -z "$p1" ]] && { printf '  Empty passphrase not allowed.\n'; continue; }
+        prompt_secret "Confirm LUKS passphrase" || return $?
+        if [[ "$p1" == "$REPLY" ]]; then
+            CFG[luks_password]="$p1"
+            return 0
+        fi
+        printf '  Passphrases did not match. Try again.\n'
+    done
+}
+
+step_hostname() {
+    banner "Step 5/9 — Hostname"
+    while :; do
+        prompt "Hostname" "${CFG[hostname]}" || return $?
+        if [[ "$REPLY" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$ ]]; then
+            CFG[hostname]="$REPLY"; return 0
+        fi
+        printf '  Invalid hostname (letters, digits, hyphens; ≤63 chars).\n'
+    done
+}
+
+step_user() {
+    banner "Step 6/9 — User account"
+    while :; do
+        prompt "Username (lowercase letters, digits, _, -)" "${CFG[username]}" || return $?
+        if [[ "$REPLY" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+            CFG[username]="$REPLY"; break
+        fi
+        printf '  Invalid username.\n'
+    done
+    prompt "Full name (optional)" "${CFG[fullname]:-${CFG[username]}}" || return $?
+    CFG[fullname]="${REPLY:-${CFG[username]}}"
+    return 0
+}
+
+step_password() {
+    banner "Step 7/9 — Password for ${CFG[username]}"
+    while :; do
+        prompt_secret "Password" || return $?
+        local p1="$REPLY"
+        [[ -z "$p1" ]] && { printf '  Empty password not allowed.\n'; continue; }
+        prompt_secret "Confirm password" || return $?
+        if [[ "$p1" == "$REPLY" ]]; then
+            CFG[password]="$p1"
+            return 0
+        fi
+        printf '  Passwords did not match. Try again.\n'
+    done
+}
+
+step_locale() {
+    banner "Step 8/9 — Locale"
+    pick_from "Locale" "${CFG[locale]}" "${COMMON_LOCALES[@]}" || return $?
+    if [[ "$REPLY" =~ ^[a-z]{2,3}_[A-Z]{2}(\.[A-Za-z0-9-]+)?$ ]]; then
+        CFG[locale]="$REPLY"; return 0
+    fi
+    printf '  Invalid locale format (expected e.g. en_US.UTF-8).\n'
+    return 1
+}
+
+step_timezone() {
+    banner "Step 9/9 — Timezone"
+    pick_from "Timezone" "${CFG[timezone]}" "${COMMON_TZS[@]}" || return $?
+    if [[ -e "/usr/share/zoneinfo/$REPLY" ]]; then
+        CFG[timezone]="$REPLY"; return 0
+    fi
+    printf '  /usr/share/zoneinfo/%s does not exist.\n' "$REPLY"
+    return 1
+}
+
+step_review() {
+    while :; do
+        banner "Review"
+        printf '  1) Mode:        %s\n' "${CFG[mode]}"
+        case "${CFG[mode]}" in
+            custom)
+                printf '  2) ESP part:    %s\n' "${CFG[esp_part]}"
+                printf '     /boot part:  %s\n' "${CFG[boot_part]}"
+                printf '     root part:   %s\n' "${CFG[root_part]}"
+                printf '     scratch:     %s\n' "${CFG[scratch_part]}" ;;
+            freespace)
+                printf '  2) Disk:        %s   (free space only — other partitions kept)\n' "${CFG[disk]}" ;;
+            auto-reserve)
+                printf '  2) Disk:        %s   (WILL BE ERASED, leaving %s free at end)\n' "${CFG[disk]}" "${CFG[reserve_size]}" ;;
+            *)
+                printf '  2) Disk:        %s   (WILL BE ERASED)\n' "${CFG[disk]}" ;;
+        esac
+        printf '  3) Filesystem:  %s\n'        "${CFG[filesystem]}"
+        printf '  4) Encryption:  %s\n'        "${CFG[luks]}"
+        printf '  5) Hostname:    %s\n'        "${CFG[hostname]}"
+        printf '  6) User:        %s (%s)\n'   "${CFG[username]}" "${CFG[fullname]}"
+        printf '  7) Locale:      %s\n'        "${CFG[locale]}"
+        printf '  8) Timezone:    %s\n'        "${CFG[timezone]}"
+        printf '  9) Reboot:      %s\n'        "${CFG[reboot]}"
+        hr
+        printf '  Press ENTER to install, a number to edit, b=back, q=quit.\n'
+        read -r -p "> " REPLY
+        case "$REPLY" in
+            ''|y|yes)  return 0 ;;
+            b|back)    return 1 ;;
+            q|quit)    return 2 ;;
+            1) step_mode       || return $? ;;
+            2) step_disk       || return $? ;;
+            3) step_filesystem || return $? ;;
+            4) step_encryption || return $? ;;
+            5) step_hostname   || return $? ;;
+            6) step_user       || return $? ;;
+            7) step_password   || return $? ;;
+            8) step_locale     || return $? ;;
+            9) prompt "Reboot when done? (y/N)" "${CFG[reboot]}" \
+                 && case "${REPLY,,}" in y|yes) CFG[reboot]="yes" ;; *) CFG[reboot]="no" ;; esac ;;
+            *) printf '  Unknown option.\n' ;;
+        esac
+    done
+}
+
+# ─── Wizard loop ───────────────────────────────────────────────────────
+STEPS=(variant mode disk filesystem encryption hostname user password locale timezone)
+run_wizard() {
+    local i=0
+    while (( i < ${#STEPS[@]} )); do
+        "step_${STEPS[i]}"
+        local rc=$?
+        case $rc in
+            0) ((i++)) ;;
+            1) (( i > 0 )) && ((i--)) ;;
+            2) printf 'Aborted.\n'; exit 0 ;;
+            *) die "Step ${STEPS[i]} returned unexpected $rc" ;;
+        esac
+    done
+    while :; do
+        step_review
+        local rc=$?
+        case $rc in
+            0) return 0 ;;
+            1) i=$(( ${#STEPS[@]} - 1 )); break ;;
+            2) printf 'Aborted.\n'; exit 0 ;;
+        esac
+    done
+    while (( i < ${#STEPS[@]} )); do
+        "step_${STEPS[i]}"; local rc=$?
+        case $rc in 0) ((i++)) ;; 1) (( i > 0 )) && ((i--)) ;; 2) exit 0 ;; esac
+    done
+    step_review
+}
+
+# ─── Argument parsing ──────────────────────────────────────────────────
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --image)        CFG[image]="$2"; shift 2 ;;
+            --variant)
+                img=$(variant_image "$2") || die "--variant: unknown id '$2'. Run with --list-variants to see options."
+                CFG[image]="$img"
+                shift 2 ;;
+            --list-variants)
+                load_variants
+                print_variant_picker
+                exit 0 ;;
+            --mode)         CFG[mode]="$2"; shift 2 ;;
+            --disk)         CFG[disk]="$2"; CFG[mode]="${CFG[mode]:-auto}"; shift 2 ;;
+            --esp)          CFG[esp_part]="$2"; CFG[mode]="custom"; shift 2 ;;
+            --boot)         CFG[boot_part]="$2"; CFG[mode]="custom"; shift 2 ;;
+            --root)         CFG[root_part]="$2"; CFG[mode]="custom"; shift 2 ;;
+            --scratch)
+                CFG[scratch_part]="$2"
+                # `--scratch tmpfs` is a valid override on top of auto mode;
+                # only flip to custom when a real device is given.
+                [[ "$2" != "tmpfs" ]] && CFG[mode]="custom"
+                shift 2 ;;
+            --filesystem)   CFG[filesystem]="$2"; shift 2 ;;
+            --esp-size)     CFG[esp_size]="$2"; shift 2 ;;
+            --boot-size)    CFG[boot_size]="$2"; shift 2 ;;
+            --scratch-size) CFG[scratch_size]="$2"; shift 2 ;;
+            --reserve-size) CFG[reserve_size]="$2"; CFG[mode]="${CFG[mode]:-auto-reserve}"; shift 2 ;;
+            --luks)         CFG[luks]="yes"; shift ;;
+            --hostname)     CFG[hostname]="$2"; shift 2 ;;
+            --user)         CFG[username]="$2"; shift 2 ;;
+            --fullname)     CFG[fullname]="$2"; shift 2 ;;
+            --password)
+                if [[ "$2" == "-" ]]; then read -rs CFG[password]; printf '\n'
+                else CFG[password]="$2"; fi
+                shift 2 ;;
+            --locale)       CFG[locale]="$2"; shift 2 ;;
+            --timezone)     CFG[timezone]="$2"; shift 2 ;;
+            --reboot)       CFG[reboot]="yes"; shift ;;
+            --no-prompt)    NO_PROMPT=1; shift ;;
+            -h|--help)      usage; exit 0 ;;
+            *)              die "Unknown argument: $1 (--help for options)" ;;
+        esac
+    done
+    [[ -n "${CFG[mode]}" ]] || CFG[mode]="auto"
+    [[ "${CFG[luks]}" == "yes" && -n "${CACHE22_LUKS_PASSWORD:-}" ]] && CFG[luks_password]="$CACHE22_LUKS_PASSWORD"
+}
+
+needs_wizard() {
+    [[ -z "${CFG[mode]}" ]] && return 0
+    case "${CFG[mode]}" in
+        custom)
+            [[ -z "${CFG[esp_part]}" || -z "${CFG[boot_part]}" || -z "${CFG[root_part]}" || -z "${CFG[scratch_part]}" ]] && return 0 ;;
+        auto-reserve)
+            [[ -z "${CFG[disk]}" || -z "${CFG[reserve_size]}" ]] && return 0 ;;
+        auto|freespace)
+            [[ -z "${CFG[disk]}" ]] && return 0 ;;
+        *)
+            return 0 ;;
+    esac
+    [[ -z "${CFG[username]}" || -z "${CFG[password]}" ]] && return 0
+    [[ "${CFG[luks]}" == "yes" && -z "${CFG[luks_password]}" ]] && return 0
+    return 1
+}
+
+# ─── Pre-flight ────────────────────────────────────────────────────────
+
+# Required tools in the live env. We've been bitten by silent failures
+# (openssl missing → empty password hash → passwordless account).
+# Refuse to start if anything's missing.
+require_tools() {
+    local need=(openssl podman bootc mokutil efibootmgr mkfs.fat mkfs.ext4 mkfs.btrfs btrfs sgdisk parted blkid mountpoint dmsetup pvs vgchange mdadm wipefs lsblk udevadm)
+    local missing=()
+    local t
+    for t in "${need[@]}"; do
+        command -v "$t" >/dev/null 2>&1 || missing+=("$t")
+    done
+    (( ${#missing[@]} == 0 )) || die "Live env is missing required tools: ${missing[*]}"
+}
+
+# cache22 ships x86-64-v3 binaries (CachyOS-v3 base + ALHP rebuilds).
+# Booting on a CPU without v3 will SIGILL early in userspace (typically
+# at glibc init), well past anything the installer can recover from.
+# Refuse to install on incompatible hardware. Required v3 features:
+# AVX, AVX2, BMI1, BMI2, F16C, FMA, LZCNT, MOVBE, OSXSAVE.
+require_x86_64_v3() {
+    local missing=()
+    # avx2 + bmi2 + fma uniquely identify the v3 microarchitecture
+    # baseline (Intel Haswell ≈ 2013 / AMD Excavator ≈ 2015 or newer).
+    # The full v3 set also requires lzcnt+movbe but Linux's
+    # /proc/cpuinfo doesn't always report those flag names (kernels
+    # may surface lzcnt as "abm", and movbe is sometimes elided),
+    # leading to false-positive "missing" reports on real v3 CPUs.
+    local need=(avx avx2 bmi1 bmi2 fma)
+    local cpuinfo
+    cpuinfo=$(< /proc/cpuinfo)
+    local f
+    for f in "${need[@]}"; do
+        grep -qE "^flags[[:space:]]*:.* ${f}( |\$)" /proc/cpuinfo || missing+=("$f")
+    done
+    if (( ${#missing[@]} > 0 )); then
+        cat >&2 <<EOF
+
+═══════════════════════════════════════════════════════════
+  CPU does not support x86-64-v3 — cannot install cache22.
+
+  Missing CPU features: ${missing[*]}
+
+  cache22 binaries are built for the x86-64-v3 microarchitecture
+  baseline (Intel Haswell ≈ 2013, AMD Excavator ≈ 2015 or newer).
+  Your CPU is older than that, or is a virtualised/passthrough
+  config that doesn't expose the required instructions.
+
+  If this is a VM and the host CPU is recent, switch the guest
+  CPU model to "host-passthrough" (libvirt) or pass --cpu host
+  (qemu) so v3 instructions are visible inside the guest.
+
+  cache22 will not run on this machine. Refusing to proceed.
+═══════════════════════════════════════════════════════════
+
+EOF
+        exit 2
+    fi
+}
+
+preflight() {
+    [[ "$EUID" -eq 0 ]] || die "Must run as root."
+    [[ -d /sys/firmware/efi ]] || die "Not booted in UEFI mode (legacy BIOS not supported)."
+    require_tools
+    require_x86_64_v3
+    if ! ping -c 1 -W 3 ghcr.io >/dev/null 2>&1; then
+        printf 'WARNING: ghcr.io unreachable. The installer will fail at the pull step.\n'
+        printf 'Configure networking (e.g. nmtui or nmcli device wifi connect <SSID>) and re-run.\n'
+        printf 'Continue anyway? (y/N) '
+        read -r ans
+        [[ "${ans,,}" =~ ^y ]] || exit 1
+    fi
+}
+
+# ─── Install ───────────────────────────────────────────────────────────
+ROOT_DEV=""; ROOT_UUID=""; BOOT_UUID=""; ESP_UUID=""
+
+# Pick tmpfs vs partition for /var/lib/containers based on available RAM.
+# Only runs in auto mode when the user hasn't explicitly chosen.
+# Variant-aware threshold: KDE images extract to ~12 GB, server to ~6.5 GB,
+# plus ~5 GB for the live system + install processes + headroom.
+decide_auto_scratch() {
+    [[ "${CFG[mode]}" == "custom" ]] && return 0
+    [[ -n "${CFG[scratch_part]}" ]]  && return 0   # user pre-set via --scratch
+
+    local needed_gb variant_type
+    variant_type="${CFG[image]##*-}"; variant_type="${variant_type%%:*}"
+    case "$variant_type" in
+        kde)    needed_gb=20 ;;
+        server) needed_gb=14 ;;
+        *)      needed_gb=20 ;;   # conservative
+    esac
+
+    local avail_kb avail_gb
+    avail_kb=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)
+    avail_gb=$(( avail_kb / 1024 / 1024 ))
+
+    if (( avail_gb >= needed_gb )); then
+        say "Auto-scratch: ${avail_gb} GB available ≥ ${needed_gb} GB needed (${variant_type}) → tmpfs"
+        CFG[scratch_part]="tmpfs"
+    else
+        say "Auto-scratch: ${avail_gb} GB available < ${needed_gb} GB needed (${variant_type}) → disk partition"
+        # Leave empty; partition_auto allocates partition 4.
+    fi
+}
+
+# Dismantle any active layered storage built on $DISK or its partitions
+# so subsequent writes (wipefs / sgdisk / mkfs) succeed. Two phases:
+#
+#   1. Release kernel holders. Anything actively mapped on top of the
+#      device — open dm-crypt, active LVM VG, assembled mdraid, attached
+#      bcache — has to be torn down first, otherwise the partition is
+#      EBUSY and we can't write to it.
+#
+#   2. dd-zero the canonical metadata regions. After phase 1 the device
+#      is idle; we nuke the first 16 MiB and last 16 MiB of the disk
+#      and each partition. This range covers ALL layered-storage
+#      signatures we care about:
+#         - GPT primary (first 1 MiB) and backup (last 1 MiB)
+#         - LVM PV header (first ~1 MiB)
+#         - LUKS / LUKS2 header + keyslots (first ~16 MiB)
+#         - mdraid superblock v1.x at start (first 4 KiB) and v1.0/v0.90
+#           at end (last ~64 KiB)
+#         - ZFS vdev labels (first 512 KiB + last 512 KiB)
+#         - bcache superblock (sector 16, ~8 KiB in)
+#         - any FS magic in either spot
+#      Single dd pass per region; no per-format special-case needed.
+#
+# Idempotent: nothing matches → nothing happens.
+dismantle_layers() {
+    local DISK="$1"
+    [[ -b "$DISK" ]] || return 0
+    say "Dismantling active layered storage on $DISK"
+
+    local parts=() p
+    while IFS= read -r p; do
+        [[ -b "$p" && "$p" != "$DISK" ]] && parts+=("$p")
+    done < <(lsblk -nlpo NAME "$DISK" 2>/dev/null)
+
+    # Phase 1a — close any dm-crypt mapping backed by this disk
+    if command -v dmsetup >/dev/null 2>&1; then
+        local map backing dev
+        while IFS= read -r map; do
+            [[ -z "$map" ]] && continue
+            backing=$(cryptsetup status "$map" 2>/dev/null | awk '/^ *device:/{print $2}')
+            [[ -z "$backing" ]] && continue
+            for dev in "$DISK" "${parts[@]}"; do
+                if [[ "$backing" == "$dev" ]]; then
+                    say "  LUKS close: $map (backing $backing)"
+                    cryptsetup close "$map" 2>/dev/null || true
+                    break
+                fi
+            done
+        done < <(dmsetup ls --target crypt 2>/dev/null | awk '{print $1}' | grep -v '^No devices')
+    fi
+
+    # Phase 1b — deactivate any LVM VG that has a PV on this disk
+    if command -v pvs >/dev/null 2>&1; then
+        local pv vg seen_vgs=()
+        for pv in "$DISK" "${parts[@]}"; do
+            vg=$(pvs --noheadings -o vg_name "$pv" 2>/dev/null | awk '{print $1}')
+            [[ -z "$vg" ]] && continue
+            # Don't deactivate the same VG twice (multi-PV VGs).
+            local already=0 v
+            for v in "${seen_vgs[@]}"; do [[ "$v" == "$vg" ]] && already=1; done
+            (( already )) && continue
+            seen_vgs+=("$vg")
+            say "  LVM: deactivate VG '$vg' (PV $pv)"
+            vgchange -an "$vg" 2>/dev/null || true
+        done
+    fi
+
+    # Phase 1c — stop any md array with members on this disk
+    if command -v mdadm >/dev/null 2>&1; then
+        local md mdmember has_member
+        while IFS= read -r md; do
+            [[ -z "$md" ]] && continue
+            md="/dev/$md"
+            [[ -b "$md" ]] || continue
+            has_member=0
+            while IFS= read -r mdmember; do
+                for p in "$DISK" "${parts[@]}"; do
+                    [[ "$mdmember" == "$p" ]] && has_member=1
+                done
+            done < <(mdadm --detail "$md" 2>/dev/null | awk '/active sync|spare/{print $NF}')
+            if (( has_member )); then
+                say "  mdraid: stop $md"
+                mdadm --stop "$md" 2>/dev/null || true
+            fi
+        done < <(awk '/^md/{print $1}' /proc/mdstat 2>/dev/null)
+    fi
+
+    # Phase 1d — stop any bcache device built on this disk
+    for p in "$DISK" "${parts[@]}"; do
+        local dev_name="${p##*/}"
+        if [[ -e "/sys/block/$dev_name/bcache/stop" ]]; then
+            say "  bcache: stop /dev/$dev_name"
+            echo 1 > "/sys/block/$dev_name/bcache/stop" 2>/dev/null || true
+        fi
+    done
+
+    udevadm settle 2>/dev/null || true
+
+    # Phase 2 — dd-zero the canonical metadata regions. Nukes ZFS vdev
+    # labels (no zfs userspace needed in the live env), LVM PV headers,
+    # LUKS headers, mdraid superblocks, bcache superblocks, GPT magic,
+    # FS magic — anything that lives in the first or last 16 MiB.
+    local target size last_seek_mib
+    for target in "$DISK" "${parts[@]}"; do
+        size=$(blockdev --getsize64 "$target" 2>/dev/null || echo 0)
+        (( size > 64 * 1024 * 1024 )) || continue   # skip tiny devices
+        say "  zero first/last 16 MiB of $target"
+        dd if=/dev/zero of="$target" bs=1M count=16 conv=fsync 2>/dev/null || true
+        last_seek_mib=$(( (size / 1024 / 1024) - 16 ))
+        dd if=/dev/zero of="$target" bs=1M count=16 \
+            seek="$last_seek_mib" conv=fsync 2>/dev/null || true
+    done
+
+    udevadm settle 2>/dev/null || true
+}
+
+# Convert a human size (100G, 50GiB, 200000M, etc.) to bytes. Used by
+# free-space gap detection and the auto-reserve sizing math.
+size_to_bytes() {
+    local s="$1" num unit
+    s="${s,,}"   # lowercase
+    if [[ "$s" =~ ^([0-9]+)([kmgtp]?)i?b?$ ]]; then
+        num="${BASH_REMATCH[1]}"; unit="${BASH_REMATCH[2]}"
+        local mul=1
+        case "$unit" in
+            k) mul=1024 ;;
+            m) mul=$((1024**2)) ;;
+            g) mul=$((1024**3)) ;;
+            t) mul=$((1024**4)) ;;
+            p) mul=$((1024**5)) ;;
+        esac
+        printf '%d' "$(( num * mul ))"
+        return 0
+    fi
+    return 1
+}
+
+# Resolve the partition device for a given GPT name on $DISK. Used by
+# freespace mode where partition numbers aren't predictable.
+partlabel_to_dev() {
+    local label="$1"
+    udevadm settle 2>/dev/null || true
+    local p
+    p="/dev/disk/by-partlabel/$label"
+    [[ -L "$p" ]] && readlink -f "$p"
+}
+
+partition_auto() {
+    local DISK="${CFG[disk]}"
+    say "Partitioning $DISK (mode: ${CFG[mode]})"
+    case "$DISK" in
+        /dev/nvme*|/dev/mmcblk*|/dev/loop*) PSEP="p" ;;
+        *)                                  PSEP=""  ;;
+    esac
+    CFG[esp_part]="${DISK}${PSEP}1"
+    CFG[boot_part]="${DISK}${PSEP}2"
+    CFG[root_part]="${DISK}${PSEP}3"
+
+    local using_tmpfs=0
+    if [[ "${CFG[scratch_part]}" == "tmpfs" ]]; then
+        using_tmpfs=1
+    else
+        CFG[scratch_part]="${DISK}${PSEP}4"
+    fi
+
+    umount -R "$TARGET" 2>/dev/null || true
+    umount /var/lib/containers 2>/dev/null || true
+    umount /var/tmp 2>/dev/null || true
+    cryptsetup close cache22-root 2>/dev/null || true
+    podman system reset --force 2>/dev/null || true
+
+    dismantle_layers "$DISK"
+
+    for p in "${DISK}"*; do
+        [[ "$p" == "$DISK" ]] && continue
+        [[ -b "$p" ]] && wipefs -af "$p" 2>/dev/null || true
+    done
+    wipefs -af "$DISK" 2>/dev/null || true
+    udevadm settle 2>/dev/null || true
+    sleep 1
+
+    sgdisk --zap-all "$DISK"
+    sgdisk --new="1:0:+${CFG[esp_size]}"  --typecode=1:ef00 --change-name=1:cache22-esp  "$DISK"
+    sgdisk --new="2:0:+${CFG[boot_size]}" --typecode=2:ea00 --change-name=2:cache22-boot "$DISK"
+    if [[ "${CFG[mode]}" == "auto-reserve" ]]; then
+        # Wipe the disk but leave CFG[reserve_size] unallocated at the end.
+        # During install, scratch sits inside the eventual reserve area too
+        # (since reclaim_scratch hasn't run yet); after install, scratch
+        # is removed and root is grown to (disk_end - reserve_size). The
+        # reserved tail is what the user gets back as free space.
+        local reserve_b reserve_mib end_offset_mib
+        reserve_b=$(size_to_bytes "${CFG[reserve_size]}") \
+            || die "Bad reserve size: ${CFG[reserve_size]}"
+        reserve_mib=$(( reserve_b / 1024 / 1024 ))
+        if (( using_tmpfs )); then
+            # tmpfs scratch: root ends reserve_mib before disk end, no partition 4.
+            sgdisk --new="3:0:-${reserve_mib}M" --typecode=3:8304 --change-name=3:cache22-root "$DISK"
+        else
+            # Root + scratch share the area before the reserved tail.
+            local scratch_b scratch_mib root_end_mib
+            scratch_b=$(size_to_bytes "${CFG[scratch_size]}")
+            scratch_mib=$(( scratch_b / 1024 / 1024 ))
+            end_offset_mib=$(( reserve_mib + scratch_mib ))
+            sgdisk --new="3:0:-${end_offset_mib}M" --typecode=3:8304 --change-name=3:cache22-root "$DISK"
+            sgdisk --new="4:0:+${scratch_mib}M"   --typecode=4:8300 --change-name=4:cache22-scratch "$DISK"
+        fi
+    elif (( using_tmpfs )); then
+        # tmpfs scratch — root takes the rest of the disk; no partition 4.
+        sgdisk --new="3:0:0"                      --typecode=3:8304 --change-name=3:cache22-root    "$DISK"
+    else
+        sgdisk --new="3:0:-${CFG[scratch_size]}"  --typecode=3:8304 --change-name=3:cache22-root    "$DISK"
+        sgdisk --new="4:0:0"                      --typecode=4:8300 --change-name=4:cache22-scratch "$DISK"
+    fi
+    partprobe "$DISK" || true
+    udevadm settle || true
+    sleep 2
+}
+
+# Install into existing free space on $DISK without disturbing other
+# partitions. Uses sgdisk's "next available" semantics (partition number
+# 0 = next free; sector 0 = next available sector). Partition device
+# paths aren't predictable, so they're resolved post-creation by GPT
+# partition name.
+partition_freespace() {
+    local DISK="${CFG[disk]}"
+    say "Partitioning $DISK (mode: freespace — using existing unallocated space)"
+
+    # Free-space sanity check: parted reports the largest free region.
+    local largest_b
+    largest_b=$(parted -s "$DISK" unit B print free 2>/dev/null \
+        | awk '/Free Space/{gsub(/B/,"",$3); if ($3+0 > max){max=$3+0}} END{print max+0}')
+    local needed_b
+    needed_b=$(( $(size_to_bytes "${CFG[esp_size]}") \
+              + $(size_to_bytes "${CFG[boot_size]}") \
+              + $(size_to_bytes "${CFG[scratch_size]}") \
+              + 4 * 1024 * 1024 * 1024 ))   # min 4G headroom for root
+    if (( largest_b < needed_b )); then
+        die "Largest free region on $DISK is $((largest_b/1024/1024/1024)) GiB, need at least $((needed_b/1024/1024/1024)) GiB."
+    fi
+
+    umount -R "$TARGET" 2>/dev/null || true
+    umount /var/lib/containers 2>/dev/null || true
+    umount /var/tmp 2>/dev/null || true
+    cryptsetup close cache22-root 2>/dev/null || true
+    podman system reset --force 2>/dev/null || true
+    udevadm settle 2>/dev/null || true
+
+    local using_tmpfs=0
+    [[ "${CFG[scratch_part]}" == "tmpfs" ]] && using_tmpfs=1
+
+    # If GPT is missing, sgdisk creates one. If MBR, sgdisk converts.
+    # Either way, do NOT --zap-all (would destroy existing partitions).
+    sgdisk --new="0:0:+${CFG[esp_size]}"  --typecode=0:ef00 --change-name=0:cache22-esp  "$DISK"
+    sgdisk --new="0:0:+${CFG[boot_size]}" --typecode=0:ea00 --change-name=0:cache22-boot "$DISK"
+    if (( using_tmpfs )); then
+        # Root fills the rest of the largest free region. sgdisk's
+        # "0" end means "extend to end of largest free region".
+        sgdisk --largest-new=0 --typecode=0:8304 --change-name=0:cache22-root "$DISK"
+    else
+        # Root takes (largest free - boot - esp - scratch); scratch
+        # takes the remaining space (which is exactly scratch_size
+        # since it sits in the same free region).
+        local esp_b boot_b scratch_b root_b root_mib scratch_mib
+        esp_b=$(size_to_bytes "${CFG[esp_size]}")
+        boot_b=$(size_to_bytes "${CFG[boot_size]}")
+        scratch_b=$(size_to_bytes "${CFG[scratch_size]}")
+        # After ESP+boot are placed, the remaining free region is:
+        #   largest_b - esp_b - boot_b
+        # Root gets (remaining - scratch_b), scratch gets scratch_b.
+        root_b=$(( largest_b - esp_b - boot_b - scratch_b ))
+        (( root_b > 4 * 1024**3 )) || die "Computed root size too small: $((root_b/1024/1024/1024)) GiB"
+        root_mib=$(( root_b / 1024 / 1024 ))
+        scratch_mib=$(( scratch_b / 1024 / 1024 ))
+        sgdisk --new="0:0:+${root_mib}M"    --typecode=0:8304 --change-name=0:cache22-root    "$DISK"
+        sgdisk --new="0:0:+${scratch_mib}M" --typecode=0:8300 --change-name=0:cache22-scratch "$DISK"
+    fi
+    partprobe "$DISK" || true
+    udevadm settle || true
+    sleep 2
+
+    # Resolve partition device paths by GPT name (numbers aren't predictable).
+    CFG[esp_part]=$(partlabel_to_dev cache22-esp)
+    CFG[boot_part]=$(partlabel_to_dev cache22-boot)
+    CFG[root_part]=$(partlabel_to_dev cache22-root)
+    if (( using_tmpfs )); then
+        CFG[scratch_part]="tmpfs"
+    else
+        CFG[scratch_part]=$(partlabel_to_dev cache22-scratch)
+    fi
+    [[ -b "${CFG[esp_part]}"  ]] || die "ESP partition not created"
+    [[ -b "${CFG[boot_part]}" ]] || die "Boot partition not created"
+    [[ -b "${CFG[root_part]}" ]] || die "Root partition not created"
+}
+
+partition_custom_check() {
+    [[ -b "${CFG[esp_part]}"  ]] || die "ESP partition ${CFG[esp_part]} not found"
+    [[ -b "${CFG[boot_part]}" ]] || die "Boot partition ${CFG[boot_part]} not found"
+    [[ -b "${CFG[root_part]}" ]] || die "Root partition ${CFG[root_part]} not found"
+    [[ "${CFG[scratch_part]}" == "tmpfs" || -b "${CFG[scratch_part]}" ]] || die "Scratch ${CFG[scratch_part]} not found"
+}
+
+setup_scratch() {
+    mkdir -p /var/lib/containers /var/tmp
+    if [[ "${CFG[scratch_part]}" == "tmpfs" ]]; then
+        mount -t tmpfs -o size=32G tmpfs /var/lib/containers
+    else
+        mkfs.ext4 -F -q -L cache22-scratch "${CFG[scratch_part]}"
+        # -t ext4 explicit: skips a noisy ext3-probe log line.
+        mount -t ext4 "${CFG[scratch_part]}" /var/lib/containers
+    fi
+    mkdir -p /var/lib/containers/var-tmp
+    mount --bind /var/lib/containers/var-tmp /var/tmp
+    export TMPDIR=/var/tmp
+}
+
+setup_target() {
+    if [[ "${CFG[luks]}" == "yes" ]]; then
+        printf '%s' "${CFG[luks_password]}" | cryptsetup luksFormat \
+            --type luks2 --batch-mode --label cache22-luks "${CFG[root_part]}" -
+        printf '%s' "${CFG[luks_password]}" | cryptsetup open "${CFG[root_part]}" cache22-root -
+        ROOT_DEV="/dev/mapper/cache22-root"
+    else
+        ROOT_DEV="${CFG[root_part]}"
+    fi
+
+    mkfs.fat -F32 -n EFI-SYSTEM "${CFG[esp_part]}" >/dev/null
+    # /boot label MUST be "boot" — bootupd's grub2-static config
+    # (10_blscfg.cfg) does `search --label boot --set root` to locate
+    # the partition before sourcing /boot/grub2/grub.cfg.d/.
+    mkfs.ext4 -F -q -L boot "${CFG[boot_part]}"
+    case "${CFG[filesystem]}" in
+        btrfs) mkfs.btrfs -L cache22-root -f "$ROOT_DEV" >/dev/null ;;
+        xfs)   mkfs.xfs   -L cache22-root -f "$ROOT_DEV" >/dev/null ;;
+        ext4)  mkfs.ext4  -F -q -L cache22-root "$ROOT_DEV" ;;
+    esac
+
+    ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV")
+    BOOT_UUID=$(blkid -s UUID -o value "${CFG[boot_part]}")
+    ESP_UUID=$(blkid -s UUID -o value "${CFG[esp_part]}")
+
+    # On btrfs, lay out the canonical bootc/Silverblue/Bazzite-style
+    # subvolume split: `root` holds /sysroot/ostree/... (the bootc
+    # deployments), `home` is mounted at /var/home so reinstalls can
+    # wipe `root` without touching user data. zstd:1 is the cheap-good
+    # compression sweet spot Fedora atomic uses; noatime + space_cache=v2
+    # + discard=async are standard SSD-friendly defaults. xfs/ext4
+    # installs keep the existing single-volume layout (no subvols, no
+    # /home preservation across reinstalls — repair tool flags it).
+    BTRFS_OPTS="compress=zstd:1,noatime,space_cache=v2,discard=async"
+    mkdir -p "$TARGET"
+    if [[ "${CFG[filesystem]}" == "btrfs" ]]; then
+        mount "$ROOT_DEV" "$TARGET"
+        btrfs subvolume create "$TARGET/root" >/dev/null
+        btrfs subvolume create "$TARGET/home" >/dev/null
+        umount "$TARGET"
+        mount -o "subvol=root,$BTRFS_OPTS" "$ROOT_DEV" "$TARGET"
+    else
+        mount "$ROOT_DEV" "$TARGET"
+    fi
+    # rshared so podman bind sees the submounts via setns.
+    mount --make-rshared "$TARGET" || true
+    mkdir -p "$TARGET/boot"
+    mount -t ext4 "${CFG[boot_part]}" "$TARGET/boot"
+    mount --make-rshared "$TARGET/boot" || true
+    mkdir -p "$TARGET/boot/efi"
+    mount "${CFG[esp_part]}" "$TARGET/boot/efi"
+    mount --make-rshared "$TARGET/boot/efi" || true
+}
+
+run_bootc_install() {
+    say "Pulling ${CFG[image]} (large download — multi-GB)"
+    podman pull "${CFG[image]}"
+    df -h /var/lib/containers
+
+    local LUKS_KARGS=()
+    if [[ "${CFG[luks]}" == "yes" ]]; then
+        local LUKS_PART_UUID
+        LUKS_PART_UUID=$(blkid -s UUID -o value "${CFG[root_part]}")
+        # tpm2-device=auto is permissive: if the user later runs
+        # `cache22-encryption enroll`, unlock is automatic; if they don't,
+        # systemd-cryptsetup falls through to the passphrase prompt.
+        LUKS_KARGS=(
+            --karg="rd.luks.uuid=$LUKS_PART_UUID"
+            --karg="rd.luks.name=$LUKS_PART_UUID=cache22-root"
+            --karg="rd.luks.options=$LUKS_PART_UUID=discard,tpm2-device=auto"
+        )
+    fi
+
+    # On btrfs, ostree-prepare-root needs to mount the `root` subvol
+    # (not the FS toplevel) with the same options used at install. The
+    # rootflags karg flows through to /sysroot's mount.
+    local FS_KARGS=()
+    if [[ "${CFG[filesystem]}" == "btrfs" ]]; then
+        FS_KARGS=( --karg="rootflags=subvol=root,$BTRFS_OPTS" )
+    fi
+
+    # legacy ostree backend; --bootloader=grub so bootc invokes bootupd
+    # (which the cache22 image now ships) to install shim + grub2 onto
+    # the ESP from /usr/lib/efi/{shim,grub2}/<NVR>/EFI/cache22/. bootupd
+    # also drops its grub2-static configs (10_blscfg.cfg etc.) at
+    # /boot/grub2/, writes /boot/grub2/bootuuid.cfg, runs efibootmgr,
+    # and creates /boot/bootupd-state.json — replacing all the manual
+    # ESP-copying + grub.cfg-writing the installer used to do.
+    # (bootc 1.x accepts only grub|systemd|none; "auto" doesn't exist.)
+    say "Running bootc install to-filesystem (legacy ostree backend, bootupd-managed bootloader)"
+    podman run --rm --privileged --pid=host \
+        --mount "type=bind,src=$TARGET,dst=/target,bind-propagation=rshared" \
+        -v /dev:/dev \
+        -v /var/lib/containers:/var/lib/containers \
+        -v /var/tmp:/var/tmp \
+        --entrypoint /usr/bin/bootc \
+        "${CFG[image]}" \
+        install to-filesystem \
+            --source-imgref "containers-storage:${CFG[image]}" \
+            --target-no-signature-verification \
+            --generic-image \
+            --stateroot default \
+            --bootloader=grub \
+            --karg="root=UUID=$ROOT_UUID" \
+            "${LUKS_KARGS[@]}" \
+            "${FS_KARGS[@]}" \
+            --root-mount-spec="UUID=$ROOT_UUID" \
+            --skip-finalize \
+            /target
+    local rc=$?
+    [[ $rc -eq 0 ]] || die "bootc install failed (exit $rc)"
+
+    install_cache22_esp_extras
+}
+
+# MOK enrollment password — the user types this at MokManager on
+# first boot to confirm the cache22 cert enrollment. Same value
+# Bazzite uses for the same purpose ("universalblue"); we picked one
+# that's specific to cache22 so it doesn't collide with other distros'
+# enrollments on dual-boot systems.
+MOK_PASSWORD="cache22sb"
+
+# Add cache22-specific files to the ESP that bootupd doesn't manage.
+# `bootc install --bootloader=grub` (in run_bootc_install) already had
+# bootupd drop:
+#   /EFI/cache22/{shimx64,grubx64,mmx64}.efi  (Fedora-signed binaries)
+#   /EFI/BOOT/BOOTX64.EFI                     (removable-media fallback)
+#   /boot/grub2/grub.cfg + bootuuid.cfg       (bootupd's static configs)
+#   /boot/bootupd-state.json                  (state tracking)
+#   efibootmgr Boot#### entry pointing at /EFI/cache22/shimx64.efi
+#
+# What we add: the cache22 MOK cert (sbcert.der) so users can
+# manually enroll via MokManager's "Enroll key from disk" path. Trust
+# chain at first boot:
+#   firmware (MS keys in db) → shim → grub (Fedora cert in shim's
+#   vendor_cert) → kernel (cache22 cert, enrolled in MOK below).
+install_cache22_esp_extras() {
+    say "Adding cache22-specific files to the ESP"
+    local ESP="$TARGET/boot/efi"
+    install -d -m0755 "$ESP/EFI/BOOT"
+
+    # cache22 SB cert in DER form. Stable ESP path so the user can load
+    # it from MokManager's "Enroll key from disk" if the password-based
+    # `mokutil --import` enrollment fails for any reason.
+    local DEPLOY_ROOT; DEPLOY_ROOT=$(dirname "$(deploy_etc)")
+    local CERT_SRC="$DEPLOY_ROOT/usr/share/cache22/secureboot.cer"
+    [[ -f "$CERT_SRC" ]] || die "Missing $CERT_SRC (image build did not stage MOK cert)"
+    install -m0644 "$CERT_SRC" "$ESP/EFI/BOOT/sbcert.der"
+
+    # MokManager copy at the removable-media path. bootupd places it at
+    # /EFI/cache22/mmx64.efi (next to the primary shim), but if firmware
+    # falls back to /EFI/BOOT/BOOTX64.EFI (removable-media boot), shim
+    # runs from /EFI/BOOT/ and looks for mmx64.efi alongside itself.
+    # Without this copy, MOK enrollment fails with "MokManager is
+    # missing on removable media" — observed in QEMU when efibootmgr
+    # didn't successfully register a cache22 Boot#### entry.
+    if [[ -f "$ESP/EFI/cache22/mmx64.efi" ]]; then
+        install -m0644 "$ESP/EFI/cache22/mmx64.efi" "$ESP/EFI/BOOT/mmx64.efi"
+    fi
+
+    # Explicit efibootmgr entry for /EFI/cache22/shimx64.efi. bootupd's
+    # `--update-firmware` is supposed to do this, but it doesn't always
+    # take from inside the install context (podman + bind-mounts make
+    # /sys/firmware/efi access flaky). Without an explicit entry,
+    # firmware falls back to /EFI/BOOT/BOOTX64.EFI and the boot path
+    # behaves as if the install was on removable media.
+    if command -v efibootmgr >/dev/null 2>&1 && [[ -d /sys/firmware/efi/efivars ]]; then
+        # Skip if cache22 entry already exists (bootupd worked on this hw).
+        if ! efibootmgr 2>/dev/null | grep -qE 'cache22'; then
+            local DISK="${CFG[disk]}"
+            efibootmgr --create --disk "$DISK" --part 1 \
+                --label "cache22" \
+                --loader "\\EFI\\cache22\\shimx64.efi" \
+                2>&1 | sed 's/^/    /' || \
+                say "  WARNING: efibootmgr --create failed; firmware will use removable-media fallback"
+        fi
+    fi
+
+    # /boot/boot self-symlink: bootc's BLS entries reference
+    # '/boot/ostree/...'; under blsuki that becomes
+    # ($root)/boot/ostree/... and $root IS the /boot partition itself,
+    # so the redundant /boot/ prefix needs the self-symlink to resolve.
+    # bootupd's static grub2 configs assume this is in place.
+    local XBL="$TARGET/boot"
+    [[ -e "$XBL/boot" ]] || ln -s . "$XBL/boot"
+}
+
+# Queue the cache22 SB cert for MOK enrollment on first boot. shim sees
+# the pending request in the MokListNew NVRAM variable and launches
+# MokManager, which prompts for the enrollment password the user typed
+# at install time. Once enrolled, shim trusts cache22-signed kernels.
+queue_mok_enrollment() {
+    say "Queuing cache22 cert for MOK enrollment on first boot"
+    local DEPLOY_ROOT; DEPLOY_ROOT=$(dirname "$(deploy_etc)")
+    local CERT_DER="$DEPLOY_ROOT/usr/share/cache22/secureboot.cer"
+    [[ -f "$CERT_DER" ]] || die "Missing $CERT_DER (image build did not stage MOK cert)"
+
+    if ! command -v mokutil >/dev/null 2>&1; then
+        say "  mokutil not available in live env — skipping MOK queue"
+        say "  USER MUST manually enroll cache22 SB cert via MokManager"
+        say "  using /EFI/BOOT/sbcert.der on the ESP after first boot."
+        return 0
+    fi
+
+    # mokutil --import is interactive; pipe the password twice (set + confirm).
+    if printf '%s\n%s\n' "$MOK_PASSWORD" "$MOK_PASSWORD" \
+            | mokutil --import "$CERT_DER" 2>&1 | sed 's/^/    /'; then
+        say "  MOK enrollment queued."
+    else
+        say "  WARNING: mokutil --import failed; user can still enroll"
+        say "  manually from /EFI/BOOT/sbcert.der at the MokManager prompt."
+    fi
+}
+
+# Find the writable per-deploy /etc under either backend layout.
+deploy_etc() {
+    local d
+    if [[ -d "$TARGET/ostree/deploy" ]]; then
+        d=$(find "$TARGET/ostree/deploy" -mindepth 3 -maxdepth 3 -type d -name "*.0" \
+            ! -path "*/backing/*" 2>/dev/null | head -1)
+        [[ -n "$d" && -d "$d/etc" ]] && { echo "$d/etc"; return 0; }
+    fi
+    if [[ -d "$TARGET/state/deploy" ]]; then
+        d=$(find "$TARGET/state/deploy" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+        [[ -n "$d" && -d "$d/etc" ]] && { echo "$d/etc"; return 0; }
+    fi
+    die "Could not locate <deploy>/etc under $TARGET (checked ostree/deploy and state/deploy)"
+}
+
+configure_deploy() {
+    local DEPLOY_ETC; DEPLOY_ETC=$(deploy_etc)
+    say "Configuring deploy at $DEPLOY_ETC"
+
+    echo "${CFG[hostname]}" > "$DEPLOY_ETC/hostname"
+    ln -sfn "/usr/share/zoneinfo/${CFG[timezone]}" "$DEPLOY_ETC/localtime"
+    echo "LANG=${CFG[locale]}" > "$DEPLOY_ETC/locale.conf"
+
+    if [[ -f "$DEPLOY_ETC/locale.gen" ]]; then
+        if ! grep -qE "^${CFG[locale]}( |$)" "$DEPLOY_ETC/locale.gen"; then
+            echo "${CFG[locale]} ${CFG[locale]##*.}" >> "$DEPLOY_ETC/locale.gen"
+        fi
+        sed -i "s|^#\(${CFG[locale]} .*\)|\1|" "$DEPLOY_ETC/locale.gen"
+    fi
+
+    if ! grep -q "UUID=$BOOT_UUID" "$DEPLOY_ETC/fstab" 2>/dev/null; then
+        echo "UUID=$BOOT_UUID  /boot      ext4  defaults              0 2" >> "$DEPLOY_ETC/fstab"
+    fi
+    if ! grep -q "UUID=$ESP_UUID"  "$DEPLOY_ETC/fstab" 2>/dev/null; then
+        echo "UUID=$ESP_UUID   /boot/efi  vfat  umask=0077,shortname=winnt  0 2" >> "$DEPLOY_ETC/fstab"
+    fi
+    # btrfs: /var/home lives in its own subvol so the repair tool can
+    # wipe everything else without touching user data. / is handled by
+    # ostree-prepare-root via rootflags karg, NOT an /etc/fstab entry.
+    if [[ "${CFG[filesystem]}" == "btrfs" ]]; then
+        if ! grep -q "subvol=home" "$DEPLOY_ETC/fstab" 2>/dev/null; then
+            echo "UUID=$ROOT_UUID  /var/home  btrfs  subvol=home,$BTRFS_OPTS  0 0" >> "$DEPLOY_ETC/fstab"
+        fi
+    fi
+
+    if [[ "${CFG[luks]}" == "yes" ]]; then
+        local LUKS_PART_UUID
+        LUKS_PART_UUID=$(blkid -s UUID -o value "${CFG[root_part]}")
+        if ! grep -q "cache22-root" "$DEPLOY_ETC/crypttab" 2>/dev/null; then
+            echo "cache22-root UUID=$LUKS_PART_UUID none luks,discard" \
+                >> "$DEPLOY_ETC/crypttab"
+        fi
+    fi
+
+    # bootc's `install --karg=rd.luks.*` doesn't reliably land in the BLS
+    # entry, so patch it in directly. Idempotent.
+    if [[ "${CFG[luks]}" == "yes" ]]; then
+        local LUKS_PART_UUID
+        LUKS_PART_UUID=$(blkid -s UUID -o value "${CFG[root_part]}")
+        local LUKS_OPTS="rd.luks.uuid=$LUKS_PART_UUID rd.luks.name=$LUKS_PART_UUID=cache22-root rd.luks.options=$LUKS_PART_UUID=discard"
+        shopt -s nullglob
+        for entry in "$TARGET"/boot/loader/entries/*.conf "$TARGET"/boot/efi/loader/entries/*.conf; do
+            if ! grep -q 'rd\.luks\.uuid=' "$entry"; then
+                sed -i "/^options /s| *\$| $LUKS_OPTS|" "$entry"
+                say "  patched $(basename "$entry") with rd.luks kargs"
+            fi
+        done
+        shopt -u nullglob
+    fi
+
+    local UID_=1000 GID_=1000
+    local HASHED; HASHED=$(openssl passwd -6 "${CFG[password]}")
+    grep -q "^${CFG[username]}:" "$DEPLOY_ETC/group"  || \
+        echo "${CFG[username]}:x:${GID_}:" >> "$DEPLOY_ETC/group"
+    grep -q "^${CFG[username]}:" "$DEPLOY_ETC/passwd" || \
+        echo "${CFG[username]}:x:${UID_}:${GID_}:${CFG[fullname]}:/var/home/${CFG[username]}:/bin/bash" >> "$DEPLOY_ETC/passwd"
+    # shadow lastchange is days since epoch, not seconds.
+    local LASTCHANGE_DAYS=$(( $(date +%s) / 86400 ))
+    grep -q "^${CFG[username]}:" "$DEPLOY_ETC/shadow" || \
+        echo "${CFG[username]}:${HASHED}:${LASTCHANGE_DAYS}:0:99999:7:::" >> "$DEPLOY_ETC/shadow"
+
+    # Each group is added only if it exists in the deployed image —
+    # server variants without audio/video get the subset they have.
+    local g
+    for g in wheel audio video input render storage optical lp scanner \
+             games users network power kvm libvirt incus-admin docker; do
+        grep -q "^${g}:" "$DEPLOY_ETC/group" || continue
+        grep -E "^${g}:[^:]*:[^:]*:.*\b${CFG[username]}\b" "$DEPLOY_ETC/group" >/dev/null && continue
+        sed -i -E "s/^(${g}:[^:]*:[^:]*:)([^,]*.*)$/\1\2,${CFG[username]}/" "$DEPLOY_ETC/group"
+        sed -i -E "s/^(${g}:[^:]*:[^:]*:),/\1/" "$DEPLOY_ETC/group"
+    done
+    mkdir -p "$DEPLOY_ETC/sudoers.d"
+    echo "%wheel ALL=(ALL:ALL) ALL" > "$DEPLOY_ETC/sudoers.d/10-wheel"
+    chmod 440 "$DEPLOY_ETC/sudoers.d/10-wheel"
+
+    # Prefer the per-stateroot /var (legacy ostree) — that's the one
+    # that becomes /var at boot. composefs-backend has only the
+    # per-deploy stub, used as a fallback.
+    local DEPLOY_VAR=""
+    if [[ -d "$TARGET/ostree/deploy/default/var" ]]; then
+        DEPLOY_VAR="$TARGET/ostree/deploy/default/var"
+    elif [[ -d "$(dirname "$DEPLOY_ETC")/var" ]]; then
+        DEPLOY_VAR="$(dirname "$DEPLOY_ETC")/var"
+    else
+        die "Could not locate per-stateroot /var (checked ostree/deploy and state/deploy)"
+    fi
+    # btrfs: mount the home subvol over /var/home in the deploy so
+    # the user dir lands in the home subvol (and survives a repair).
+    # The mount is teardown'd with the umount -R at install end.
+    mkdir -p "$DEPLOY_VAR/home"
+    if [[ "${CFG[filesystem]}" == "btrfs" ]] && ! mountpoint -q "$DEPLOY_VAR/home"; then
+        mount -o "subvol=home,$BTRFS_OPTS" "$ROOT_DEV" "$DEPLOY_VAR/home"
+    fi
+    mkdir -p "$DEPLOY_VAR/home/${CFG[username]}"
+    chown -R ${UID_}:${GID_} "$DEPLOY_VAR/home/${CFG[username]}" 2>/dev/null || true
+    chmod 700 "$DEPLOY_VAR/home/${CFG[username]}"
+    mkdir -p "$DEPLOY_VAR/roothome" "$DEPLOY_VAR/srv"
+    chmod 700 "$DEPLOY_VAR/roothome"
+
+    # Pre-seed subuid/subgid for rootless podman / docker / distrobox / incus.
+    local SUB_BASE=$(( 524288 + UID_ * 65536 ))
+    grep -q "^${CFG[username]}:" "$DEPLOY_ETC/subuid" 2>/dev/null || \
+        echo "${CFG[username]}:${SUB_BASE}:65536" >> "$DEPLOY_ETC/subuid"
+    grep -q "^${CFG[username]}:" "$DEPLOY_ETC/subgid" 2>/dev/null || \
+        echo "${CFG[username]}:${SUB_BASE}:65536" >> "$DEPLOY_ETC/subgid"
+}
+
+# Three-way network check. cache22's install pulls from ghcr.io +
+# github.com release URLs, none of which publish AAAA records.
+#   1. IPv4 to github.com works → silent, install proceeds normally
+#   2. IPv4 fails but IPv6 reaches danwin1210.de's proxy → offer proxy
+#   3. Neither → die early with a clear "no internet" message
+# Live ISO only — installed system is not modified.
+maybe_setup_ipv6_github_proxy() {
+    if curl -fsSLI --connect-timeout 5 -4 -o /dev/null https://github.com/ 2>/dev/null; then
+        return 0   # IPv4 to GitHub works, nothing to do
+    fi
+
+    # Test IPv6 reachability via the proxy IP we'd be using. This
+    # confirms BOTH that we have IPv6 connectivity AND that the proxy
+    # is reachable (not just that v6 generally works).
+    if ! curl -fsSLI --connect-timeout 5 \
+            --resolve "github.com:443:2a01:4f8:c010:d56::2" \
+            -o /dev/null https://github.com/ 2>/dev/null; then
+        cat >&2 <<'EOF'
+
+═══════════════════════════════════════════════════════════
+  No internet connectivity to github.com detected.
+
+    IPv4 to github.com               → unreachable
+    IPv6 to danwin1210.de proxy      → unreachable
+
+  Connect this machine to a working network (Ethernet, WiFi,
+  USB-tethered phone, etc.) and re-run cache22-install. If your
+  network has IPv6 only and the danwin1210 proxy IP
+  (2a01:4f8:c010:d56::2) is firewalled, see
+  https://danwin1210.de/github-ipv6-proxy.php for alternatives.
+═══════════════════════════════════════════════════════════
+
+EOF
+        die "no GitHub connectivity (IPv4 nor IPv6 proxy)"
+    fi
+
+    cat <<'EOF'
+
+═══════════════════════════════════════════════════════════
+  No IPv4 connectivity to github.com — but danwin1210.de's
+  IPv6 proxy IS reachable.
+
+  cache22 fetches the OS image from ghcr.io and packages from
+  github.com / *.githubusercontent.com — none of which publish
+  AAAA records, so the install can't reach them directly without
+  IPv4 or an IPv6 reverse proxy.
+═══════════════════════════════════════════════════════════
+
+EOF
+
+    if (( NO_PROMPT )); then
+        printf 'WARN: --no-prompt mode; not adding the IPv6 proxy automatically. Install will likely fail.\n' >&2
+        return 0
+    fi
+
+    cat <<'EOF'
+  danwin1210.de runs a community IPv6 reverse proxy that maps GitHub
+  hostnames to IPv6 addresses:
+      https://danwin1210.de/github-ipv6-proxy.php
+
+  Adding it modifies /etc/hosts in this LIVE ISO ONLY — the installed
+  system will NOT carry these entries. To run cache22-update over IPv6
+  on the installed system you'd need to set up the same /etc/hosts
+  there (or arrange IPv4 / DNS64+NAT64).
+
+EOF
+    prompt "Add danwin1210.de IPv6 proxy entries for this install? (y/N)" "n" || return 0
+    case "${REPLY,,}" in
+        y|yes) ;;
+        *)     printf 'Skipping proxy. Install may fail.\n'; return 0 ;;
+    esac
+
+    cat >> /etc/hosts <<'HOSTS'
+
+# cache22 installer: danwin1210.de IPv6 proxy for IPv4-only GitHub
+# https://danwin1210.de/github-ipv6-proxy.php
+2a01:4f8:c010:d56::2 github.com
+2a01:4f8:c010:d56::3 api.github.com
+2a01:4f8:c010:d56::4 codeload.github.com
+2a01:4f8:c010:d56::6 ghcr.io
+2a01:4f8:c010:d56::7 pkg.github.com npm.pkg.github.com maven.pkg.github.com nuget.pkg.github.com rubygems.pkg.github.com
+2a01:4f8:c010:d56::8 uploads.github.com
+2606:50c0:8000::133 objects.githubusercontent.com www.objects.githubusercontent.com release-assets.githubusercontent.com gist.githubusercontent.com repository-images.githubusercontent.com camo.githubusercontent.com private-user-images.githubusercontent.com avatars0.githubusercontent.com avatars1.githubusercontent.com avatars2.githubusercontent.com avatars3.githubusercontent.com cloud.githubusercontent.com desktop.githubusercontent.com support.github.com
+2606:50c0:8000::154 support-assets.githubassets.com github.githubassets.com opengraph.githubassets.com github-registry-files.githubusercontent.com github-cloud.githubusercontent.com
+HOSTS
+    USED_IPV6_PROXY=1
+    printf 'Added IPv6 proxy entries to /etc/hosts (live ISO only).\n'
+}
+
+reclaim_scratch() {
+    # In custom mode the user chose their own partitions; we don't
+    # know what's on the rest of the disk and won't touch it. In
+    # freespace mode we installed inside an existing free region —
+    # the same caution applies, the rest of the disk has other OSes.
+    if [[ "${CFG[mode]}" == "custom" || "${CFG[mode]}" == "freespace" ]]; then
+        say "${CFG[mode]} partition mode — leaving scratch ${CFG[scratch_part]} alone"
+        sync
+        umount -R "$TARGET" 2>/dev/null || true
+        umount /var/tmp 2>/dev/null || true
+        umount /var/lib/containers 2>/dev/null || true
+        [[ "${CFG[luks]}" == "yes" ]] && cryptsetup close cache22-root 2>/dev/null || true
+        return
+    fi
+    sync
+    umount -R "$TARGET" 2>/dev/null || true
+    umount /var/tmp 2>/dev/null || true
+    umount /var/lib/containers 2>/dev/null || true
+    [[ "${CFG[luks]}" == "yes" ]] && cryptsetup close cache22-root 2>/dev/null || true
+
+    if [[ "${CFG[scratch_part]}" == "tmpfs" ]]; then
+        if [[ "${CFG[mode]}" == "auto-reserve" ]]; then
+            # tmpfs scratch + reserve: root already sized to (disk - reserve)
+            # at partition_auto time. Nothing more to do beyond reopening
+            # LUKS for the post-reclaim caller.
+            say "tmpfs scratch + reserve — root already sized for ${CFG[reserve_size]} reserved tail"
+        else
+            say "tmpfs scratch — root partition already spans the full disk; nothing to reclaim"
+        fi
+        if [[ "${CFG[luks]}" == "yes" ]]; then
+            printf '%s' "${CFG[luks_password]}" | cryptsetup open "${CFG[root_part]}" cache22-root -
+        fi
+        return
+    fi
+
+    if [[ "${CFG[mode]}" == "auto-reserve" ]]; then
+        # Disk-scratch + reserve: remove scratch and grow root up to
+        # (disk_end - reserve), preserving the requested free-space tail.
+        say "Reclaiming scratch into root, leaving ${CFG[reserve_size]} unallocated at end"
+        parted -s "${CFG[disk]}" rm 4
+        # parted accepts negative END = distance from disk end (unit-aware).
+        parted -s "${CFG[disk]}" resizepart 3 "-${CFG[reserve_size]}"
+    else
+        say "Reclaiming scratch partition into root"
+        parted -s "${CFG[disk]}" rm 4
+        parted -s "${CFG[disk]}" resizepart 3 100%
+    fi
+    partprobe "${CFG[disk]}" || true
+    udevadm settle 2>/dev/null || true
+    sleep 2
+
+    if [[ "${CFG[luks]}" == "yes" ]]; then
+        printf '%s' "${CFG[luks_password]}" | cryptsetup open "${CFG[root_part]}" cache22-root -
+        # cryptsetup 2.8+ prompts for the passphrase on `resize` even when
+        # the device is already open; pipe it so non-interactive installs don't hang.
+        printf '%s' "${CFG[luks_password]}" | cryptsetup --key-file - resize cache22-root
+    fi
+
+    case "${CFG[filesystem]}" in
+        btrfs)
+            mount "$ROOT_DEV" "$TARGET"
+            btrfs filesystem resize max "$TARGET"
+            umount "$TARGET" ;;
+        xfs)
+            mount "$ROOT_DEV" "$TARGET"
+            xfs_growfs "$TARGET"
+            umount "$TARGET" ;;
+        ext4)
+            e2fsck -fy "$ROOT_DEV" || true
+            resize2fs "$ROOT_DEV" ;;
+    esac
+    [[ "${CFG[luks]}" == "yes" ]] && cryptsetup close cache22-root 2>/dev/null || true
+}
+
+# ─── Main ──────────────────────────────────────────────────────────────
+main() {
+    parse_args "$@"
+    preflight
+
+    if needs_wizard; then
+        if (( NO_PROMPT )); then
+            die "Missing required values and --no-prompt set; pass --disk, --user, --password (and --luks/CACHE22_LUKS_PASSWORD if encrypting)."
+        fi
+        printf '\n══════════════════════════════════════════════════\n'
+        printf '  cache22 installer\n'
+        printf '══════════════════════════════════════════════════\n'
+        printf '  Press b/back at any prompt to go back, q/quit to exit.\n'
+        printf '  Defaults are shown in [brackets]; press ENTER to accept.\n'
+        run_wizard
+    fi
+
+    maybe_setup_ipv6_github_proxy
+
+    confirm_destructive
+
+    # Logging from here on — must be after we've collected the password.
+    mkdir -p "$(dirname "$LOG")"
+    exec > >(tee -a "$LOG") 2>&1
+    say "cache22 install starting at $(date)"
+
+    mount --make-rshared / 2>/dev/null || true
+
+    case "${CFG[mode]}" in
+        custom)
+            partition_custom_check ;;
+        freespace)
+            decide_auto_scratch
+            partition_freespace ;;
+        auto|auto-reserve|"")
+            decide_auto_scratch
+            partition_auto ;;
+        *)
+            die "Unknown install mode: ${CFG[mode]}" ;;
+    esac
+    setup_scratch
+    setup_target
+    run_bootc_install
+    configure_deploy
+    queue_mok_enrollment
+    reclaim_scratch
+
+    cat <<DONE
+
+══════════════════════════════════════════════════
+  INSTALL COMPLETE
+    user:     ${CFG[username]}
+    hostname: ${CFG[hostname]}
+    locale:   ${CFG[locale]}
+    timezone: ${CFG[timezone]}
+    log:      $LOG
+
+  Secure Boot — first reboot:
+    On first reboot, MokManager will appear (blue screen).
+    Choose "Enroll MOK" → "Continue" → "Yes", then enter the
+    enrollment password:
+
+        ${MOK_PASSWORD}
+
+    If MokManager doesn't auto-launch or the password fails, choose
+    "Enroll key from disk" and select /EFI/BOOT/sbcert.der instead.
+══════════════════════════════════════════════════
+DONE
+
+    if (( USED_IPV6_PROXY )); then
+        cat <<EOF
+
+⚠  IPv6-only network notice
+   This install used the danwin1210.de IPv6 proxy to reach GitHub. The
+   installed system does NOT carry those /etc/hosts entries — 'cache22-
+   update' will fail on a pure-IPv6 network unless you arrange one of:
+     - IPv4 connectivity (any), or
+     - DNS64 + NAT64 (most ISPs/carriers provide this transparently), or
+     - The same /etc/hosts entries on the installed system, sourced from
+       https://danwin1210.de/github-ipv6-proxy.php (third-party service).
+EOF
+    fi
+
+    if [[ "${CFG[reboot]}" == "yes" ]]; then
+        say "Rebooting in 5 seconds (Ctrl+C to cancel)"
+        sleep 5
+        systemctl reboot
+    fi
+}
+
+main "$@"

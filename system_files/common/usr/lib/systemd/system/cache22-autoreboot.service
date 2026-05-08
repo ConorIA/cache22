@@ -1,0 +1,12 @@
+[Unit]
+Description=cache22 reboot if a staged update is ready
+ConditionPathExists=/etc/cache22/autoreboot.conf
+
+[Service]
+Type=oneshot
+# TimeoutStartSec must be > the longest configurable window so the
+# polling helper can run to completion. 2h is comfortable for any
+# realistic --window setting users would pick.
+TimeoutStartSec=2h
+EnvironmentFile=-/etc/cache22/autoreboot.conf
+ExecStart=/usr/lib/cache22/autoreboot.sh

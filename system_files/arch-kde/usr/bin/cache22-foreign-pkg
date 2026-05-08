@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Pop a kdialog explaining why a clicked .rpm/.deb/.exe doesn't install
+# directly on cache22, and offer Flatpak / distrobox as the actual path.
+# Wired in via /usr/share/applications/cache22-foreign-pkg.desktop as the
+# default handler for application/x-rpm, application/vnd.debian.binary-package,
+# and application/x-ms-dos-executable.
+
+set -u
+file="${1:-}"
+ext="${file##*.}"
+ext="${ext,,}"
+
+case "$ext" in
+    rpm|deb)
+        kind="$ext package"
+        body="cache22 is an immutable bootc image — installing $kind files into the system isn't supported.\n\nUse Flatpak (Discover / 'flatpak search'), or open a distrobox toolbox and install there with the matching package manager."
+        ;;
+    exe|msi)
+        kind="Windows executable"
+        body="cache22 doesn't run Windows executables natively.\n\nInstall Bottles or Wine from Flatpak (Discover / 'flatpak search bottles'), or run via Steam's Proton if it's a game."
+        ;;
+    *)
+        kind="$ext file"
+        body="No handler is configured for .$ext files on cache22."
+        ;;
+esac
+
+if command -v kdialog >/dev/null 2>&1; then
+    kdialog --title "cache22: can't install $kind" --sorry "$body" >/dev/null 2>&1
+elif command -v zenity >/dev/null 2>&1; then
+    zenity --warning --title="cache22" --text="$body" --width=500
+else
+    printf '%s\n' "$body" >&2
+fi

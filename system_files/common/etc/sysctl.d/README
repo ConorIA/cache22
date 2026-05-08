@@ -1,0 +1,13 @@
+# Drop your sysctl overrides here as <NN>-name.conf files.
+#
+# /etc/sysctl.d takes precedence over /usr/lib/sysctl.d (where cache22's
+# defaults live), so anything you put here wins. systemd-sysctl.service
+# applies them at every boot; run `sudo sysctl --system` to apply
+# without rebooting.
+#
+# Files load lexicographically — a higher prefix overrides a lower one
+# for the same key. The cache22 image ships:
+#   /usr/lib/sysctl.d/60-cache22-network.conf      (BBR, fq, MTU probe)
+#   /usr/lib/sysctl.d/70-cache22-containers.conf   (incus baseline)
+#   /usr/lib/sysctl.d/80-cache22-server.conf       (server variant)
+#   /usr/lib/sysctl.d/80-cache22-desktop.conf      (KDE variant)

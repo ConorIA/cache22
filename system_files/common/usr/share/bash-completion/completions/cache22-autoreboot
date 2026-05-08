@@ -1,0 +1,27 @@
+# bash-completion for cache22-autoreboot
+_cache22_autoreboot() {
+    local cur prev words cword
+    _init_completion || return
+
+    local subs="enable disable status --help"
+
+    if [[ $cword -eq 1 ]]; then
+        COMPREPLY=( $(compgen -W "$subs" -- "$cur") )
+        return
+    fi
+
+    if [[ "${words[1]}" == "enable" ]]; then
+        case "$prev" in
+            --at)
+                COMPREPLY=( $(compgen -W "daily weekly monthly hourly" -- "$cur") )
+                return
+                ;;
+            --window)
+                COMPREPLY=( $(compgen -W "30m 1h 2h 4h" -- "$cur") )
+                return
+                ;;
+        esac
+        COMPREPLY=( $(compgen -W "--at --window --allow-active-sessions" -- "$cur") )
+    fi
+}
+complete -F _cache22_autoreboot cache22-autoreboot

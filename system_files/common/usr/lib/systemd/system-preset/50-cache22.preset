@@ -1,0 +1,56 @@
+# cache22 default service enablement.
+# Applied at image-build time via `systemctl preset-all --preset-mode=full`
+# in finalize-image.sh — both `enable` and `disable` rules take effect.
+
+enable NetworkManager.service
+enable systemd-resolved.service
+enable systemd-timesyncd.service
+
+# We use NetworkManager exclusively for system networking. systemd-networkd
+# ships enabled by upstream presets in some package sets, but it doesn't
+# know about NM-managed interfaces — its wait-online unit then sits at
+# `activating` for the full 2-minute default timeout on every boot,
+# stalling network-online.target and anything that orders After=
+# network-online (incus, libvirtd, etc.) for that long. Disable both.
+disable systemd-networkd.service
+disable systemd-networkd.socket
+disable systemd-networkd-wait-online.service
+# sshd on by default for both variants — servers need it to log in,
+# and most KDE-variant users want it for remote access too. Bind it
+# to a less-public port + key-only auth in /etc/ssh/sshd_config if
+# you don't want password auth on a public network.
+enable sshd.service
+
+# Display manager (only useful in the kde variant; for server, the
+# plasmalogin unit is absent and the preset rule silently no-ops).
+enable plasmalogin.service
+
+# System services
+enable bluetooth.service
+enable cups.service
+enable cups.socket
+enable avahi-daemon.service
+enable fwupd.service
+enable power-profiles-daemon.service
+enable switcheroo-control.service
+enable fstrim.timer
+
+# Container infra
+enable podman.socket
+
+# bootupd: refresh ESP shim/grub on each boot. Idempotent (no-op when
+# /usr/lib/efi version matches what's on the ESP). Whenever a `bootc
+# upgrade` lands a new image with newer Fedora bootloader binaries,
+# the next reboot copies them onto the ESP automatically — no
+# separate command needed. Same pattern Fedora bootc uses.
+enable bootloader-update.service
+
+# Post-boot health checks; auto-rollback after 3 consecutive failed boots.
+# Triggered by a 2-min OnBootSec timer (NOT WantedBy=multi-user.target —
+# that creates a deadlock since the check would wait for itself to finish).
+enable cache22-healthcheck.timer
+
+# One-shot Switch-to-Desktop helper: re-applies gamescope autologin at
+# next boot. No-op when /var/lib/cache22/gamescope-restore-on-next-boot
+# isn't present (per-unit ConditionPathExists).
+enable cache22-gamescope-restore.service

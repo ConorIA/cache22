@@ -1,0 +1,18 @@
+#!/bin/bash
+# Write the plasma-login autologin file pointing at the requested session.
+# Called via pkexec (policy in /usr/share/polkit-1/actions/org.cache22.set.session.policy).
+set -e
+
+SESSION="${1:-gamescope-session.desktop}"
+USER="${SUDO_USER:-${PKEXEC_UID:+$(getent passwd "$PKEXEC_UID" | cut -d: -f1)}}"
+[[ -z "$USER" ]] && USER=$(getent passwd 1000 | cut -d: -f1)
+[[ -z "$USER" ]] && { echo "ERROR: cannot determine target user" >&2; exit 1; }
+
+CONF=/etc/plasmalogin.conf.d/zz-cache22-gamescope-autologin.conf
+mkdir -p "$(dirname "$CONF")"
+cat > "$CONF" <<EOF
+[Autologin]
+Session=$SESSION
+User=$USER
+Relogin=true
+EOF

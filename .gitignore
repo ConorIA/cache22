@@ -1,0 +1,28 @@
+# Build artifacts
+*.tar
+*.tar.zst
+*.iso
+*.img
+build/
+dist/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Local-only overrides
+*.local
+.env
+installer/work/
+installer/out/
+
+# build-iso.sh stages copies of variants.json + cache22-install into
+# the live-ISO airootfs at build time. Derivatives, not sources.
+installer/archiso/airootfs/etc/cache22/
+installer/archiso/airootfs/usr/local/
+
+# Local test scratch
+*-pid.txt
+__pycache__/

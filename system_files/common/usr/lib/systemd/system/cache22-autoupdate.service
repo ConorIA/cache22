@@ -1,0 +1,18 @@
+[Unit]
+Description=cache22 unattended OS update (fetch + stage, no reboot)
+ConditionPathExists=/etc/cache22/autoupdate.conf
+After=network-online.target
+Wants=network-online.target
+# Bound retries for the wake-up-but-wifi-not-ready edge case (laptop
+# lid lift → systemd-Persistent fires the timer immediately → bootc
+# can't resolve DNS yet). Three 60s retries cover the typical NM
+# reconnect window.
+StartLimitBurst=3
+StartLimitIntervalSec=600
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/cache22/autoupdate.conf
+ExecStart=/usr/lib/cache22/autoupdate-runner.sh
+Restart=on-failure
+RestartSec=60s

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Pass when systemd reports running or degraded; fail on starting/stopping/maintenance.
+state=$(systemctl is-system-running 2>/dev/null || true)
+case "$state" in
+    running|degraded) exit 0 ;;
+esac
+echo "system-running: $state" >&2
+systemctl --no-pager --failed | head -20 >&2
+exit 1

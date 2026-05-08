@@ -1,0 +1,407 @@
+name: Build cache22 image
+
+on:
+  schedule:
+    # Daily at 18:00 UTC. CachyOS rebuilds its base image at 13:41 UTC,
+    # so this cadence picks up their freshest layers each day.
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'Containerfile'
+      - 'packages/**'
+      - 'system_files/**'
+      - 'scripts/**'
+      - '.github/workflows/build-image.yml'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_REPO: ${{ github.repository_owner }}/cache22
+
+concurrency:
+  group: build-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (${{ matrix.variant }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: cachy-kde
+            family: cachy
+            type: kde
+            base_image: docker.io/cachyos/cachyos-v3
+          - variant: cachy-server
+            family: cachy
+            type: server
+            base_image: docker.io/cachyos/cachyos-v3
+          - variant: arch-kde
+            family: arch
+            type: kde
+            base_image: docker.io/archlinux
+          - variant: arch-server
+            family: arch
+            type: server
+            base_image: docker.io/archlinux
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install buildah + skopeo + python3
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq buildah skopeo python3 jq
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          IMG="${REGISTRY}/${IMAGE_REPO}-${{ matrix.variant }}"
+          DATE_TAG=$(date -u +%Y-%m-%d)
+          SHA_TAG=sha-${GITHUB_SHA::7}
+          echo "image=${IMG}"               >> "$GITHUB_OUTPUT"
+          echo "tag_rolling=${IMG}:rolling" >> "$GITHUB_OUTPUT"
+          echo "tag_date=${IMG}:${DATE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "tag_sha=${IMG}:${SHA_TAG}"  >> "$GITHUB_OUTPUT"
+
+      - name: Snapshot previous rolling manifest (for upgrade-size diff)
+        # Save the layer digests + sizes of the *current* rolling tag before we
+        # overwrite it, so the post-push step can compute "what would a user
+        # who already has the previous rolling have to download for this update".
+        run: |
+          mkdir -p /tmp/manifests
+          if skopeo inspect --raw "docker://${{ steps.tags.outputs.tag_rolling }}" > /tmp/manifests/previous.json 2>/dev/null; then
+            jq '{layer_count: (.layers | length), total_size: ([.layers[].size] | add), digests: [.layers[].digest]}' \
+                /tmp/manifests/previous.json > /tmp/manifests/previous.summary.json
+            cat /tmp/manifests/previous.summary.json
+          else
+            echo "(no previous rolling tag — first build)"
+            echo '{"layer_count": 0, "total_size": 0, "digests": []}' > /tmp/manifests/previous.summary.json
+          fi
+
+      - name: Stage Secure Boot signing key
+        # Write the SECUREBOOT_PRIVATE_KEY secret to a tmpfile that
+        # buildah will mount into the build container via --secret.
+        # If the secret isn't available (fork PRs), `secrets.X` is empty
+        # and the file is empty too — sign-secureboot.sh handles that
+        # gracefully.
+        env:
+          SECUREBOOT_PRIVATE_KEY: ${{ secrets.SECUREBOOT_PRIVATE_KEY }}
+        run: |
+          install -m 600 /dev/null /tmp/sbkey.pem
+          if [ -n "${SECUREBOOT_PRIVATE_KEY}" ]; then
+              printf '%s' "${SECUREBOOT_PRIVATE_KEY}" > /tmp/sbkey.pem
+              echo "==> SB signing key staged ($(wc -c < /tmp/sbkey.pem) bytes)"
+          else
+              echo "==> SECUREBOOT_PRIVATE_KEY empty; build will be unsigned"
+          fi
+
+      - name: Build raw image (single-layer)
+        run: |
+          # Reproducibility: SOURCE_DATE_EPOCH = git commit timestamp.
+          # Plumbed through to dracut --reproducible (initramfs cpio
+          # mtimes), kbuild (DKMS module __DATE__/__TIME__ replacement),
+          # and any other build tooling that honors the standard SDE
+          # convention (gzip, ar, gnu-strip, debian's strip-nondeterm,
+          # etc.).
+          SDE=$(git -C "$GITHUB_WORKSPACE" log -1 --format=%ct)
+          echo "Build SOURCE_DATE_EPOCH=$SDE ($(date -u -d @$SDE))"
+          sudo buildah bud \
+            --secret id=sbkey,src=/tmp/sbkey.pem \
+            --build-arg BASE_IMAGE=${{ matrix.base_image }} \
+            --build-arg VARIANT_FAMILY=${{ matrix.family }} \
+            --build-arg VARIANT_TYPE=${{ matrix.type }} \
+            --build-arg VARIANT=${{ matrix.variant }} \
+            --build-arg SOURCE_DATE_EPOCH="$SDE" \
+            --tag localhost/cache22-${{ matrix.variant }}:raw \
+            -f Containerfile \
+            .
+
+      - name: Extract var-to-tmpfiles diagnostics
+        # Surface the auto-generated /usr/lib/tmpfiles.d/00-cache22-var.conf
+        # so we can review what /var content the image is recreating on
+        # boot — and notice if it suddenly grows by hundreds of entries
+        # because something started writing to /var unexpectedly.
+        run: |
+          mkdir -p /tmp/diagnostics
+          ctr=$(sudo buildah from localhost/cache22-${{ matrix.variant }}:raw)
+          mnt=$(sudo buildah mount "$ctr")
+          sudo cp "$mnt/usr/lib/tmpfiles.d/00-cache22-var.conf" \
+              "/tmp/diagnostics/00-cache22-var-${{ matrix.variant }}.conf" 2>/dev/null || \
+              echo "(no 00-cache22-var.conf in image)" > "/tmp/diagnostics/00-cache22-var-${{ matrix.variant }}.conf"
+          sudo find "$mnt/usr/share/factory/var" -type f 2>/dev/null \
+              | sed "s|$mnt||" | sort > "/tmp/diagnostics/factory-var-${{ matrix.variant }}.list" \
+              || true
+          echo "==> Generated tmpfiles.d entries: $(grep -cv '^#' /tmp/diagnostics/00-cache22-var-${{ matrix.variant }}.conf || true)"
+          echo "==> Factory-var files: $(wc -l < /tmp/diagnostics/factory-var-${{ matrix.variant }}.list 2>/dev/null || echo 0)"
+          # Snapshot the installed package set (pkgname-version-release)
+          # for cross-build diffing. Same source as cache22-changelog.
+          sudo ls "$mnt/usr/lib/sysimage/pacman/local/" 2>/dev/null \
+              | grep -v '^ALPM_DB_VERSION$' | sort \
+              > "/tmp/diagnostics/pkgs-${{ matrix.variant }}.txt"
+          echo "==> Installed packages: $(wc -l < /tmp/diagnostics/pkgs-${{ matrix.variant }}.txt)"
+          # Build metadata — git SHA of the source that produced this
+          # image. Combined with pkgs.txt, this is what the no-changes
+          # detector compares against the previous build.
+          echo "${{ github.sha }}" > "/tmp/diagnostics/git-sha-${{ matrix.variant }}.txt"
+          sudo buildah umount "$ctr"
+          sudo buildah rm "$ctr"
+
+      - name: Upload var-to-tmpfiles diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: var-tmpfiles-${{ matrix.variant }}
+          path: /tmp/diagnostics/
+          retention-days: 30
+
+      - name: Download previous build's package list + git SHA
+        id: prev
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Pull the previous successful run's diagnostics artifact for
+          # this variant. We only get here if a previous build exists
+          # within the artifact retention window — first build / artifact
+          # expired both fall through to the no-prev case below.
+          mkdir -p /tmp/prev
+          PREV=$(gh run list --workflow=build-image.yml --branch=main \
+                  --status=success --limit=1 \
+                  --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)
+          if [ -n "$PREV" ]; then
+              echo "==> Pulling diagnostics from run $PREV"
+              gh run download "$PREV" \
+                  --name "var-tmpfiles-${{ matrix.variant }}" \
+                  --dir /tmp/prev/ 2>&1 || true
+          fi
+          if [ -f "/tmp/prev/pkgs-${{ matrix.variant }}.txt" ]; then
+              echo "==> Previous pkgs: $(wc -l < /tmp/prev/pkgs-${{ matrix.variant }}.txt) packages"
+          else
+              echo "==> No previous pkgs.txt — first build or artifact expired"
+          fi
+
+      - name: Detect changes vs previous build
+        id: detect
+        run: |
+          # Skip ghcr push if BOTH the git SHA and the package set are
+          # unchanged since the last successful build. Either drift means
+          # users would benefit from a new image (source-level changes
+          # affect /usr/etc/{os,lsb}-release stamping etc., even if no
+          # packages changed; package changes obviously do).
+          PREV_PKGS="/tmp/prev/pkgs-${{ matrix.variant }}.txt"
+          CUR_PKGS="/tmp/diagnostics/pkgs-${{ matrix.variant }}.txt"
+          PREV_SHA_FILE="/tmp/prev/git-sha-${{ matrix.variant }}.txt"
+          CUR_SHA="${{ github.sha }}"
+
+          has_changes=true
+          reason=""
+
+          if [ ! -f "$PREV_PKGS" ]; then
+              reason="no previous pkgs.txt (first build or artifact expired)"
+          elif [ ! -f "$PREV_SHA_FILE" ]; then
+              reason="no previous git-sha.txt (older artifact format)"
+          else
+              PREV_SHA=$(tr -d '[:space:]' < "$PREV_SHA_FILE")
+              echo "Previous SHA: $PREV_SHA"
+              echo "Current SHA:  $CUR_SHA"
+              if [ "$PREV_SHA" != "$CUR_SHA" ]; then
+                  reason="git SHA changed ($PREV_SHA → $CUR_SHA)"
+              elif ! cmp -s "$PREV_PKGS" "$CUR_PKGS"; then
+                  reason="package set changed"
+              else
+                  has_changes=false
+                  reason="git SHA AND package set both unchanged"
+              fi
+          fi
+
+          echo "has_changes=$has_changes" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          echo "==> has_changes=$has_changes ($reason)"
+
+          # Always write a brief notice to the job summary so the no-push
+          # case is obvious in the GH Actions UI.
+          if [ "$has_changes" = "false" ]; then
+              cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+
+          ## Skipped ghcr push (${{ matrix.variant }})
+
+          - Git SHA unchanged: \`$CUR_SHA\`
+          - Package set unchanged
+          - The rechunked image would be byte-identical to the prior
+            build modulo finalize-image.sh stamps; no value in pushing.
+          EOF
+          fi
+
+      - name: Rechunk into ~120 per-package/bucket layers
+        if: steps.detect.outputs.has_changes == 'true'
+        # Splits the giant install layer so daily updates only redownload the
+        # layers containing changed packages. See scripts/rechunk-cache22.py
+        # for details. Outputs an OCI image directory at /tmp/rechunked.
+        # SOURCE_DATE_EPOCH = commit timestamp: identical across all four
+        # variants of the same commit (so cross-variant dedup works), but
+        # advances each commit so OCI registries don't reject pushes that
+        # would replace newer manifests with older "created" timestamps.
+        run: |
+          mkdir -p /tmp/rechunked
+          SDE=$(git -C "$GITHUB_WORKSPACE" log -1 --format=%ct)
+          echo "Using SOURCE_DATE_EPOCH=$SDE ($(date -u -d @$SDE))"
+          sudo python3 scripts/rechunk-cache22.py \
+            --src localhost/cache22-${{ matrix.variant }}:raw \
+            --dst /tmp/rechunked \
+            --source-date-epoch "$SDE"
+
+      - name: Scrub Secure Boot key
+        if: always()
+        run: |
+          shred -u /tmp/sbkey.pem 2>/dev/null || rm -f /tmp/sbkey.pem
+
+      - name: Push rechunked image to ghcr.io
+        if: steps.detect.outputs.has_changes == 'true'
+        run: |
+          # Plain zstd, NOT zstd:chunked.
+          #
+          # We tried zstd:chunked: it embeds per-file TOC metadata in
+          # the decompressed stream. bootc/podman computes the layer
+          # DiffID by hashing the uncompressed bytes, finds the TOC,
+          # and the resulting hash doesn't match the DiffID stored in
+          # the OCI config (which the rechunker computed against the
+          # original tar before chunked recompression). Result: bootc
+          # install / podman pull fails with "blob does not match
+          # config's DiffID".
+          #
+          # zstd:chunked annotations are inert for bootc on the ostree
+          # backend anyway (per bootc#20, #509, #1190 — composefs/unified
+          # storage path doesn't consume them), so we lose nothing
+          # functionally by dropping the chunked variant.
+          #
+          # Single skopeo invocation with --additional-tag: skopeo
+          # re-encodes blobs locally before HEAD-checking destination,
+          # so three separate copies pay the gzip→zstd re-encode cost
+          # three times even when the registry already has every blob
+          # from the previous tag.
+          echo "==> Pushing rolling + date + sha tags in one copy"
+          sudo skopeo copy \
+            --authfile $HOME/.docker/config.json \
+            --dest-compress-format zstd \
+            --additional-tag "${{ steps.tags.outputs.tag_date }}" \
+            --additional-tag "${{ steps.tags.outputs.tag_sha }}" \
+            oci:/tmp/rechunked:rechunked \
+            "docker://${{ steps.tags.outputs.tag_rolling }}"
+
+      - name: Inspect pushed image
+        if: steps.detect.outputs.has_changes == 'true'
+        run: |
+          skopeo inspect --raw "docker://${{ steps.tags.outputs.tag_rolling }}" \
+            > /tmp/manifests/current.json
+          jq '{layer_count: (.layers | length), total_size: ([.layers[].size] | add), config_digest: .config.digest}' \
+            /tmp/manifests/current.json
+
+      - name: Compute upgrade-size delta vs previous rolling
+        if: steps.detect.outputs.has_changes == 'true'
+        run: |
+          # What an upgrader who already has the previous rolling would download:
+          # the set of new layers minus any whose digest matches a layer they
+          # already have. Print as a CI summary.
+          python3 <<'PY'
+          import json, sys
+          prev = json.load(open('/tmp/manifests/previous.summary.json'))
+          cur_raw = json.load(open('/tmp/manifests/current.json'))
+          prev_digests = set(prev.get('digests', []))
+          cur_layers = cur_raw['layers']
+          cur_total = sum(l['size'] for l in cur_layers)
+          new_layers = [l for l in cur_layers if l['digest'] not in prev_digests]
+          new_total = sum(l['size'] for l in new_layers)
+          reused = len(cur_layers) - len(new_layers)
+          gb = lambda b: f"{b/1024/1024/1024:.2f} GB"
+          mb = lambda b: f"{b/1024/1024:.1f} MB"
+          summary = f"""
+          ## Upgrade-size delta (${{ matrix.variant }})
+
+          - Previous rolling: {prev.get('layer_count', 0)} layers, {gb(prev.get('total_size', 0))}
+          - Current  rolling: {len(cur_layers)} layers, {gb(cur_total)}
+          - Layers reused:    {reused} / {len(cur_layers)}
+          - **New layers:     {len(new_layers)} ({mb(new_total)})**
+          - This is what a `bootc upgrade` from the previous rolling will download.
+          """
+          print(summary)
+          # Also write to GitHub Actions step summary
+          with open(__import__('os').environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write(summary)
+          PY
+
+      - name: Compute package diff vs previous build
+        if: steps.detect.outputs.has_changes == 'true'
+        run: |
+          PREV="/tmp/prev/pkgs-${{ matrix.variant }}.txt"
+          CUR="/tmp/diagnostics/pkgs-${{ matrix.variant }}.txt"
+          if [ ! -f "$PREV" ]; then
+              echo "No previous pkgs.txt — skipping changelog"
+              exit 0
+          fi
+          python3 - "$PREV" "$CUR" <<'PY'
+          import os, re, sys
+          # pacman dir name format: <pkgname>-<pkgver>-<pkgrel>
+          # pkgname can contain hyphens but pkgver starts with a digit
+          # and pkgrel is always trailing -<digits>. Split from the right.
+          PKG_RE = re.compile(r'^(.+)-([^-]+-\d+)$')
+          def parse(path):
+              out = {}
+              with open(path) as f:
+                  for line in f:
+                      line = line.strip()
+                      if not line or line == 'ALPM_DB_VERSION': continue
+                      m = PKG_RE.match(line)
+                      if m: out[m.group(1)] = m.group(2)
+              return out
+          prev, cur = parse(sys.argv[1]), parse(sys.argv[2])
+          added    = sorted(set(cur) - set(prev))
+          removed  = sorted(set(prev) - set(cur))
+          upgraded = sorted([p for p in (set(cur) & set(prev)) if cur[p] != prev[p]])
+          variant  = "${{ matrix.variant }}"
+          lines = ['', f'## Package changes ({variant})', '']
+          if not (added or removed or upgraded):
+              lines.append('_No package-set changes since previous build._')
+          else:
+              lines.append(f'**{len(upgraded)} upgraded, {len(added)} added, {len(removed)} removed**')
+              lines.append('')
+              if upgraded:
+                  lines.append('<details><summary>Upgraded</summary>\n')
+                  for p in upgraded:
+                      lines.append(f'- `{p}` {prev[p]} → {cur[p]}')
+                  lines.append('\n</details>')
+              if added:
+                  lines.append('<details><summary>Added</summary>\n')
+                  for p in added:
+                      lines.append(f'- `{p}` {cur[p]}')
+                  lines.append('\n</details>')
+              if removed:
+                  lines.append('<details><summary>Removed</summary>\n')
+                  for p in removed:
+                      lines.append(f'- `{p}` {prev[p]}')
+                  lines.append('\n</details>')
+          text = '\n'.join(lines) + '\n'
+          print(text)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write(text)
+          PY
+
+      - name: Free disk
+        if: always()
+        run: |
+          sudo rm -rf /tmp/rechunked /var/lib/containers/storage 2>/dev/null || true
+          df -h

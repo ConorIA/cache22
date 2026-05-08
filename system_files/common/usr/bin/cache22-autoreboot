@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# cache22-autoreboot — manage the unattended reboot timer. Reboots into
+# the staged update IFF: a deployment is staged AND the most recent
+# auto-update succeeded AND no active sessions are blocking. Polls
+# within a configurable window so a session ending mid-window catches
+# the next opportunity. Auto-reboot is opt-in by configuration; not
+# enabled by default.
+#
+# Usage:
+#   cache22-autoreboot enable --at SPEC [--window DURATION] [--allow-active-sessions]
+#   cache22-autoreboot disable
+#   cache22-autoreboot status
+#
+# --at SPEC                 Any systemd OnCalendar value. REQUIRED.
+#                           Examples: 'daily 04:00', 'Sun 03:00',
+#                           'Thu,Sat 16:00'.
+# --window DURATION         How long to keep retrying within each window
+#                           (default: 30m). Examples: 1h, 90m, 2h.
+# --allow-active-sessions   Reboot even if users are logged in to
+#                           graphical or SSH sessions. Default off — the
+#                           reboot defers and retries when sessions end.
+
+set -euo pipefail
+
+CONF=/etc/cache22/autoreboot.conf
+DROPIN=/etc/systemd/system/cache22-autoreboot.timer.d/cache22.conf
+
+require_root() { [[ ${EUID} -eq 0 ]] || { echo "Error: must run as root (try: sudo $0 $*)" >&2; exit 1; }; }
+die() { echo "Error: $*" >&2; exit 1; }
+
+cmd_enable() {
+    require_root enable "$@"
+    local at="" window="30m" allow="no"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --at)                       at="$2"; shift 2 ;;
+            --window)                   window="$2"; shift 2 ;;
+            --allow-active-sessions)    allow="yes"; shift ;;
+            *)                          die "unknown arg: $1" ;;
+        esac
+    done
+    [[ -n "$at" ]] || die "--at is required (e.g. --at 'daily 04:00')"
+
+    install -dm755 /etc/cache22 "$(dirname "$DROPIN")"
+    cat > "$CONF" <<EOF
+# Managed by cache22-autoreboot. Edit via: sudo cache22-autoreboot enable [...]
+WINDOW=$window
+ALLOW_ACTIVE_SESSIONS=$allow
+EOF
+    cat > "$DROPIN" <<EOF
+[Timer]
+OnCalendar=
+OnCalendar=$at
+EOF
+    systemctl daemon-reload
+    systemctl enable --now cache22-autoreboot.timer
+    echo "[OK] auto-reboot enabled — at: $at, window: $window, allow-active: $allow"
+    echo "     next check: $(systemctl list-timers cache22-autoreboot.timer --no-legend --no-pager | awk '{print $1, $2}')"
+}
+
+cmd_disable() {
+    require_root disable
+    systemctl disable --now cache22-autoreboot.timer 2>/dev/null || true
+    rm -f "$CONF" "$DROPIN"
+    rmdir --ignore-fail-on-non-empty "$(dirname "$DROPIN")" 2>/dev/null || true
+    rmdir --ignore-fail-on-non-empty /etc/cache22 2>/dev/null || true
+    systemctl daemon-reload
+    echo "[OK] auto-reboot disabled"
+}
+
+cmd_status() {
+    if [[ ! -f "$CONF" ]]; then
+        echo "auto-reboot: disabled"
+        return 0
+    fi
+    echo "auto-reboot: enabled"
+    echo "─── config ($CONF) ───"
+    cat "$CONF"
+    echo
+    echo "─── timer ───"
+    systemctl status cache22-autoreboot.timer --no-pager 2>/dev/null | head -8
+    echo
+    echo "─── last service run ───"
+    systemctl status cache22-autoreboot.service --no-pager 2>/dev/null | head -10
+}
+
+case "${1:-}" in
+    enable)    shift; cmd_enable "$@" ;;
+    disable)   cmd_disable ;;
+    status)    cmd_status ;;
+    -h|--help) sed -n '2,22p' "$0" | sed 's/^# \?//' ;;
+    *)         echo "Usage: cache22-autoreboot enable|disable|status [--help]" >&2; exit 1 ;;
+esac

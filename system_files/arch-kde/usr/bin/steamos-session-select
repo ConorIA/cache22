@@ -1,0 +1,28 @@
+#!/bin/bash
+# Steam invokes this when the user clicks "Switch to Desktop" (passes plasma)
+# or "Return to Gaming Mode" (passes gamescope).
+#
+# One-shot semantics: switching to plasma drops a restore marker so the
+# next reboot re-applies gamescope autologin. Manual `cache22-gamescope-mode
+# off` is the way to permanently leave gaming mode.
+set -e
+
+case "$1" in
+    plasma)
+        touch /var/lib/cache22/gamescope-restore-on-next-boot
+        pkexec /usr/lib/cache22/gamescope/steam-set-session plasma.desktop
+        steam -shutdown 2>/dev/null || true
+        systemctl --user stop gamescope-session.target
+        ;;
+    gamescope)
+        rm -f /var/lib/cache22/gamescope-restore-on-next-boot
+        pkexec /usr/lib/cache22/gamescope/steam-set-session gamescope-session.desktop
+        qdbus6 org.kde.Shutdown /Shutdown org.kde.Shutdown.logout 2>/dev/null \
+            || qdbus org.kde.Shutdown /Shutdown org.kde.Shutdown.logout 2>/dev/null \
+            || loginctl terminate-user "$USER"
+        ;;
+    *)
+        echo "Usage: $0 {plasma|gamescope}" >&2
+        exit 1
+        ;;
+esac

@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# cache22-autoupdate — manage the unattended OS-update timer. Pulls +
+# stages the next image on a schedule but does NOT reboot; staged
+# updates pile up across deployments until the user reboots manually
+# or `cache22-autoreboot` is also enabled.
+#
+# Usage:
+#   cache22-autoupdate enable [--profile NAME | --schedule SPEC] [--no-app-updates]
+#   cache22-autoupdate disable
+#   cache22-autoupdate status
+#
+# Profiles (mutually exclusive with --schedule):
+#   default-desktop   1h after every boot, then once per day from last
+#                     firing. Persistent=true catches missed firings on
+#                     resume from suspend. Mirrors Fedora Silverblue's
+#                     rpm-ostreed-automatic.timer. Best for laptops that
+#                     sleep heavily — naturally spreads load across the
+#                     day instead of all hitting midnight.
+#   default-server    OnCalendar=daily (00:00 UTC) with 2h randomized
+#                     delay. Persistent=true. Mirrors openSUSE MicroOS
+#                     transactional-update.timer. Best for always-on
+#                     boxes where wall-clock predictability matters.
+#
+# If neither --profile nor --schedule is given, the profile is auto-
+# detected from systemctl's default target: graphical.target →
+# default-desktop, anything else → default-server.
+#
+# --schedule SPEC      Any systemd OnCalendar value, replaces the
+#                      profile entirely. Examples: 'daily', 'weekly',
+#                      '*-*-* 03:00', 'Sun *-*-* 04:00'.
+# --no-app-updates     Skip flatpak update + distrobox upgrade --all.
+#                      Default is to include them.
+
+set -euo pipefail
+
+CONF=/etc/cache22/autoupdate.conf
+DROPIN_DIR=/etc/systemd/system/cache22-autoupdate.timer.d
+DROPIN="$DROPIN_DIR/cache22.conf"
+
+require_root() { [[ ${EUID} -eq 0 ]] || { echo "Error: must run as root (try: sudo $0 $*)" >&2; exit 1; }; }
+die() { echo "Error: $*" >&2; exit 1; }
+
+detect_profile() {
+    local target
+    target=$(systemctl get-default 2>/dev/null)
+    case "$target" in
+        graphical.target) echo "default-desktop" ;;
+        *)                echo "default-server"  ;;
+    esac
+}
+
+write_dropin_profile() {
+    case "$1" in
+        default-desktop)
+            cat > "$DROPIN" <<'EOF'
+# cache22-autoupdate profile: default-desktop (Silverblue-style).
+# Fires 1h after boot, then 1d after each firing. Persistent= catches
+# missed firings when a laptop wakes from suspend.
+[Timer]
+OnCalendar=
+OnBootSec=1h
+OnUnitInactiveSec=1d
+RandomizedDelaySec=30min
+EOF
+            ;;
+        default-server)
+            cat > "$DROPIN" <<'EOF'
+# cache22-autoupdate profile: default-server (MicroOS-style).
+# Wall-clock daily firing for predictable behavior on always-on boxes.
+[Timer]
+OnBootSec=
+OnUnitInactiveSec=
+OnCalendar=
+OnCalendar=daily
+RandomizedDelaySec=2h
+EOF
+            ;;
+        *) die "unknown profile: $1 (valid: default-desktop, default-server)" ;;
+    esac
+}
+
+write_dropin_schedule() {
+    cat > "$DROPIN" <<EOF
+# cache22-autoupdate custom schedule (--schedule '$1').
+[Timer]
+OnBootSec=
+OnUnitInactiveSec=
+OnCalendar=
+OnCalendar=$1
+RandomizedDelaySec=30min
+EOF
+}
+
+cmd_enable() {
+    require_root enable "$@"
+    local profile="" schedule="" app_updates="yes"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --profile)         profile="$2"; shift 2 ;;
+            --schedule)        schedule="$2"; shift 2 ;;
+            --no-app-updates)  app_updates="no"; shift ;;
+            --app-updates)     app_updates="yes"; shift ;;
+            *)                 die "unknown arg: $1" ;;
+        esac
+    done
+
+    [[ -n "$profile" && -n "$schedule" ]] && die "--profile and --schedule are mutually exclusive"
+
+    install -dm755 /etc/cache22 "$DROPIN_DIR"
+    cat > "$CONF" <<EOF
+# Managed by cache22-autoupdate. Edit via: sudo cache22-autoupdate enable [...]
+APP_UPDATES=$app_updates
+EOF
+
+    if [[ -n "$schedule" ]]; then
+        write_dropin_schedule "$schedule"
+        echo "[OK] auto-update enabled — custom schedule: $schedule, app-updates: $app_updates"
+    else
+        [[ -z "$profile" ]] && profile=$(detect_profile)
+        write_dropin_profile "$profile"
+        echo "[OK] auto-update enabled — profile: $profile, app-updates: $app_updates"
+    fi
+
+    systemctl daemon-reload
+    systemctl enable --now cache22-autoupdate.timer
+    echo "     next run: $(systemctl list-timers cache22-autoupdate.timer --no-legend --no-pager | awk '{print $1, $2}')"
+}
+
+cmd_disable() {
+    require_root disable
+    systemctl disable --now cache22-autoupdate.timer 2>/dev/null || true
+    rm -f "$CONF" "$DROPIN"
+    rmdir --ignore-fail-on-non-empty "$DROPIN_DIR" 2>/dev/null || true
+    rmdir --ignore-fail-on-non-empty /etc/cache22 2>/dev/null || true
+    systemctl daemon-reload
+    echo "[OK] auto-update disabled"
+}
+
+cmd_status() {
+    if [[ ! -f "$CONF" ]]; then
+        echo "auto-update: disabled"
+        echo "(detected default profile if enabled with no flags: $(detect_profile))"
+        return 0
+    fi
+    echo "auto-update: enabled"
+    echo "─── config ($CONF) ───"
+    cat "$CONF"
+    echo
+    if [[ -f "$DROPIN" ]]; then
+        echo "─── timer drop-in ($DROPIN) ───"
+        cat "$DROPIN"
+    fi
+    echo
+    echo "─── timer state ───"
+    systemctl status cache22-autoupdate.timer --no-pager 2>/dev/null | head -8
+    echo
+    echo "─── last service run ───"
+    systemctl status cache22-autoupdate.service --no-pager 2>/dev/null | head -10
+}
+
+case "${1:-}" in
+    enable)    shift; cmd_enable "$@" ;;
+    disable)   cmd_disable ;;
+    status)    cmd_status ;;
+    -h|--help) sed -n '2,30p' "$0" | sed 's/^# \?//' ;;
+    *)         echo "Usage: cache22-autoupdate enable|disable|status [--help]" >&2; exit 1 ;;
+esac

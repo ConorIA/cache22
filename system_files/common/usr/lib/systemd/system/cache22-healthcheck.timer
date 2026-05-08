@@ -1,0 +1,10 @@
+[Unit]
+Description=Run cache22 health check 2 minutes after boot
+
+[Timer]
+OnBootSec=2min
+Unit=cache22-healthcheck.service
+RemainAfterElapse=true
+
+[Install]
+WantedBy=timers.target

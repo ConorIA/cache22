@@ -1,0 +1,13 @@
+[Unit]
+Description=Re-apply gamescope autologin after one-shot Switch-to-Desktop
+ConditionPathExists=/var/lib/cache22/gamescope-restore-on-next-boot
+DefaultDependencies=no
+Before=display-manager.service plasmalogin.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/cache22-gamescope-mode on --quiet
+ExecStartPost=/bin/rm -f /var/lib/cache22/gamescope-restore-on-next-boot
+
+[Install]
+WantedBy=multi-user.target

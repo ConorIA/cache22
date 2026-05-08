@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Run all scripts in /etc/cache22/healthcheck.d/required.d/. If any fail,
+# bump the boot-fail counter; after MAX_FAILS consecutive failures, run
+# `bootc rollback` and reboot. On success, reset the counter.
+#
+# Add custom checks by dropping executable scripts into
+# /etc/cache22/healthcheck.d/required.d/.
+
+set -uo pipefail
+
+CHECK_DIR=/etc/cache22/healthcheck.d/required.d
+STATE_DIR=/var/lib/cache22/healthcheck
+COUNTER="$STATE_DIR/fail-counter"
+MAX_FAILS=3
+
+mkdir -p "$STATE_DIR"
+[[ -d "$CHECK_DIR" ]] || { echo "no checks under $CHECK_DIR; nothing to do"; exit 0; }
+
+shopt -s nullglob
+fails=0
+total=0
+for check in "$CHECK_DIR"/*; do
+    [[ -x "$check" ]] || continue
+    total=$((total+1))
+    if "$check"; then
+        echo "[OK]   $(basename "$check")"
+    else
+        echo "[FAIL] $(basename "$check") (exit $?)"
+        fails=$((fails+1))
+    fi
+done
+
+if [[ $fails -eq 0 ]]; then
+    echo "0" > "$COUNTER"
+    echo "All $total checks passed; counter reset."
+    exit 0
+fi
+
+current=$(cat "$COUNTER" 2>/dev/null || echo 0)
+current=$((current + 1))
+echo "$current" > "$COUNTER"
+echo "$fails/$total checks failed; consecutive bad boots: $current/$MAX_FAILS."
+
+if (( current >= MAX_FAILS )); then
+    echo "Hit $MAX_FAILS consecutive bad boots — rolling back."
+    if command -v bootc >/dev/null 2>&1 && bootc rollback; then
+        echo "0" > "$COUNTER"
+        systemctl reboot
+    else
+        echo "ERROR: bootc rollback failed; staying in current deploy." >&2
+        exit 1
+    fi
+fi

@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "variants": [
+    {
+      "id": "arch-kde",
+      "label": "Arch (ALHP) — KDE Plasma",
+      "description": "Vanilla Arch packages built x86-64-v3-optimized via ALHP. Mainline linux 7.x, DKMS-built nvidia-open + r8125 + broadcom modules. Full Plasma 6 desktop with curated daily-driver app set. No CachyOS dependency — recommended default.",
+      "image": "ghcr.io/cmspam/cache22-arch-kde:rolling"
+    },
+    {
+      "id": "arch-server",
+      "label": "Arch (ALHP) — Headless server / container host",
+      "description": "Same kernel + drivers as arch-kde, no desktop. Containers (podman, docker, distrobox, incus), libvirt+qemu, cockpit web admin.",
+      "image": "ghcr.io/cmspam/cache22-arch-server:rolling"
+    },
+    {
+      "id": "cachy-kde",
+      "label": "CachyOS-based — KDE Plasma",
+      "description": "CachyOS bore-lto 7.x kernel with pre-built nvidia/zfs/r8125 modules. Full Plasma 6 desktop with curated daily-driver app set. CachyOS performance tunings + repo packages.",
+      "image": "ghcr.io/cmspam/cache22-cachy-kde:rolling"
+    },
+    {
+      "id": "cachy-server",
+      "label": "CachyOS-based — Headless server / container host",
+      "description": "Same kernel + drivers as cachy-kde, no desktop. Containers (podman, docker, distrobox, incus), libvirt+qemu, cockpit web admin.",
+      "image": "ghcr.io/cmspam/cache22-cachy-server:rolling"
+    }
+  ]
+}

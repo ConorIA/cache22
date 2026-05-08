@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# cache22-update — pull + stage + finalize the next bootc image while
+# the system is fully up. Moves the BLS-entry write earlier than bare
+# `bootc upgrade` (which defers finalize until shutdown), so power loss
+# between this returning and the user rebooting is benign.
+# See docs/UPDATES.md.
+#
+# Subcommands:
+#   (default)        check for + apply update; do NOT reboot
+#   --check          read-only `bootc upgrade --check`
+#   --reboot         apply + reboot
+#   --app-updates    also: flatpak update -y; distrobox upgrade --all
+#   --if-idle        exit silently if another cache22-update is already
+#                    running (used by cache22-autoupdate.service so the
+#                    timer never preempts an interactive run)
+#   --help
+
+set -euo pipefail
+
+LOCK=/var/lock/cache22-update.lock
+
+require_root() {
+    if [[ ${EUID} -ne 0 ]]; then
+        echo "Error: must run as root (try: sudo cache22-update $*)" >&2
+        exit 1
+    fi
+}
+
+REBOOT=0
+APPS=0
+CHECK=0
+IF_IDLE=0
+for arg in "$@"; do
+    case "$arg" in
+        --check)         CHECK=1 ;;
+        --reboot)        REBOOT=1 ;;
+        --app-updates)   APPS=1 ;;
+        --if-idle)       IF_IDLE=1 ;;
+        -h|--help)       sed -n '2,16p' "$0" | sed 's/^# \?//'; exit 0 ;;
+        *)               echo "Unknown arg: $arg" >&2; exit 1 ;;
+    esac
+done
+
+if (( CHECK )); then
+    bootc upgrade --check
+    exit $?
+fi
+
+require_root "$@"
+
+# Acquire mutex so manual + automatic don't fight. Manual runs block;
+# automatic (--if-idle) bows out silently.
+exec 200>"$LOCK"
+if (( IF_IDLE )); then
+    if ! flock -nx 200; then
+        echo "cache22-update is already running; skipping (--if-idle)"
+        exit 0
+    fi
+else
+    flock -x 200
+fi
+
+echo "==> Pulling + staging next image (bootc upgrade)"
+if ! bootc upgrade; then
+    echo "ERROR: bootc upgrade failed" >&2
+    exit 1
+fi
+
+# Was anything actually staged? bootc returns 0 even if up to date.
+if ! bootc status --json 2>/dev/null | grep -q '"staged"' \
+        || bootc status --json 2>/dev/null | grep -A1 '"staged"' | grep -q 'null'; then
+    echo "[OK] Already up to date; nothing to finalize."
+    exit 0
+fi
+
+. /usr/lib/cache22/bootc-finalize.sh
+
+# Drop a /run/motd.d marker so the next SSH login banner mentions the
+# pending reboot. /run is tmpfs so it clears automatically on reboot.
+install -dm755 /run/motd.d
+cat > /run/motd.d/10-cache22-pending-reboot <<'EOF'
+
+──────────────────────────────────────────────────────────
+  cache22 update is staged — reboot to apply.
+  Run `cache22-changelog` to see what changed.
+──────────────────────────────────────────────────────────
+
+EOF
+
+# Pop a desktop notification to any active graphical session so KDE
+# users see "update ready" right when it finishes. May be missed if
+# the user wasn't at the screen — that's fine, the MOTD / shell
+# greeting / cache22-changelog catch them later. notify-send is only
+# present on KDE-variant images (libnotify dep); on server this is a
+# no-op.
+if command -v notify-send >/dev/null 2>&1; then
+    while read -r sess_id _; do
+        [[ -z "$sess_id" ]] && continue
+        sess_type=$(loginctl show-session "$sess_id" -p Type --value 2>/dev/null)
+        case "$sess_type" in wayland|x11|mir) ;; *) continue ;; esac
+        uid=$(loginctl show-session "$sess_id" -p User --value 2>/dev/null)
+        user=$(loginctl show-session "$sess_id" -p Name --value 2>/dev/null)
+        [[ -z "$uid" || -z "$user" ]] && continue
+        sudo -u "$user" \
+            XDG_RUNTIME_DIR="/run/user/$uid" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+            notify-send --app-name="cache22" \
+                --icon=system-software-update \
+                --urgency=normal \
+                --expire-time=15000 \
+                "cache22 update ready" \
+                "An OS update has been staged. Reboot to apply, or run cache22-changelog to see what changed." \
+            2>/dev/null || true
+    done < <(loginctl list-sessions --no-legend 2>/dev/null)
+fi
+
+if (( APPS )); then
+    echo "==> flatpak update"
+    sudo -u "$(logname 2>/dev/null || echo "$SUDO_USER")" flatpak update -y || \
+        echo "WARN: flatpak update reported errors (continuing)"
+    if command -v distrobox >/dev/null 2>&1; then
+        echo "==> distrobox upgrade --all"
+        distrobox upgrade --all || \
+            echo "WARN: distrobox upgrade reported errors (continuing)"
+    fi
+fi
+
+if (( REBOOT )); then
+    echo "==> Rebooting"
+    systemctl reboot
+fi

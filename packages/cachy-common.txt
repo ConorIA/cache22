@@ -1,0 +1,253 @@
+# cache22 — cachy family base packages (cachy-kde and cachy-server share these).
+#
+# These variants are built on the cachyos/cachyos-v3 base image and pull
+# from CachyOS's repos. Per-kernel modules (nvidia-open, zfs, r8125) ship
+# pre-built so installs don't need DKMS at runtime.
+#
+# To remove the cachy family entirely (e.g. CachyOS redistribution
+# concerns): delete packages/cachy-*.txt, scripts/inject-custom-repos-cachy.sh,
+# the cachy-* matrix entries in .github/workflows/build-image.yml, and
+# the cachy-* entries in variants.json. The arch family is independent.
+
+# ─── Base system ──────────────────────────────────────────
+base
+base-devel
+linux-firmware
+linux-firmware-amdgpu
+sof-firmware
+amd-ucode
+intel-ucode
+sudo
+which
+inetutils
+iptables
+nftables
+less
+diffutils
+perl
+python
+man-db
+man-pages
+texinfo
+logrotate
+lsb-release
+sysfsutils
+usbutils
+pciutils
+
+# ─── Kernel + per-kernel pre-built modules ────────────────
+# CachyOS bore-lto kernel (7.x), with per-kernel pre-built nvidia-open,
+# zfs, and r8125 modules so we don't need DKMS at install time.
+linux-cachyos-bore-lto
+linux-cachyos-bore-lto-headers
+linux-cachyos-bore-lto-nvidia-open
+linux-cachyos-bore-lto-zfs
+linux-cachyos-bore-lto-r8125
+
+# ─── GPU userland (headless-safe) ─────────────────────────
+# Desktop-only bits (nvidia-settings, egl-wayland, xf86-video-amdgpu,
+# nvidia-prime, switcheroo-control, mesa-utils, vulkan-tools, lib32-*)
+# live in cachy-kde.txt so the server image stays X11/Wayland-free.
+nvidia-utils
+opencl-nvidia
+libva-nvidia-driver
+mesa
+vulkan-icd-loader
+vulkan-radeon
+vulkan-intel
+vulkan-virtio       # venus driver — Vulkan inside virtio-gpu guests
+intel-media-driver
+intel-compute-runtime    # OpenCL + Level Zero on Intel iGPU/dGPU
+libva-utils              # vainfo
+vdpauinfo
+gst-plugin-va
+
+# ─── bootc + immutable infrastructure ─────────────────────
+# bootc + bootupd both come from cmspam/bootc-v3 (built for x86-64-v3
+# baseline so they don't SIGILL on Intel CPUs the way the AMD-default
+# cachyos-v3 -march=native build would). bootupd manages the ESP
+# bootloader (shim/grub2) for atomic updates on `bootc upgrade`.
+bootc
+bootupd
+dracut
+ostree
+composefs
+skopeo
+
+# ─── Bootloader + boot tooling ────────────────────────────
+# grub: installer uses grub-editenv. Runtime users may want
+# grub-set-default. The on-ESP grub binary is Fedora's signed grub2
+# (fetched at image build time by fetch-fedora-bootloader.sh), NOT
+# this Arch grub.
+grub
+efibootmgr
+os-prober
+
+# ─── Storage / filesystems ────────────────────────────────
+cryptsetup
+device-mapper
+lvm2
+mdadm
+dosfstools
+e2fsprogs
+exfatprogs
+btrfs-progs
+xfsprogs
+f2fs-tools
+nfs-utils
+samba
+smbclient
+smartmontools
+efitools
+
+# ─── CachyOS infrastructure ───────────────────────────────
+cachyos-keyring
+cachyos-mirrorlist
+cachyos-v3-mirrorlist
+cachyos-v4-mirrorlist
+cachyos-rate-mirrors
+cachyos-settings
+cachyos-hooks
+chwd
+
+# ─── Network ──────────────────────────────────────────────
+networkmanager
+networkmanager-openvpn
+modemmanager
+iwd
+wpa_supplicant
+dnsmasq
+bind
+ethtool
+nss-mdns
+usb_modeswitch
+wireless-regdb
+ufw
+wireguard-tools
+
+# ─── Bluetooth ────────────────────────────────────────────
+bluez
+bluez-libs
+bluez-utils
+bluez-hid2hci
+bluez-obex
+
+# ─── Audio (PipeWire) ─────────────────────────────────────
+# Headless audio still has uses (kvm guests, audio servers). pavucontrol
+# is GUI and lives in cachy-kde.txt.
+pipewire
+pipewire-pulse
+pipewire-alsa
+pipewire-jack
+wireplumber
+alsa-firmware
+alsa-plugins
+alsa-utils
+
+# ─── Power management ─────────────────────────────────────
+power-profiles-daemon
+cpupower
+upower
+
+# ─── Hardware enablement ──────────────────────────────────
+dmidecode
+hdparm
+hwdetect
+hwinfo
+lsscsi
+mtools
+sg3_utils
+lm_sensors
+bolt
+fwupd
+fprintd
+broadcom-wl-dkms
+
+# ─── Virtualization (qemu-base; KDE adds qemu-desktop + virt-manager) ─
+qemu-base
+libvirt
+virglrenderer
+swtpm
+edk2-ovmf
+iproute2
+
+# ─── Containers ───────────────────────────────────────────
+podman
+podman-compose
+docker
+docker-compose
+docker-buildx
+distrobox
+incus
+incus-tools
+lxc
+crun
+slirp4netns
+fuse-overlayfs
+aardvark-dns
+netavark
+
+# ─── Flatpak (bazaar GUI storefront in cachy-kde.txt) ─────
+flatpak
+
+# ─── Common userland CLI ──────────────────────────────────
+bash-completion
+git
+openssh
+rsync
+wget
+curl
+jq
+go-yq
+tree
+ncdu
+socat
+whois
+lsof
+bat
+fzf
+iperf3
+python-pip
+python-virtualenv
+python-pipx
+zstd
+7zip
+ripgrep
+fd
+btop
+fastfetch
+nano
+nano-syntax-highlighting
+vim
+micro
+unrar
+unzip
+zip
+unarchiver
+pacman-contrib
+pkgfile
+rebuild-detector
+reflector
+pv
+
+# ─── Ops / admin / monitoring ─────────────────────────────
+tmux
+htop
+iotop
+iftop
+nethogs
+bmon
+strace
+tcpdump
+nmap
+mtr
+sysstat
+inxi
+
+# ─── Secure Boot tooling ──────────────────────────────────
+sbctl
+mokutil
+sbsigntools
+systemd-ukify
+tpm2-tools
+tpm2-tss

@@ -1,0 +1,13 @@
+# bash-completion for cache22-secureboot
+_cache22_secureboot() {
+    local cur prev words cword
+    _init_completion || return
+
+    local subs="status enroll unenroll --help"
+
+    if [[ $cword -eq 1 ]]; then
+        COMPREPLY=( $(compgen -W "$subs" -- "$cur") )
+        return
+    fi
+}
+complete -F _cache22_secureboot cache22-secureboot

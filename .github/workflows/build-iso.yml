@@ -1,0 +1,99 @@
+name: Build cache22 installer ISO
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly Sunday 02:00 UTC — much rarer cadence than the image build,
+    # since the ISO doesn't change often (it pulls cache22 from ghcr at
+    # install time, so a stale ISO still installs the latest image).
+    - cron: '0 2 * * 0'
+  push:
+    branches: [main]
+    paths:
+      - 'installer/**'
+      - '.github/workflows/build-iso.yml'
+
+permissions:
+  contents: write   # for uploading the ISO to a GitHub release
+
+jobs:
+  build-iso:
+    name: Build installer ISO
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:44
+      options: --privileged
+    steps:
+      - name: Install build deps inside Fedora 44 container
+        run: |
+          # Pure-Fedora live ISO build via dnf-installroot + dracut +
+          # mksquashfs + xorrisofs. No lorax / Anaconda / kickstart.
+          dnf install -y \
+              dnf \
+              dracut \
+              squashfs-tools \
+              xorriso \
+              mtools \
+              dosfstools \
+              e2fsprogs \
+              util-linux \
+              openssl \
+              python3 \
+              git \
+              gh \
+              which
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ISO
+        working-directory: installer/fedora-live
+        run: |
+          chmod +x build-iso.sh
+          # Need root for dnf --installroot, chroot, mksquashfs, xorrisofs.
+          # GH containers run as root by default; explicit sudo for clarity.
+          ./build-iso.sh out
+
+      - name: Compute artifact info
+        id: info
+        run: |
+          ISO=$(ls installer/fedora-live/out/*.iso | head -1)
+          SIZE=$(du -h "$ISO" | cut -f1)
+          SHA=$(sha256sum "$ISO" | awk '{print $1}')
+          BASE=$(basename "$ISO")
+          echo "iso=$ISO" >> "$GITHUB_OUTPUT"
+          echo "name=$BASE" >> "$GITHUB_OUTPUT"
+          echo "size=$SIZE" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA"   >> "$GITHUB_OUTPUT"
+          echo "tag=iso-$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload ISO as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cache22-installer-iso
+          path: installer/fedora-live/out/*.iso
+          retention-days: 14
+
+      - name: Upload ISO to GitHub Release (rolling tag)
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ISO="${{ steps.info.outputs.iso }}"
+          TAG="${{ steps.info.outputs.tag }}"
+          NOTES="cache22 installer ISO
+
+          - Size: ${{ steps.info.outputs.size }}
+          - SHA-256: \`${{ steps.info.outputs.sha }}\`
+
+          Boots under Secure Boot with default Microsoft keys (no MOK
+          enrollment needed for the ISO itself; the install process
+          queues MOK enrollment for the installed system's kernel).
+          The ISO pulls the latest cache22 image from ghcr.io at install
+          time, so a stale ISO still installs the latest image."
+          gh release delete "$TAG" --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "cache22 installer ISO ($TAG)" \
+              --notes "$NOTES" \
+              "$ISO"

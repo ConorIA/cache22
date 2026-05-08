@@ -1,0 +1,17 @@
+# Default kernel cmdline kargs for cache22.
+# Per https://github.com/containers/bootc/blob/main/docs/src/building/kernel-arguments.md
+# these are added to every BLS entry bootc generates and propagate
+# across `bootc upgrade`. Users override them via `rpm-ostree kargs`
+# or by editing /boot/loader/entries/*.conf directly.
+kargs = [
+    "rw",
+    # Multiple console= entries: kernel sends output to all of them but
+    # /dev/console (where init/systemd-cryptsetup write the LUKS
+    # passphrase prompt and login prompts) points at the LAST one
+    # listed. Put tty0 LAST so prompts land on the user's screen on
+    # real hardware. ttyS0 is harmless extra output on bare metal and
+    # critical for QEMU -nographic test runs.
+    "console=ttyS0,115200n8",
+    "console=tty0",
+]
+match-architectures = ["x86_64"]

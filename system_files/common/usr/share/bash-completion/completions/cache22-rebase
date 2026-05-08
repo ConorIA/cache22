@@ -1,0 +1,25 @@
+# bash-completion for cache22-rebase
+_cache22_rebase() {
+    local cur prev words cword
+    _init_completion || return
+
+    case "$prev" in
+        --variant)
+            local variants
+            if [[ -r /etc/cache22/variants.json ]]; then
+                variants=$(grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]+"' \
+                    /etc/cache22/variants.json | sed -E 's/.*"([^"]+)"$/\1/')
+            else
+                variants="cachy-kde cachy-server arch-kde arch-server"
+            fi
+            COMPREPLY=( $(compgen -W "$variants" -- "$cur") )
+            return
+            ;;
+        --image)
+            return
+            ;;
+    esac
+
+    COMPREPLY=( $(compgen -W "--variant --image --reboot --list-variants --help" -- "$cur") )
+}
+complete -F _cache22_rebase cache22-rebase
