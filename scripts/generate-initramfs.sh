@@ -16,6 +16,12 @@ for kver_dir in /usr/lib/modules/*/; do
         continue
     fi
     echo "    building initramfs for ${kver}"
+    # Ensure modules.dep is fresh. Pacman's 60-depmod.hook normally
+    # handles this, but at least one cachyos kernel bump
+    # (linux-cachyos-bore-lto-7.0.5-1) shipped without it firing,
+    # leaving dracut to fail with "modules.dep is missing". depmod is
+    # idempotent — re-running it when pacman already did is free.
+    depmod -a "${kver}"
     dracut \
         --force \
         --kver "${kver}" \
