@@ -106,6 +106,17 @@ RUN cp -av --remove-destination /tmp/cache22-build/system_files/common/. / \
 RUN pacman -Syy --noconfirm \
  && pacman-key --populate
 
+# Pin the hostname returned by `hostname` (the shell command) so build-
+# time tools that shell out to it see a stable value. nvidia-open-dkms
+# bakes "Release Build (root@<HOSTNAME>)" into nvidia.ko's .modinfo,
+# which then drives a different .note.gnu.build-id and module signature
+# every build. /usr/local/bin precedes /usr/bin in PATH so this shim
+# overrides the real binary; finalize-image.sh removes it before
+# bootc-lint runs.
+RUN install -d /usr/local/bin \
+ && printf '#!/bin/sh\nexec echo cache22-build\n' > /usr/local/bin/hostname \
+ && chmod +x /usr/local/bin/hostname
+
 # sed strips inline comments + blank lines (so commented package lines
 # don't pass through as bogus pkg names). Retry 5x: cachy/ALHP CDN
 # sometimes serves a stale 404 while a new pkg propagates.
