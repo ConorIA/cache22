@@ -289,19 +289,31 @@ jobs:
           # storage path doesn't consume them), so we lose nothing
           # functionally by dropping the chunked variant.
           #
-          # Single skopeo invocation with --additional-tag: skopeo
-          # re-encodes blobs locally before HEAD-checking destination,
-          # so three separate copies pay the gzip→zstd re-encode cost
-          # three times even when the registry already has every blob
-          # from the previous tag.
-          echo "==> Pushing rolling + date + sha tags in one copy"
+          # Push each tag with its own skopeo copy. We previously combined
+          # them with --additional-tag for speed, but ghcr.io silently
+          # dropped the additional-tag entries — only the primary
+          # destination (:rolling) actually became a registry tag, leaving
+          # the date and sha tags as untagged manifests that ghcr later
+          # garbage-collected. The redundant gzip→zstd re-encode cost is
+          # acceptable; tags are the more important property.
+          echo "==> Pushing :rolling"
           sudo skopeo copy \
             --authfile $HOME/.docker/config.json \
             --dest-compress-format zstd \
-            --additional-tag "${{ steps.tags.outputs.tag_date }}" \
-            --additional-tag "${{ steps.tags.outputs.tag_sha }}" \
             oci:/tmp/rechunked:rechunked \
             "docker://${{ steps.tags.outputs.tag_rolling }}"
+
+          # Subsequent pushes hit the same blobs the registry already
+          # has — they fast-path on the HEAD check. Only the manifest
+          # write actually goes over the wire.
+          for tag in "${{ steps.tags.outputs.tag_date }}" "${{ steps.tags.outputs.tag_sha }}"; do
+              echo "==> Pushing :${tag##*:}"
+              sudo skopeo copy \
+                --authfile $HOME/.docker/config.json \
+                --dest-compress-format zstd \
+                oci:/tmp/rechunked:rechunked \
+                "docker://$tag"
+          done
 
       - name: Inspect pushed image
         if: steps.detect.outputs.has_changes == 'true'
