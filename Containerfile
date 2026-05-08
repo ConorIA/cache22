@@ -109,7 +109,14 @@ RUN pacman -Syy --noconfirm \
 # sed strips inline comments + blank lines (so commented package lines
 # don't pass through as bogus pkg names). Retry 5x: cachy/ALHP CDN
 # sometimes serves a stale 404 while a new pkg propagates.
-RUN pkglist=$(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' \
+#
+# --mount=type=secret,id=sbkey passes the cache22 SB private key into
+# this RUN so DKMS hooks (fired by pacman for *-dkms packages) can sign
+# the modules they build. /etc/dkms/framework.conf points them at this
+# key path; modules get signed with the cache22 SB cert, MOK-trusted at
+# boot, byte-stable across rebuilds.
+RUN --mount=type=secret,id=sbkey,target=/run/secrets/sbkey,required=false \
+    pkglist=$(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' \
         "/tmp/cache22-build/packages/${VARIANT_FAMILY}-common.txt" \
         "/tmp/cache22-build/packages/${VARIANT}.txt") \
  && for attempt in 1 2 3 4 5; do \
@@ -135,6 +142,10 @@ RUN cp -av --remove-destination /tmp/cache22-build/system_files/common/. / \
     fi
 
 RUN /tmp/cache22-build/scripts/patch-ostree-dracut.sh
+# faketime wrapper for dracut + sbsign — sbsign embeds wall-clock into
+# the PE signature; without faketime the signed vmlinuz drifts every
+# build. dracut goes under faketime too as defense in depth.
+RUN pacman -S --noconfirm --needed libfaketime
 RUN /tmp/cache22-build/scripts/generate-initramfs.sh
 
 # Boot chain. See docs/SECUREBOOT.md.

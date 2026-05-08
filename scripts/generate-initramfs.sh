@@ -22,14 +22,17 @@ for kver_dir in /usr/lib/modules/*/; do
     # leaving dracut to fail with "modules.dep is missing". depmod is
     # idempotent — re-running it when pacman already did is free.
     depmod -a "${kver}"
-    dracut \
-        --force \
-        --kver "${kver}" \
-        --no-hostonly \
-        --reproducible \
-        --zstd \
-        --quiet \
-        "/usr/lib/modules/${kver}/initramfs.img"
+    # faketime + --reproducible eliminates wall-clock leakage from any
+    # dracut module or helper that stamps a build-time into its output.
+    faketime "@${SOURCE_DATE_EPOCH:-0}" \
+        dracut \
+            --force \
+            --kver "${kver}" \
+            --no-hostonly \
+            --reproducible \
+            --zstd \
+            --quiet \
+            "/usr/lib/modules/${kver}/initramfs.img"
 done
 
 echo "==> Initramfs generation complete"

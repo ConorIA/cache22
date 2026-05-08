@@ -41,8 +41,13 @@ for kver_dir in /usr/lib/modules/*/; do
     fi
 
     echo "==> $kver: sbsigning vmlinuz"
-    sbsign --key "$KEY" --cert "$CERT" \
-           --output "${vmlinuz}.signed" "$vmlinuz"
+    # faketime pins sbsign's PE-signature signing time so the resulting
+    # vmlinuz is byte-stable across rebuilds. Without this, sbsign reads
+    # wall-clock and the kernel-modules layer (~200 MiB) drifts every
+    # build even when the kernel itself didn't change.
+    faketime "@${SOURCE_DATE_EPOCH:-0}" \
+        sbsign --key "$KEY" --cert "$CERT" \
+               --output "${vmlinuz}.signed" "$vmlinuz"
     mv "${vmlinuz}.signed" "$vmlinuz"
     echo "    $kver: $(stat -c%s "$vmlinuz") bytes signed"
     # `((signed++))` returns the pre-increment value as exit status, which
