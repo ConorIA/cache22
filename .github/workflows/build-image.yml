@@ -289,13 +289,7 @@ jobs:
           # storage path doesn't consume them), so we lose nothing
           # functionally by dropping the chunked variant.
           #
-          # Push each tag with its own skopeo copy. We previously combined
-          # them with --additional-tag for speed, but ghcr.io silently
-          # dropped the additional-tag entries — only the primary
-          # destination (:rolling) actually became a registry tag, leaving
-          # the date and sha tags as untagged manifests that ghcr later
-          # garbage-collected. The redundant gzip→zstd re-encode cost is
-          # acceptable; tags are the more important property.
+          # Push :rolling once via skopeo (full blob upload + manifest write).
           echo "==> Pushing :rolling"
           sudo skopeo copy \
             --authfile $HOME/.docker/config.json \
@@ -303,16 +297,29 @@ jobs:
             oci:/tmp/rechunked:rechunked \
             "docker://${{ steps.tags.outputs.tag_rolling }}"
 
-          # Subsequent pushes hit the same blobs the registry already
-          # has — they fast-path on the HEAD check. Only the manifest
-          # write actually goes over the wire.
+          # For the date and sha tags, use `crane tag` — registry-protocol
+          # primitive that writes a new manifest reference pointing at the
+          # same digest. No blob re-upload, no re-encoding; just a manifest
+          # write (a few KB). Three full skopeo copies took ~30 min wall
+          # time; this is ~30 min + ~2 sec.
+          #
+          # Background: skopeo's --additional-tag option silently no-ops on
+          # ghcr.io — only the primary destination becomes a real tag, the
+          # additional ones never materialise. Per-tag skopeo copies work
+          # but pay the gzip→zstd re-encode for each. crane tag avoids both
+          # problems by speaking the registry protocol directly.
+          echo "==> Installing crane"
+          curl -fsSL "https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_x86_64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin crane
+
+          # crane reads ghcr.io credentials from the same auth file skopeo wrote.
+          export DOCKER_CONFIG="$HOME/.docker"
+
           for tag in "${{ steps.tags.outputs.tag_date }}" "${{ steps.tags.outputs.tag_sha }}"; do
-              echo "==> Pushing :${tag##*:}"
-              sudo skopeo copy \
-                --authfile $HOME/.docker/config.json \
-                --dest-compress-format zstd \
-                oci:/tmp/rechunked:rechunked \
-                "docker://$tag"
+              echo "==> Tagging ${tag##*:}"
+              # crane tag IMAGE:OLDTAG NEWTAG  →  copies the manifest reference
+              # The first arg is the source image, second is JUST the new tag name.
+              crane tag "${{ steps.tags.outputs.tag_rolling }}" "${tag##*:}"
           done
 
       - name: Inspect pushed image
