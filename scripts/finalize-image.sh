@@ -12,7 +12,6 @@ echo "==> Generating locales (per /etc/locale.gen)"
 locale-gen 2>&1 | tail -5
 
 echo "==> Rewriting /etc/os-release + /etc/lsb-release with cache22 identity"
-CACHE22_VERSION=$(date -u +%Y.%m.%d.%H%M)
 VARIANT="${VARIANT:-cachy-kde}"
 case "$VARIANT" in
     cachy-kde)    VARIANT_PRETTY="CachyOS-based KDE" ;;
@@ -29,10 +28,10 @@ for f in /etc/os-release /usr/lib/os-release; do
     [[ -f "$f" ]] || continue
     cat > "$f" <<EOF
 NAME="cache22"
-PRETTY_NAME="cache22 (${VARIANT_PRETTY}) ${CACHE22_VERSION}"
+PRETTY_NAME="cache22 (${VARIANT_PRETTY})"
 ID=cache22
 ${ID_LIKE_LINE}
-BUILD_ID="${CACHE22_VERSION}"
+BUILD_ID="rolling"
 ANSI_COLOR="38;2;23;147;209"
 HOME_URL="https://github.com/cmspam/cache22"
 DOCUMENTATION_URL="https://github.com/cmspam/cache22/tree/main/docs"
@@ -45,8 +44,8 @@ EOF
 done
 cat > /etc/lsb-release <<EOF
 DISTRIB_ID=cache22
-DISTRIB_RELEASE=${CACHE22_VERSION}
-DISTRIB_DESCRIPTION="cache22 (${VARIANT_PRETTY}) ${CACHE22_VERSION}"
+DISTRIB_RELEASE=rolling
+DISTRIB_DESCRIPTION="cache22 (${VARIANT_PRETTY})"
 EOF
 
 # ostree expects per-stateroot /var; redirect the /home, /srv, /root real

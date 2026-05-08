@@ -763,6 +763,10 @@ def main():
                 rel = str(fp.relative_to(src_mnt))
                 db_files.append(fp)
                 db_arcname[fp] = rel
+        # os.walk returns files in readdir() order, which is filesystem-
+        # dependent and not stable across runs. Sort before tar-write so
+        # the layer's bytes are deterministic.
+        db_files.sort()
         desc = add_layer_from_files(
             out_blobs, "pacman-db", db_files, db_arcname, src_mnt
         )
