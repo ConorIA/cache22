@@ -142,10 +142,6 @@ RUN cp -av --remove-destination /tmp/cache22-build/system_files/common/. / \
     fi
 
 RUN /tmp/cache22-build/scripts/patch-ostree-dracut.sh
-# faketime wrapper for dracut + sbsign — sbsign embeds wall-clock into
-# the PE signature; without faketime the signed vmlinuz drifts every
-# build. dracut goes under faketime too as defense in depth.
-RUN pacman -S --noconfirm --needed libfaketime
 RUN /tmp/cache22-build/scripts/generate-initramfs.sh
 
 # Boot chain. See docs/SECUREBOOT.md.

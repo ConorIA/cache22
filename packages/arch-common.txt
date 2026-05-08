@@ -85,6 +85,11 @@ grub
 efibootmgr
 os-prober
 
+# Wraps signing tools (sbsign, dracut) at build time so embedded
+# wall-clock timestamps become deterministic. Tiny library, harmless
+# at runtime.
+libfaketime
+
 # ─── Storage / filesystems ────────────────────────────────
 cryptsetup
 device-mapper
