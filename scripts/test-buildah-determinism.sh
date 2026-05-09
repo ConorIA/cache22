@@ -42,8 +42,20 @@ TYPE=${VARIANT##*-}
 cd "$REPO"
 
 if [[ ! -s "$SBKEY" ]]; then
-    echo "==> No SB key (SBKEY=$SBKEY); sign-secureboot.sh will skip signing"
-    SBKEY=$(mktemp); trap "rm -f $SBKEY" EXIT
+    # Without a stable SB key, DKMS framework.conf falls back to
+    # per-build /var/lib/dkms/mok.key generation, which guarantees
+    # wl.ko / nvidia.ko drift between the two test builds — a false
+    # positive against the determinism check. Generate a stable test
+    # key cached at /tmp so repeated test runs reuse the same key.
+    SBKEY=/tmp/cache22-test-sbkey.pem
+    if [[ ! -s "$SBKEY" ]]; then
+        echo "==> Generating one-time test SB key at $SBKEY (reused on subsequent runs)"
+        openssl genpkey -algorithm RSA -out "$SBKEY" \
+            -pkeyopt rsa_keygen_bits:3072 2>/dev/null
+        chmod 0600 "$SBKEY"
+    else
+        echo "==> Reusing test SB key at $SBKEY"
+    fi
 fi
 
 LOG="/tmp/cache22-buildah-test.log"
