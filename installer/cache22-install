@@ -1112,10 +1112,10 @@ setup_target() {
     fi
     # rshared so podman bind sees the submounts via setns.
     mount --make-rshared "$TARGET" || true
-    # /boot stays as a regular directory on the rootfs (no separate
-    # partition). ostree may write vestigial BLS entries there; we
-    # ignore them — sd-boot reads UKIs from the ESP only.
-    mkdir -p "$TARGET/boot" "$TARGET/efi"
+    # bootc install requires the rootfs to be empty or contain only
+    # mount points, so create only $TARGET/efi as the ESP mountpoint.
+    # /boot inside the deploy comes from the image's filesystem package.
+    mkdir -p "$TARGET/efi"
     mount "${CFG[esp_part]}" "$TARGET/efi"
     mount --make-rshared "$TARGET/efi" || true
 }
@@ -1176,34 +1176,27 @@ install_sb_and_uki() {
         die "Could not locate per-stateroot /var for chroot bind-mount"
     fi
 
-    # resign-uki walks /sysroot/ostree/deploy/*/ for live deploys, so
-    # the chroot's /sysroot must point at the partition root.
-    install -d "$DEPLOY_ROOT/sysroot" \
-              "$DEPLOY_ROOT/var" \
-              "$DEPLOY_ROOT/efi" \
-              "$DEPLOY_ROOT/sys/firmware/efi/efivars" \
-              "$DEPLOY_ROOT/dev" \
-              "$DEPLOY_ROOT/proc" \
-              "$DEPLOY_ROOT/sys"
-
-    mount --bind "$TARGET"      "$DEPLOY_ROOT/sysroot"
-    mount --bind "$DEPLOY_VAR"  "$DEPLOY_ROOT/var"
-    mount --bind "$ESP"         "$DEPLOY_ROOT/efi"
-    mount --bind /dev           "$DEPLOY_ROOT/dev"
+    # ostree marks the deploy root with chattr +i once laid down, so we
+    # cannot create new top-level dirs inside it. All bind-mount targets
+    # below must already exist in the image. /sysroot, /var, /dev, /proc,
+    # /sys, /tmp, /efi all ship via rechunker extra_dirs.
+    mount --bind  "$TARGET"     "$DEPLOY_ROOT/sysroot"
+    mount --bind  "$DEPLOY_VAR" "$DEPLOY_ROOT/var"
+    mount --bind  "$ESP"        "$DEPLOY_ROOT/efi"
+    mount --bind  /dev          "$DEPLOY_ROOT/dev"
     mount -t proc proc          "$DEPLOY_ROOT/proc"
-    mount --bind /sys           "$DEPLOY_ROOT/sys"
-    mount --bind /sys/firmware/efi/efivars "$DEPLOY_ROOT/sys/firmware/efi/efivars" 2>/dev/null || \
-        say "  NOTE: efivars bind failed (live env not booted in UEFI mode?); bootctl install may not register an NVRAM entry"
+    # --rbind so /sys/firmware/efi/efivars submounts from the live env
+    # come along automatically (so bootctl install can write the NVRAM
+    # Boot#### entry from inside the chroot).
+    mount --rbind /sys          "$DEPLOY_ROOT/sys"
 
-    # Tear-down on every exit path from this function.
     _install_sb_cleanup() {
-        umount "$DEPLOY_ROOT/sys/firmware/efi/efivars" 2>/dev/null || true
-        umount "$DEPLOY_ROOT/sys"                      2>/dev/null || true
-        umount "$DEPLOY_ROOT/proc"                     2>/dev/null || true
-        umount "$DEPLOY_ROOT/dev"                      2>/dev/null || true
-        umount "$DEPLOY_ROOT/efi"                      2>/dev/null || true
-        umount "$DEPLOY_ROOT/var"                      2>/dev/null || true
-        umount "$DEPLOY_ROOT/sysroot"                  2>/dev/null || true
+        umount -R "$DEPLOY_ROOT/sys"     2>/dev/null || true
+        umount    "$DEPLOY_ROOT/proc"    2>/dev/null || true
+        umount    "$DEPLOY_ROOT/dev"     2>/dev/null || true
+        umount    "$DEPLOY_ROOT/efi"     2>/dev/null || true
+        umount    "$DEPLOY_ROOT/var"     2>/dev/null || true
+        umount    "$DEPLOY_ROOT/sysroot" 2>/dev/null || true
     }
     trap _install_sb_cleanup RETURN
 

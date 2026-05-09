@@ -294,7 +294,7 @@ setup_mounts() {
         mount "$ROOT_DEV" "$TARGET"
     fi
     mount --make-rshared "$TARGET" || true
-    mkdir -p "$TARGET/boot" "$TARGET/efi"
+    mkdir -p "$TARGET/efi"
     mount "${CFG[esp_part]}" "$TARGET/efi"
     mount --make-rshared "$TARGET/efi" || true
 }
@@ -428,30 +428,22 @@ install_sb_and_uki() {
         cp -a "$LIVE_KEYS" "$DEPLOY_VAR/lib/cache22/sbkey"
     fi
 
-    install -d "$DEPLOY_ROOT/sysroot" \
-              "$DEPLOY_ROOT/var" \
-              "$DEPLOY_ROOT/efi" \
-              "$DEPLOY_ROOT/sys/firmware/efi/efivars" \
-              "$DEPLOY_ROOT/dev" \
-              "$DEPLOY_ROOT/proc" \
-              "$DEPLOY_ROOT/sys"
-
-    mount --bind "$TARGET"      "$DEPLOY_ROOT/sysroot"
-    mount --bind "$DEPLOY_VAR"  "$DEPLOY_ROOT/var"
-    mount --bind "$ESP"         "$DEPLOY_ROOT/efi"
-    mount --bind /dev           "$DEPLOY_ROOT/dev"
+    # See cache22-install: deploy root is chattr +i, all bind-mount
+    # targets below ship in the image via rechunker extra_dirs.
+    mount --bind  "$TARGET"     "$DEPLOY_ROOT/sysroot"
+    mount --bind  "$DEPLOY_VAR" "$DEPLOY_ROOT/var"
+    mount --bind  "$ESP"        "$DEPLOY_ROOT/efi"
+    mount --bind  /dev          "$DEPLOY_ROOT/dev"
     mount -t proc proc          "$DEPLOY_ROOT/proc"
-    mount --bind /sys           "$DEPLOY_ROOT/sys"
-    mount --bind /sys/firmware/efi/efivars "$DEPLOY_ROOT/sys/firmware/efi/efivars" 2>/dev/null || true
+    mount --rbind /sys          "$DEPLOY_ROOT/sys"
 
     _install_sb_cleanup() {
-        umount "$DEPLOY_ROOT/sys/firmware/efi/efivars" 2>/dev/null || true
-        umount "$DEPLOY_ROOT/sys"                      2>/dev/null || true
-        umount "$DEPLOY_ROOT/proc"                     2>/dev/null || true
-        umount "$DEPLOY_ROOT/dev"                      2>/dev/null || true
-        umount "$DEPLOY_ROOT/efi"                      2>/dev/null || true
-        umount "$DEPLOY_ROOT/var"                      2>/dev/null || true
-        umount "$DEPLOY_ROOT/sysroot"                  2>/dev/null || true
+        umount -R "$DEPLOY_ROOT/sys"     2>/dev/null || true
+        umount    "$DEPLOY_ROOT/proc"    2>/dev/null || true
+        umount    "$DEPLOY_ROOT/dev"     2>/dev/null || true
+        umount    "$DEPLOY_ROOT/efi"     2>/dev/null || true
+        umount    "$DEPLOY_ROOT/var"     2>/dev/null || true
+        umount    "$DEPLOY_ROOT/sysroot" 2>/dev/null || true
     }
     trap _install_sb_cleanup RETURN
 

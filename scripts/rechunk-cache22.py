@@ -897,6 +897,11 @@ def main():
             ("dev", 0o755),
             ("run", 0o755),
             ("sysroot", 0o755),
+            # ESP mount point. Created at install time so the chroot
+            # bind-mount in install_sb_and_uki has a target — the deploy
+            # root is chattr +i'd by ostree, so we can't create it
+            # post-deploy.
+            ("efi", 0o755),
             # sshd's privilege-separation chroot. Empty dir, eaten by the
             # files-only walk; sshd refuses to start without it
             # ("Missing privilege separation directory").
