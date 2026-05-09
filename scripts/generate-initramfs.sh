@@ -8,19 +8,7 @@ set -euo pipefail
 
 echo "==> Generating dracut initramfs for installed kernels"
 
-# dracut --reproducible doesn't overwrite the mtimes of files it pulls
-# into the cpio — it preserves whatever the source filesystem had. Files
-# installed by pacman get wall-clock mtimes from install time, so two
-# back-to-back builds produce initramfs cpios with different per-entry
-# mtimes (millions of differing bytes for one 6-byte size delta). Pin
-# the mtimes here so dracut sees a deterministic source tree.
 SDE="${SOURCE_DATE_EPOCH:-0}"
-echo "==> Pinning mtimes under /usr /etc /var/lib /opt to SDE=$SDE"
-for d in /usr /etc /var/lib /opt; do
-    [[ -d "$d" ]] || continue
-    find "$d" -exec touch --no-dereference --date="@$SDE" {} + 2>/dev/null || true
-done
-
 shopt -s nullglob
 for kver_dir in /usr/lib/modules/*/; do
     kver="$(basename "${kver_dir}")"
@@ -46,6 +34,16 @@ for kver_dir in /usr/lib/modules/*/; do
             --zstd \
             --quiet \
             "/usr/lib/modules/${kver}/initramfs.img"
+
+    # Post-process the cpio inside initramfs.img to pin every entry's
+    # mtime to SDE. dracut --reproducible only resets mtimes for files
+    # newer than its tmp initdir; package-installed files (older than
+    # initdir) keep their wall-clock mtimes from pacman install time
+    # and end up in the cpio with varying values. Rewriting at the
+    # cpio-byte level avoids touching the source filesystem (which on
+    # overlayfs would trigger copy-up and break hardlinks).
+    python3 /tmp/cache22-build/scripts/normalize-initramfs-mtimes.py \
+        "/usr/lib/modules/${kver}/initramfs.img" "$SDE"
 done
 
 echo "==> Initramfs generation complete"
