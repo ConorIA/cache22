@@ -1204,11 +1204,11 @@ install_sb_and_uki() {
 
     # sbctl --export auth writes to cwd; the chroot's / is the deploy
     # root which is chattr +i. Stage them at the well-known ESP path
-    # /loader/keys/cache22/ where sd-boot's secure-boot-enroll auto-
+    # /loader/keys/auto/ where sd-boot's secure-boot-enroll auto-
     # discovers them.
-    install -d -m 0700 "$ESP/loader/keys/cache22"
+    install -d -m 0700 "$ESP/loader/keys/auto"
     chroot "$DEPLOY_ROOT" sh -c \
-        'cd /efi/loader/keys/cache22 && sbctl enroll-keys --microsoft --export auth' || \
+        'cd /efi/loader/keys/auto && sbctl enroll-keys --microsoft --export auth' || \
         say "  WARN: sbctl enroll-keys --export auth failed; sd-boot auto-enroll won't work — user can run cache22-secureboot enable later"
 
     chroot "$DEPLOY_ROOT" bootctl install --esp-path=/efi || \
@@ -1279,14 +1279,15 @@ configure_deploy() {
     fi
 
     # Per-machine kargs go into /etc/cache22/extra-cmdline. resign-uki
-    # bakes them into the UKI's .cmdline section. Order matters: root=
-    # comes first; rd.luks.* and rootflags follow.
+    # bakes them into the UKI's .cmdline, appended to the BLS entry's
+    # options= line.
+    #
+    # Skip root= — bootc install --root-mount-spec already put it in
+    # the BLS entry, and emitting it here would duplicate it on the
+    # kernel cmdline.
     install -d "$DEPLOY_ETC/cache22"
     {
-        echo "# Per-machine kargs written by cache22-install. Do not delete"
-        echo "# the lines below unless you know what you're doing — they tell"
-        echo "# the kernel where to find the rootfs (and how to unlock it)."
-        echo "root=UUID=$ROOT_UUID"
+        echo "# Per-machine kargs written by cache22-install."
         if [[ "${CFG[luks]}" == "yes" ]]; then
             local LUKS_PART_UUID
             LUKS_PART_UUID=$(blkid -s UUID -o value "${CFG[root_part]}")
