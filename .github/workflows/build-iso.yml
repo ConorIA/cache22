@@ -44,7 +44,7 @@ jobs:
               which
 
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Build ISO
         working-directory: installer/fedora-live
@@ -68,7 +68,7 @@ jobs:
           echo "tag=iso-$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
       - name: Upload ISO as workflow artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: cache22-installer-iso
           path: installer/fedora-live/out/*.iso
