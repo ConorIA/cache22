@@ -233,3 +233,4 @@ RUN bootc container lint
 RUN sed -i '/^\[cache22-aur\]/,/^$/d' /etc/pacman.conf \
  && rm -rf /tmp/cache22-build /var/cache/pacman/cache22-aur
 
+
