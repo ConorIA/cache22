@@ -67,6 +67,7 @@ for i in 1 2; do
     echo "============================================================"
     SECONDS=0
     sudo buildah bud \
+        --network=host \
         --no-cache \
         --secret id=sbkey,src="$SBKEY" \
         --build-arg BASE_IMAGE="$BASE" \
