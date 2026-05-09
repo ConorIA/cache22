@@ -48,13 +48,26 @@ DISTRIB_RELEASE=rolling
 DISTRIB_DESCRIPTION="cache22 (${VARIANT_PRETTY})"
 EOF
 
-# ostree expects per-stateroot /var; redirect the /home, /srv, /root real
-# dirs the filesystem package creates. Must run after all pacman ops.
-echo "==> Replacing /home, /srv, /root with → var symlinks"
-rm -rf /home /srv /root
-ln -s var/home     /home
-ln -s var/srv      /srv
-ln -s var/roothome /root
+# ostree expects per-stateroot /var; redirect the standard top-level
+# user-writable dirs to /var/<name> so they survive across the
+# read-only /usr composefs.
+#   /home → /var/home          user homes (already standard)
+#   /srv  → /var/srv           service-specific data
+#   /root → /var/roothome      root's home
+#   /usr/local → /var/usrlocal scripts/binaries dropped into /usr/local/bin
+#                              (already in default PATH) without needing
+#                              bootc usroverlay
+#   /opt  → /var/opt           third-party apps (chrome, discord, anaconda,
+#                              etc.) that install themselves under /opt
+# Same pattern Fedora Silverblue / Atomic Desktops use. Must run after
+# all pacman ops.
+echo "==> Replacing /home, /srv, /root, /usr/local, /opt with → var symlinks"
+rm -rf /home /srv /root /usr/local /opt
+ln -s var/home          /home
+ln -s var/srv           /srv
+ln -s var/roothome      /root
+ln -s ../var/usrlocal   /usr/local
+ln -s var/opt           /opt
 
 # bootc/ostree look for /ostree at /. Arch's filesystem package doesn't
 # ship the symlink Fedora's does.
@@ -129,16 +142,6 @@ rm -f /var/lib/dkms/mok.key /var/lib/dkms/mok.pub
 # embedded throughout. Not read at runtime, drift every build.
 echo "==> Removing DKMS build logs"
 find /var/lib/dkms -name make.log -delete 2>/dev/null || true
-
-# Remove the build-time hostname shim. See Containerfile for context.
-echo "==> Removing build-time hostname shim"
-rm -f /usr/local/bin/hostname
-
-# Remove the build-time dkms shim that wrapped /usr/bin/dkms with
-# faketime so DKMS module compiles were deterministic. Runtime image
-# should have plain /usr/bin/dkms behavior.
-echo "==> Removing build-time dkms shim"
-rm -f /usr/local/bin/dkms
 
 # /usr/lib/.build-id is a directory of symlinks indexed by binary
 # build-IDs. Every binary rebuild changes its build-ID, so this
