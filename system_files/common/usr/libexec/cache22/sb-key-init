@@ -23,13 +23,11 @@ require_root
 
 install -d -m 0700 "$KEYDIR"
 
-# sbctl puts its bundle at /var/lib/sbctl by default; symlink to keep
-# the per-machine root in /var/lib/cache22/ but let sbctl manage
-# layout. If sbctl already initialized to a different path, leave it
-# alone.
+# sbctl always reads/writes /var/lib/sbctl. Make that path resolve to
+# our per-machine root so the keys live alongside everything else
+# under /var/lib/cache22/.
 if [[ ! -e "$SBCTL_DIR" ]]; then
-    ln -s cache22/sbkey "$KEYDIR" 2>/dev/null || true
-    install -d -m 0700 "$SBCTL_DIR"
+    ln -s cache22/sbkey "$SBCTL_DIR"
 fi
 
 # sbctl create-keys is idempotent: refuses to overwrite existing keys,

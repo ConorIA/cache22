@@ -1163,42 +1163,59 @@ install_sb_and_uki() {
     local DEPLOY_ROOT; DEPLOY_ROOT=$(dirname "$DEPLOY_ETC")
     local ESP="$TARGET/efi"
 
-    # Bind-mount the running live env's /sys/firmware/efi/efivars into
-    # the chroot so bootctl install can talk to firmware vars (for the
-    # NVRAM Boot#### entry).
-    install -d "$DEPLOY_ROOT/sys/firmware/efi/efivars"
-    mount --bind /sys/firmware/efi/efivars "$DEPLOY_ROOT/sys/firmware/efi/efivars" 2>/dev/null || true
-    install -d "$DEPLOY_ROOT/dev"
-    mount --bind /dev "$DEPLOY_ROOT/dev" 2>/dev/null || true
-    install -d "$DEPLOY_ROOT/proc"
-    mount -t proc proc "$DEPLOY_ROOT/proc" 2>/dev/null || true
-    install -d "$DEPLOY_ROOT/sys"
-    mount --bind /sys "$DEPLOY_ROOT/sys" 2>/dev/null || true
+    # The per-stateroot /var holds runtime state that ostree exposes
+    # at /var on the running system. The deploy itself has only an
+    # empty /var stub, so anything sbctl/ukify writes to /var/lib/...
+    # inside a naive chroot vanishes after install. Bind-mount the
+    # real per-stateroot /var so keys land in the right place.
+    local DEPLOY_VAR
+    if [[ -d "$TARGET/ostree/deploy/default/var" ]]; then
+        DEPLOY_VAR="$TARGET/ostree/deploy/default/var"
+    elif [[ -d "$(dirname "$DEPLOY_ROOT")/var" ]]; then
+        DEPLOY_VAR="$(dirname "$DEPLOY_ROOT")/var"
+    else
+        die "Could not locate per-stateroot /var for chroot bind-mount"
+    fi
 
-    # Bind the ESP into the chroot at the /efi path the chroot tools
-    # will use.
-    install -d "$DEPLOY_ROOT/efi"
-    mount --bind "$ESP" "$DEPLOY_ROOT/efi" 2>/dev/null || true
+    # resign-uki walks /sysroot/ostree/deploy/*/ for live deploys, so
+    # the chroot's /sysroot must point at the partition root.
+    install -d "$DEPLOY_ROOT/sysroot" \
+              "$DEPLOY_ROOT/var" \
+              "$DEPLOY_ROOT/efi" \
+              "$DEPLOY_ROOT/sys/firmware/efi/efivars" \
+              "$DEPLOY_ROOT/dev" \
+              "$DEPLOY_ROOT/proc" \
+              "$DEPLOY_ROOT/sys"
 
-    # Generate per-machine SB + TPM keys.
+    mount --bind "$TARGET"      "$DEPLOY_ROOT/sysroot"
+    mount --bind "$DEPLOY_VAR"  "$DEPLOY_ROOT/var"
+    mount --bind "$ESP"         "$DEPLOY_ROOT/efi"
+    mount --bind /dev           "$DEPLOY_ROOT/dev"
+    mount -t proc proc          "$DEPLOY_ROOT/proc"
+    mount --bind /sys           "$DEPLOY_ROOT/sys"
+    mount --bind /sys/firmware/efi/efivars "$DEPLOY_ROOT/sys/firmware/efi/efivars" 2>/dev/null || \
+        say "  NOTE: efivars bind failed (live env not booted in UEFI mode?); bootctl install may not register an NVRAM entry"
+
+    # Tear-down on every exit path from this function.
+    _install_sb_cleanup() {
+        umount "$DEPLOY_ROOT/sys/firmware/efi/efivars" 2>/dev/null || true
+        umount "$DEPLOY_ROOT/sys"                      2>/dev/null || true
+        umount "$DEPLOY_ROOT/proc"                     2>/dev/null || true
+        umount "$DEPLOY_ROOT/dev"                      2>/dev/null || true
+        umount "$DEPLOY_ROOT/efi"                      2>/dev/null || true
+        umount "$DEPLOY_ROOT/var"                      2>/dev/null || true
+        umount "$DEPLOY_ROOT/sysroot"                  2>/dev/null || true
+    }
+    trap _install_sb_cleanup RETURN
+
     chroot "$DEPLOY_ROOT" /usr/libexec/cache22/sb-key-init
 
-    # Stage sbctl auto-enrollment files on the ESP. sd-boot picks
-    # these up at next boot when firmware is in setup mode and
-    # secure-boot-enroll = force is in loader.conf.
     chroot "$DEPLOY_ROOT" sbctl enroll-keys --microsoft --export auth || \
         say "  WARN: sbctl enroll-keys --export auth failed; user may need to run cache22-secureboot enable"
 
-    # Install systemd-boot to the ESP. bootctl writes the NVRAM
-    # Boot#### entry, drops the loader.conf, and copies sd-boot to
-    # /efi/EFI/systemd/systemd-bootx64.efi + /efi/EFI/BOOT/BOOTX64.EFI.
     chroot "$DEPLOY_ROOT" bootctl install --esp-path=/efi || \
         die "bootctl install failed"
 
-    # Configure sd-boot for auto-enroll on next boot when firmware is
-    # in setup mode. If the user couldn't enter setup mode at install
-    # time, the loader.conf still works — they'll run cache22-secure-
-    # boot enable later.
     install -d "$ESP/loader"
     cat > "$ESP/loader/loader.conf" <<EOF
 default      cache22-*.efi
@@ -1208,16 +1225,8 @@ editor       no
 secure-boot-enroll force
 EOF
 
-    # Build the first UKI (and re-sign sd-boot with the local key).
     chroot "$DEPLOY_ROOT" /usr/libexec/cache22/resign-uki || \
         die "first UKI build failed"
-
-    # Tear down chroot mounts in reverse order.
-    umount "$DEPLOY_ROOT/efi" 2>/dev/null || true
-    umount "$DEPLOY_ROOT/sys" 2>/dev/null || true
-    umount "$DEPLOY_ROOT/proc" 2>/dev/null || true
-    umount "$DEPLOY_ROOT/dev" 2>/dev/null || true
-    umount "$DEPLOY_ROOT/sys/firmware/efi/efivars" 2>/dev/null || true
 }
 
 # Find the writable per-deploy /etc under either backend layout.

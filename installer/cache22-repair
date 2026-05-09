@@ -408,23 +408,52 @@ install_sb_and_uki() {
     local DEPLOY_ROOT; DEPLOY_ROOT=$(dirname "$DEPLOY_ETC")
     local ESP="$TARGET/efi"
 
-    # Preserve the per-machine SB key from the live system if it
-    # exists — the firmware DB enrollment is bound to it. cache22-
-    # repair runs from the running cache22 install, so /var/lib/
-    # cache22/sbkey is on the same disk we just redeployed.
-    local LIVE_KEYS=/var/lib/cache22/sbkey
-    if [[ -d "$LIVE_KEYS" ]] && [[ -f "$LIVE_KEYS/keys/db/db.key" ]]; then
-        say "  Preserving existing SB key at $LIVE_KEYS"
-        install -d -m 0700 "$DEPLOY_ROOT/var/lib/cache22"
-        cp -a "$LIVE_KEYS" "$DEPLOY_ROOT/var/lib/cache22/sbkey"
+    # Per-stateroot /var holds /var/lib/cache22/sbkey at runtime.
+    local DEPLOY_VAR
+    if [[ -d "$TARGET/ostree/deploy/default/var" ]]; then
+        DEPLOY_VAR="$TARGET/ostree/deploy/default/var"
+    elif [[ -d "$(dirname "$DEPLOY_ROOT")/var" ]]; then
+        DEPLOY_VAR="$(dirname "$DEPLOY_ROOT")/var"
+    else
+        die "Could not locate per-stateroot /var for chroot bind-mount"
     fi
 
-    install -d "$DEPLOY_ROOT/sys/firmware/efi/efivars" "$DEPLOY_ROOT/dev" "$DEPLOY_ROOT/proc" "$DEPLOY_ROOT/sys" "$DEPLOY_ROOT/efi"
+    # Preserve the SB key from the running install if present. The
+    # firmware DB enrollment is bound to it, so a fresh key would
+    # break boot until re-enrolled.
+    local LIVE_KEYS=/var/lib/cache22/sbkey
+    if [[ -d "$LIVE_KEYS" ]] && [[ -f "$LIVE_KEYS/keys/db/db.key" ]]; then
+        say "  Preserving existing SB key at $LIVE_KEYS → $DEPLOY_VAR/lib/cache22/sbkey"
+        install -d -m 0700 "$DEPLOY_VAR/lib/cache22"
+        cp -a "$LIVE_KEYS" "$DEPLOY_VAR/lib/cache22/sbkey"
+    fi
+
+    install -d "$DEPLOY_ROOT/sysroot" \
+              "$DEPLOY_ROOT/var" \
+              "$DEPLOY_ROOT/efi" \
+              "$DEPLOY_ROOT/sys/firmware/efi/efivars" \
+              "$DEPLOY_ROOT/dev" \
+              "$DEPLOY_ROOT/proc" \
+              "$DEPLOY_ROOT/sys"
+
+    mount --bind "$TARGET"      "$DEPLOY_ROOT/sysroot"
+    mount --bind "$DEPLOY_VAR"  "$DEPLOY_ROOT/var"
+    mount --bind "$ESP"         "$DEPLOY_ROOT/efi"
+    mount --bind /dev           "$DEPLOY_ROOT/dev"
+    mount -t proc proc          "$DEPLOY_ROOT/proc"
+    mount --bind /sys           "$DEPLOY_ROOT/sys"
     mount --bind /sys/firmware/efi/efivars "$DEPLOY_ROOT/sys/firmware/efi/efivars" 2>/dev/null || true
-    mount --bind /dev "$DEPLOY_ROOT/dev" 2>/dev/null || true
-    mount -t proc proc "$DEPLOY_ROOT/proc" 2>/dev/null || true
-    mount --bind /sys "$DEPLOY_ROOT/sys" 2>/dev/null || true
-    mount --bind "$ESP" "$DEPLOY_ROOT/efi" 2>/dev/null || true
+
+    _install_sb_cleanup() {
+        umount "$DEPLOY_ROOT/sys/firmware/efi/efivars" 2>/dev/null || true
+        umount "$DEPLOY_ROOT/sys"                      2>/dev/null || true
+        umount "$DEPLOY_ROOT/proc"                     2>/dev/null || true
+        umount "$DEPLOY_ROOT/dev"                      2>/dev/null || true
+        umount "$DEPLOY_ROOT/efi"                      2>/dev/null || true
+        umount "$DEPLOY_ROOT/var"                      2>/dev/null || true
+        umount "$DEPLOY_ROOT/sysroot"                  2>/dev/null || true
+    }
+    trap _install_sb_cleanup RETURN
 
     chroot "$DEPLOY_ROOT" /usr/libexec/cache22/sb-key-init
     chroot "$DEPLOY_ROOT" sbctl enroll-keys --microsoft --export auth || \
@@ -443,12 +472,6 @@ EOF
 
     chroot "$DEPLOY_ROOT" /usr/libexec/cache22/resign-uki || \
         die "first UKI build failed"
-
-    umount "$DEPLOY_ROOT/efi" 2>/dev/null || true
-    umount "$DEPLOY_ROOT/sys" 2>/dev/null || true
-    umount "$DEPLOY_ROOT/proc" 2>/dev/null || true
-    umount "$DEPLOY_ROOT/dev" 2>/dev/null || true
-    umount "$DEPLOY_ROOT/sys/firmware/efi/efivars" 2>/dev/null || true
 }
 
 cleanup_mounts() {
