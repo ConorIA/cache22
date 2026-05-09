@@ -149,12 +149,32 @@ build_uki_from_bls() {
     kver=$(basename "$BLS_LINUX" | sed -n 's|^vmlinuz-||p')
     [[ -n "$kver" ]] || die "Could not parse kver from $BLS_LINUX"
 
-    # Cmdline = BLS options= + user extras.
+    # Cmdline = BLS options= + user extras, with last-wins dedup so a
+    # KEY=VALUE that appears in both sources doesn't get baked twice.
+    # Bare flags (e.g. 'quiet', 'splash') with no '=' are kept verbatim
+    # but also deduped on full-token equality.
     local user_extra
     user_extra=$(read_user_kargs | tr '\n' ' ')
-    local cmdline="$BLS_OPTIONS"
-    [[ -n "$user_extra" ]] && cmdline="$cmdline $user_extra"
-    cmdline=$(echo "$cmdline" | sed 's/  */ /g; s/^ //; s/ $//')
+    local raw="$BLS_OPTIONS $user_extra"
+    local cmdline
+    cmdline=$(echo "$raw" | awk '{
+        # Walk tokens left-to-right, recording the LAST position each
+        # KEY (or flag-token) appeared. Then emit in that order.
+        n = 0
+        for (i = 1; i <= NF; i++) {
+            k = $i; sub(/=.*/, "", k)
+            pos[k] = ++n
+            tok[n] = $i
+            key[n] = k
+        }
+        out = ""
+        for (i = 1; i <= n; i++) {
+            if (pos[key[i]] == i) {
+                out = (out == "" ? tok[i] : out " " tok[i])
+            }
+        }
+        print out
+    }')
 
     local out_name="cache22-${bootcsum:0:16}.efi"
     local out_path="$UKI_DIR/$out_name"
