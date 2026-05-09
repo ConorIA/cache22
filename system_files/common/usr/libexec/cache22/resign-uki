@@ -50,77 +50,56 @@ fi
 
 install -d -m 0755 "$UKI_DIR" "$SDBOOT_DIR"
 
-# Read image-default kargs from /usr/lib/bootc/kargs.d/*.toml.
-# The format is:
-#   kargs = ["foo", "bar=baz"]
-# Multi-line arrays are common; awk extracts the quoted entries.
-read_image_kargs() {
-    local f
-    shopt -s nullglob
-    for f in /usr/lib/bootc/kargs.d/*.toml; do
-        awk '
-            /^[[:space:]]*kargs[[:space:]]*=[[:space:]]*\[/ { in_arr=1 }
-            in_arr {
-                while (match($0, /"[^"]*"/)) {
-                    print substr($0, RSTART+1, RLENGTH-2)
-                    $0 = substr($0, RSTART+RLENGTH)
-                }
-                if (index($0, "]")) in_arr=0
-            }
-        ' "$f"
-    done
-    shopt -u nullglob
-}
-
 # Read user-managed kargs. Newline-separated; '#' comments + blanks ignored.
 read_user_kargs() {
     [[ -f "$EXTRA_CMDLINE" ]] || return 0
     sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$EXTRA_CMDLINE"
 }
 
-# Discover live deploys. We use ostree's on-disk layout rather than
-# `bootc status` because bootc may not be in PATH for early-boot calls.
-# Each deploy dir is /sysroot/ostree/deploy/<stateroot>/deploy/<csum>.<idx>/
-discover_deploys() {
-    local stateroot d csum
-    for stateroot in /sysroot/ostree/deploy/*/; do
-        [[ -d "$stateroot/deploy" ]] || continue
-        for d in "$stateroot/deploy"/*.0/; do
-            [[ -d "$d" ]] || continue
-            csum=$(basename "$d" | sed 's/\.0$//')
-            printf '%s\t%s\n' "$csum" "$d"
-        done
-    done
-}
-
-# Find vmlinuz + initramfs inside a deploy. There should be exactly
-# one /usr/lib/modules/<kver>/ subdir per deploy.
-find_kernel_for_deploy() {
-    local deploy="$1" kver_dir vmlinuz initramfs
-    kver_dir=$(find "$deploy/usr/lib/modules" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
-    [[ -n "$kver_dir" ]] || return 1
-    vmlinuz="$kver_dir/vmlinuz"
-    initramfs="$kver_dir/initramfs.img"
-    [[ -f "$vmlinuz" && -f "$initramfs" ]] || return 1
-    printf '%s\t%s\t%s\n' "$(basename "$kver_dir")" "$vmlinuz" "$initramfs"
-}
-
-# Determine the active deploy's csum so we can mark it as the highest-
-# version UKI for sd-boot's auto-default.
-get_booted_csum() {
-    if command -v bootc >/dev/null 2>&1; then
-        bootc status --json 2>/dev/null \
-            | python3 -c 'import json,sys; s=json.load(sys.stdin); print(s.get("status",{}).get("booted",{}).get("ostree",{}).get("checksum","")) if s else ""' \
-            2>/dev/null
+# Locate /boot. At runtime it lives at /boot. At install time the
+# chroot's /boot is empty (deploy ships an empty /boot) so we look at
+# /sysroot/boot — install_sb_and_uki bind-mounts the partition root to
+# /sysroot inside the chroot.
+boot_dir() {
+    if [[ -d /boot/ostree ]]; then
+        echo /boot
+    elif [[ -d /sysroot/boot/ostree ]]; then
+        echo /sysroot/boot
+    else
+        die "Could not locate ostree's /boot (checked /boot and /sysroot/boot)"
     fi
 }
 
-get_staged_csum() {
-    if command -v bootc >/dev/null 2>&1; then
-        bootc status --json 2>/dev/null \
-            | python3 -c 'import json,sys; s=json.load(sys.stdin); print(s.get("status",{}).get("staged",{}).get("ostree",{}).get("checksum","")) if s else ""' \
-            2>/dev/null
+# Enumerate BLS entries ostree wrote per deploy. The active boot version
+# (boot.0 or boot.1) flips on each deploy; ostree maintains the
+# /boot/loader symlink to the active loader.X dir. As a fallback (eg at
+# install time before finalize wires the symlink) we walk both
+# loader.0 and loader.1 explicitly.
+list_bls_entries() {
+    local boot
+    boot=$(boot_dir)
+    if [[ -L "$boot/loader" ]] && [[ -d "$boot/loader/entries" ]]; then
+        find "$boot/loader/entries" -name 'ostree-*.conf' 2>/dev/null
+    else
+        find "$boot/loader.0/entries" "$boot/loader.1/entries" \
+             -name 'ostree-*.conf' 2>/dev/null
     fi
+}
+
+# Read a single BLS entry into globals: BLS_LINUX, BLS_INITRD,
+# BLS_OPTIONS, BLS_VERSION. linux=/initrd= are partition-relative (start
+# with /boot/...); we leave them as-is and prepend $boot/.. at use time.
+parse_bls() {
+    local entry="$1"
+    BLS_LINUX="" BLS_INITRD="" BLS_OPTIONS="" BLS_VERSION=""
+    while IFS= read -r line; do
+        case "$line" in
+            linux\ *)   BLS_LINUX="${line#linux }" ;;
+            initrd\ *)  BLS_INITRD="${line#initrd }" ;;
+            options\ *) BLS_OPTIONS="${line#options }" ;;
+            version\ *) BLS_VERSION="${line#version }" ;;
+        esac
+    done < "$entry"
 }
 
 # Atomic copy: write to .tmp, fsync, rename. ESP is FAT32, no journal,
@@ -133,47 +112,68 @@ atomic_install() {
     mv -f "$tmp" "$dst"
 }
 
-# Build one UKI for one deploy. Echoes the expected ESP filename.
-build_uki_for_deploy() {
-    local csum="$1" deploy="$2" version_priority="$3"
-    local kinfo kver vmlinuz initramfs
-    kinfo=$(find_kernel_for_deploy "$deploy") || die "no kernel in $deploy"
-    IFS=$'\t' read -r kver vmlinuz initramfs <<<"$kinfo"
+# Build one UKI from one BLS entry. Echoes the expected ESP filename.
+# The BLS entry's options= line is the source of truth for the cmdline
+# (it contains the correct ostree=/ostree/boot.X/<state>/<bootcsum>/0
+# path, root=, image-default kargs from /usr/lib/bootc/kargs.d/, etc.).
+# Append user kargs from /etc/cache22/extra-cmdline.
+build_uki_from_bls() {
+    local entry="$1" version_priority="$2"
+    parse_bls "$entry"
+    [[ -n "$BLS_LINUX"  ]] || { echo "    SKIP: no linux= in $entry" >&2; return 1; }
+    [[ -n "$BLS_INITRD" ]] || { echo "    SKIP: no initrd= in $entry" >&2; return 1; }
+    [[ -n "$BLS_OPTIONS" ]] || { echo "    SKIP: no options= in $entry" >&2; return 1; }
 
-    # Cmdline = image kargs + user kargs + ostree= path for this deploy.
-    # ostree= identifies which deploy the kernel binds at root-mount time.
-    local stateroot
-    stateroot=$(echo "$deploy" | sed -n 's|.*/ostree/deploy/\([^/]*\)/.*|\1|p')
-    local ostree_arg="ostree=/ostree/boot.0/${stateroot}/${csum}/0"
+    # BLS linux=/initrd= paths are partition-relative (/boot/ostree/...).
+    # Prefix with /sysroot if our boot lives there.
+    local boot prefix
+    boot=$(boot_dir)
+    case "$boot" in
+        /boot)         prefix="" ;;
+        /sysroot/boot) prefix="/sysroot" ;;
+        *)             prefix="$(dirname "$boot")" ;;
+    esac
+    local vmlinuz="${prefix}${BLS_LINUX}"
+    local initramfs="${prefix}${BLS_INITRD}"
+    [[ -f "$vmlinuz"   ]] || die "vmlinuz not found at $vmlinuz (BLS linux=$BLS_LINUX)"
+    [[ -f "$initramfs" ]] || die "initramfs not found at $initramfs (BLS initrd=$BLS_INITRD)"
 
-    local cmdline
-    cmdline=$(
-        {
-            read_image_kargs
-            read_user_kargs
-            echo "$ostree_arg"
-        } | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//'
-    )
+    # bootcsum = the sha256 in the linux= path:
+    # /boot/ostree/<stateroot>-<bootcsum>/vmlinuz-<kver>
+    local bootcsum
+    bootcsum=$(echo "$BLS_LINUX" | sed -n 's|.*/ostree/[^/]*-\([0-9a-f]\{64\}\)/.*|\1|p')
+    [[ -n "$bootcsum" ]] || die "Could not parse bootcsum from $BLS_LINUX"
 
-    local out_name="cache22-${csum:0:16}.efi"
+    # kver from the vmlinuz filename suffix.
+    local kver
+    kver=$(basename "$BLS_LINUX" | sed -n 's|^vmlinuz-||p')
+    [[ -n "$kver" ]] || die "Could not parse kver from $BLS_LINUX"
+
+    # Cmdline = BLS options= + user extras.
+    local user_extra
+    user_extra=$(read_user_kargs | tr '\n' ' ')
+    local cmdline="$BLS_OPTIONS"
+    [[ -n "$user_extra" ]] && cmdline="$cmdline $user_extra"
+    cmdline=$(echo "$cmdline" | sed 's/  */ /g; s/^ //; s/ $//')
+
+    local out_name="cache22-${bootcsum:0:16}.efi"
     local out_path="$UKI_DIR/$out_name"
     local tmp_uki
     tmp_uki=$(mktemp --suffix=.efi)
 
-    # version_priority becomes the .osrel VERSION_ID — sd-boot sorts by
-    # this descending and picks the highest as default. 999 = booted,
-    # 1000 = staged, 998..1 = older deploys (more recent → higher).
+    # version_priority → .osrel VERSION_ID. sd-boot sorts by it
+    # descending and picks the highest as default.
     local osrel
     osrel=$(mktemp)
     cat > "$osrel" <<EOF
 NAME="cache22"
 ID=cache22
-PRETTY_NAME="cache22 deploy ${csum:0:8}"
+PRETTY_NAME="cache22 deploy ${bootcsum:0:8}"
 VERSION_ID=${version_priority}
 VERSION="${version_priority}"
 EOF
 
-    echo "==> Building UKI for ${csum:0:16} (kver=$kver, prio=$version_priority)"
+    echo "==> Building UKI for ${bootcsum:0:16} (kver=$kver, prio=$version_priority)"
     ukify build \
         --linux="$vmlinuz" \
         --initrd="$initramfs" \
@@ -242,32 +242,34 @@ gc_ukis() {
     shopt -u nullglob
 }
 
-# Main: walk deploys, build UKI for each, then sync sd-boot, then GC.
+# Main: walk BLS entries, build UKI for each, sync sd-boot, GC.
+# We use BLS entries instead of walking the deploy tree because
+# (a) ostree picks the boot.X version dynamically and the BLS entry
+# already encodes the right ostree= path, (b) the BLS entry's options=
+# already includes image kargs + root= written by bootc/ostree at
+# install/deploy time, and (c) one BLS entry exists per live deploy.
 main() {
-    local booted staged
-    booted=$(get_booted_csum || true)
-    staged=$(get_staged_csum || true)
+    local entries
+    entries=$(list_bls_entries | sort)
+    [[ -n "$entries" ]] || die "no ostree-*.conf BLS entries found in $(boot_dir)"
 
+    # version_priority: BLS entries are named ostree-N.conf where N is a
+    # monotonic counter ostree increments per deploy (newer = higher N,
+    # newer = more recent = should boot first). Use N as the priority
+    # directly; sd-boot picks highest. Add 1000 so the namespace is
+    # well-separated from any fallback UKI someone manually drops in.
     local keep_set=""
-    local count=0
-    local entry csum deploy prio uki_name
-
-    while IFS=$'\t' read -r csum deploy; do
-        [[ -z "$csum" ]] && continue
-        # Priority ordering: staged (1000) > booted (999) > others (998..)
-        if [[ "$csum" == "$staged" ]]; then
-            prio=1000
-        elif [[ "$csum" == "$booted" ]]; then
-            prio=999
-        else
-            prio=$(( 998 - count ))
-            count=$(( count + 1 ))
-        fi
-        uki_name=$(build_uki_for_deploy "$csum" "$deploy" "$prio")
+    local entry n prio uki_name
+    while IFS= read -r entry; do
+        [[ -z "$entry" ]] && continue
+        n=$(basename "$entry" .conf | sed -n 's|^ostree-\([0-9]*\)|\1|p')
+        [[ -z "$n" ]] && n=1
+        prio=$(( 1000 + n ))
+        uki_name=$(build_uki_from_bls "$entry" "$prio") || continue
         keep_set+="${uki_name}"$'\n'
-    done < <(discover_deploys)
+    done <<<"$entries"
 
-    [[ -n "$keep_set" ]] || die "no deploys found — refusing to GC"
+    [[ -n "$keep_set" ]] || die "no UKIs were built — refusing to GC"
 
     sync_sd_boot
     gc_ukis "$keep_set"
