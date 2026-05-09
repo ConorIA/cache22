@@ -35,10 +35,6 @@ Also pre-included on the desktop variants but worth calling out:
 
 ## Installing
 
-Two paths:
-
-### 1. Live ISO installer (recommended for new installs)
-
 Download the ISO from the [latest release](https://github.com/cmspam/cache22/releases/latest) and boot it. tty1 auto-logins root and shows a motd; run `cache22-install` to start. It walks you through:
 
 - Variant pick (defaults to `cachy-kde`; the picker fetches the live variant catalog from this repo so the choices stay current without re-downloading the ISO)
@@ -47,16 +43,7 @@ Download the ISO from the [latest release](https://github.com/cmspam/cache22/rel
 
 Then it pulls the image (~8 GB), partitions, installs, and reboots into your new system.
 
-### 2. `bootc switch` from another bootc system
-
-If you're already on Fedora Silverblue / Kinoite / Bazzite / Bluefin / etc.:
-
-```bash
-sudo bootc switch ghcr.io/cmspam/cache22-cachy-kde:rolling
-sudo systemctl reboot
-```
-
-This works for `bootc switch` semantics, **but it's not supported as a long-term cache22 install path**: the new image expects sd-boot + a per-machine SB key + the cache22 UKI hook on the ESP, none of which are set up by `bootc switch` alone. For a clean cross-bootc move, install from the cache22 live ISO instead (or use `cache22-repair` from it).
+`bootc switch` from another bootc-based distro is not supported. cache22 expects sd-boot + a per-machine SB key + the cache22 UKI hook to be set up on the ESP, none of which `bootc switch` does on its own. Use the live ISO (or `cache22-repair` from it on an existing cache22 install).
 
 **The live ISO itself is SB-bootable** (Fedora's MS-signed shim + Fedora-signed kernel), so you can run it under stock SB. After install, **before the first reboot of the target system**, enter firmware setup and either disable Secure Boot or clear the Platform Key (puts firmware in setup mode). On the first boot of cache22, sd-boot auto-enrolls cache22's keys + Microsoft DB keys, and SB enforcement engages.
 
