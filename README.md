@@ -229,7 +229,7 @@ sudo cache22-encryption enroll /dev/nvme0n1p3
 | Command | What it does |
 | --- | --- |
 | `cache22-update` | Recommended upgrade frontend — pull + stage + finalize, optional `--reboot` and `--app-updates`. |
-| `cache22-rebase` | Switch variants or to any other bootc image. |
+| `cache22-rebase` | Switch between cache22 variants (cachy ↔ arch, server ↔ kde). |
 | `cache22-secureboot` | Manage the per-machine SB key + firmware DB enrollment. `status`, `enable`, `disable`, `rotate-keys`. |
 | `cache22-karg` | Manage persistent kernel command-line args. |
 | `cache22-encryption` | TPM2 auto-unlock for LUKS volumes. |
