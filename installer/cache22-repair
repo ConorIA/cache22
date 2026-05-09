@@ -448,7 +448,9 @@ install_sb_and_uki() {
     trap _install_sb_cleanup RETURN
 
     chroot "$DEPLOY_ROOT" /usr/libexec/cache22/sb-key-init
-    chroot "$DEPLOY_ROOT" sbctl enroll-keys --microsoft --export auth || \
+    install -d -m 0700 "$ESP/loader/keys/cache22"
+    chroot "$DEPLOY_ROOT" sh -c \
+        'cd /efi/loader/keys/cache22 && sbctl enroll-keys --microsoft --export auth' || \
         say "  WARN: sbctl enroll-keys --export auth failed"
     chroot "$DEPLOY_ROOT" bootctl install --esp-path=/efi || \
         die "bootctl install failed"

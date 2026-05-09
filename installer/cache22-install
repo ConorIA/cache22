@@ -1202,8 +1202,14 @@ install_sb_and_uki() {
 
     chroot "$DEPLOY_ROOT" /usr/libexec/cache22/sb-key-init
 
-    chroot "$DEPLOY_ROOT" sbctl enroll-keys --microsoft --export auth || \
-        say "  WARN: sbctl enroll-keys --export auth failed; user may need to run cache22-secureboot enable"
+    # sbctl --export auth writes to cwd; the chroot's / is the deploy
+    # root which is chattr +i. Stage them at the well-known ESP path
+    # /loader/keys/cache22/ where sd-boot's secure-boot-enroll auto-
+    # discovers them.
+    install -d -m 0700 "$ESP/loader/keys/cache22"
+    chroot "$DEPLOY_ROOT" sh -c \
+        'cd /efi/loader/keys/cache22 && sbctl enroll-keys --microsoft --export auth' || \
+        say "  WARN: sbctl enroll-keys --export auth failed; sd-boot auto-enroll won't work — user can run cache22-secureboot enable later"
 
     chroot "$DEPLOY_ROOT" bootctl install --esp-path=/efi || \
         die "bootctl install failed"
