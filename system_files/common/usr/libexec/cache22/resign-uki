@@ -292,6 +292,15 @@ main() {
 
     [[ -n "$keep_set" ]] || die "no UKIs were built — refusing to GC"
 
+    # Belt-and-suspenders: confirm every keep-set entry actually exists
+    # on the ESP before GC. build_uki_from_bls returning success when the
+    # file is silently missing (FAT corruption, ESP unmounted mid-write)
+    # would otherwise let GC remove the prior good UKI.
+    while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        [[ -f "$UKI_DIR/$name" ]] || die "build claimed success but $UKI_DIR/$name missing — refusing to GC"
+    done <<<"$keep_set"
+
     sync_sd_boot
     gc_ukis "$keep_set"
 
