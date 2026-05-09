@@ -1448,6 +1448,54 @@ HOSTS
     printf 'Added IPv6 proxy entries to /etc/hosts (live ISO only).\n'
 }
 
+# Map a GPT partition name (label) to its partition number on $disk.
+# Returns "" on no match.
+part_num_by_label() {
+    local disk="$1" label="$2"
+    parted -m -s "$disk" print 2>/dev/null \
+        | awk -F: -v lbl="$label" '$6 == lbl {print $1; exit}'
+}
+
+# Highest partition number on $disk (per current GPT).
+last_part_num() {
+    local disk="$1"
+    parted -m -s "$disk" print 2>/dev/null \
+        | awk -F: '$1 ~ /^[0-9]+$/ {n=$1} END{print n}'
+}
+
+# Tear down everything under $TARGET deepest-first. The chroot used by
+# install_sb_and_uki rbinds /sysroot back into the deploy, creating a
+# recursive bind loop that defeats `umount -R`. Walk findmnt's depth-
+# first list in reverse order; fall back to lazy-unmount if a mount
+# stays busy. Per-mount failures are silent because most are duplicates
+# in the rbind loop that get cleaned by unmounting their parent — only
+# warn if anything genuinely remains after the sweep.
+teardown_target() {
+    sync
+    local mp
+    while IFS= read -r mp; do
+        [[ -z "$mp" ]] && continue
+        umount "$mp" 2>/dev/null || umount --lazy "$mp" 2>/dev/null || true
+    done < <(findmnt -R -n -o TARGET --list "$TARGET" 2>/dev/null | tac)
+
+    for mp in /var/lib/containers /var/tmp; do
+        mountpoint -q "$mp" 2>/dev/null || continue
+        umount "$mp" 2>/dev/null || umount --lazy "$mp" 2>/dev/null || true
+    done
+
+    local residue
+    residue=$(findmnt -R -n -o TARGET --list "$TARGET" 2>/dev/null)
+    if [[ -n "$residue" ]]; then
+        say "WARN: residual mounts under $TARGET (will clear at reboot):"
+        printf '  %s\n' $residue
+    fi
+
+    if [[ "${CFG[luks]}" == "yes" ]]; then
+        cryptsetup close cache22-root 2>/dev/null \
+            || say "WARN: could not close cache22-root (other holders still active)"
+    fi
+}
+
 reclaim_scratch() {
     # In custom mode the user chose their own partitions; we don't
     # know what's on the rest of the disk and won't touch it. In
@@ -1455,18 +1503,10 @@ reclaim_scratch() {
     # the same caution applies, the rest of the disk has other OSes.
     if [[ "${CFG[mode]}" == "custom" || "${CFG[mode]}" == "freespace" ]]; then
         say "${CFG[mode]} partition mode — leaving scratch ${CFG[scratch_part]} alone"
-        sync
-        umount -R "$TARGET" 2>/dev/null || true
-        umount /var/tmp 2>/dev/null || true
-        umount /var/lib/containers 2>/dev/null || true
-        [[ "${CFG[luks]}" == "yes" ]] && cryptsetup close cache22-root 2>/dev/null || true
+        teardown_target
         return
     fi
-    sync
-    umount -R "$TARGET" 2>/dev/null || true
-    umount /var/tmp 2>/dev/null || true
-    umount /var/lib/containers 2>/dev/null || true
-    [[ "${CFG[luks]}" == "yes" ]] && cryptsetup close cache22-root 2>/dev/null || true
+    teardown_target
 
     if [[ "${CFG[scratch_part]}" == "tmpfs" ]]; then
         if [[ "${CFG[mode]}" == "auto-reserve" ]]; then
@@ -1483,18 +1523,28 @@ reclaim_scratch() {
         return
     fi
 
+    # Look up partition numbers by GPT label so we don't break if the
+    # layout changes (e.g. dropping/adding a partition shifts numbers).
+    # Sanity check: scratch must be the last partition — otherwise the
+    # layout is something we didn't write and we shouldn't touch it.
+    local scratch_num root_num last_num
+    scratch_num=$(part_num_by_label "${CFG[disk]}" "cache22-scratch")
+    root_num=$(part_num_by_label "${CFG[disk]}" "cache22-root")
+    last_num=$(last_part_num "${CFG[disk]}")
+    [[ -n "$scratch_num" ]] || die "Could not find cache22-scratch partition by label on ${CFG[disk]}"
+    [[ -n "$root_num" ]]    || die "Could not find cache22-root partition by label on ${CFG[disk]}"
+    [[ "$scratch_num" == "$last_num" ]] \
+        || die "cache22-scratch (p${scratch_num}) is not the last partition (p${last_num}) on ${CFG[disk]} — refusing to reclaim"
+
     if [[ "${CFG[mode]}" == "auto-reserve" ]]; then
-        # Disk-scratch + reserve: remove scratch and grow root up to
-        # (disk_end - reserve), preserving the requested free-space tail.
-        # Layout is now 3 partitions: ESP=1, root=2, scratch=3.
-        say "Reclaiming scratch into root, leaving ${CFG[reserve_size]} unallocated at end"
-        parted -s "${CFG[disk]}" rm 3
+        say "Reclaiming scratch (p${scratch_num}) into root (p${root_num}), leaving ${CFG[reserve_size]} unallocated at end"
+        parted -s "${CFG[disk]}" rm "$scratch_num"
         # parted accepts negative END = distance from disk end (unit-aware).
-        parted -s "${CFG[disk]}" resizepart 2 "-${CFG[reserve_size]}"
+        parted -s "${CFG[disk]}" resizepart "$root_num" "-${CFG[reserve_size]}"
     else
-        say "Reclaiming scratch partition into root"
-        parted -s "${CFG[disk]}" rm 3
-        parted -s "${CFG[disk]}" resizepart 2 100%
+        say "Reclaiming scratch (p${scratch_num}) into root (p${root_num})"
+        parted -s "${CFG[disk]}" rm "$scratch_num"
+        parted -s "${CFG[disk]}" resizepart "$root_num" 100%
     fi
     partprobe "${CFG[disk]}" || true
     udevadm settle 2>/dev/null || true
