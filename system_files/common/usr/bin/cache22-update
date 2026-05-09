@@ -67,8 +67,10 @@ if ! bootc upgrade; then
 fi
 
 # Was anything actually staged? bootc returns 0 even if up to date.
-if ! bootc status --json 2>/dev/null | grep -q '"staged"' \
-        || bootc status --json 2>/dev/null | grep -A1 '"staged"' | grep -q 'null'; then
+# Compact JSON has many "null" tokens (rollback, composefs, version,
+# ...) so a textual grep would false-positive — use jq for a real
+# null-vs-not check.
+if ! bootc status --json 2>/dev/null | jq -e '.status.staged != null' >/dev/null; then
     echo "[OK] Already up to date; nothing to finalize."
     exit 0
 fi
