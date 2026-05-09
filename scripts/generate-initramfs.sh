@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build dracut initramfs for every installed kernel. dracut (not
-# mkinitcpio) because bootc/composefs/ostree's dracut hooks are what we
-# rely on. patch-ostree-dracut.sh runs first so the bootc module
+# mkinitcpio) because bootc/composefs/ostree's dracut hooks are what
+# we rely on. patch-ostree-dracut.sh runs first so the bootc module
 # actually installs.
 
 set -euo pipefail
