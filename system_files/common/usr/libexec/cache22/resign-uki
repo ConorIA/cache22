@@ -215,12 +215,19 @@ build_uki_from_bls() {
         pretty_ts=$(echo "$pretty_ts" | sed -E 's/T/ /; s/:[0-9]{2}Z?$/Z/')
     fi
 
-    local pretty_name
-    if [[ -n "$pretty_ts" ]]; then
-        pretty_name="cache22 ${pretty_ts} (${bootcsum:0:8})"
-    else
-        pretty_name="cache22 deploy ${bootcsum:0:8}"
+    # Variant ID from the deploy's own os-release (so a deploy for a
+    # different variant shows its real variant in the menu, not the
+    # booted one's).
+    local variant=""
+    if [[ -n "${deploy_dir:-}" && -f "$deploy_dir/usr/lib/os-release" ]]; then
+        variant=$(grep '^VARIANT_ID=' "$deploy_dir/usr/lib/os-release" 2>/dev/null \
+                    | head -1 | cut -d= -f2- | tr -d '"')
     fi
+
+    local pretty_name="cache22"
+    [[ -n "$variant"   ]] && pretty_name+=" $variant"
+    [[ -n "$pretty_ts" ]] && pretty_name+=" $pretty_ts"
+    pretty_name+=" (${bootcsum:0:8})"
 
     # version_priority → .osrel VERSION_ID. sd-boot sorts by it
     # descending and picks the highest as default.
