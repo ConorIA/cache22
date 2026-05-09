@@ -144,15 +144,15 @@ RUN install -d /usr/local/bin \
  && printf '#!/bin/sh\nexec echo cache22-build\n' > /usr/local/bin/hostname \
  && chmod +x /usr/local/bin/hostname
 
-# Pull in libfaketime from its dedicated stage and shim /usr/local/bin/dkms
-# so the alpm hooks (which call `dkms` via PATH, and /usr/local/bin
-# precedes /usr/bin) wrap the real binary with faketime. Scoping
-# faketime to JUST the dkms invocation avoids interfering with pacman
-# itself — pacman's TLS to mirrors and GPG signature validation continue
-# to use real wall-clock, so future cert/key rotations don't break us.
-# finalize-image.sh removes the shim before bootc-lint.
-COPY --from=libfaketime /usr/bin/faketime /usr/bin/faketime
-COPY --from=libfaketime /usr/lib/faketime /usr/lib/faketime
+# Shim /usr/local/bin/dkms so the alpm hooks (which call `dkms` via
+# PATH, and /usr/local/bin precedes /usr/bin) wrap the real binary
+# with faketime. The shim runs from a PostTransaction hook after the
+# bulk pacman -S finishes — by which point libfaketime (in
+# {arch,cachy}-common.txt) has been installed, so /usr/bin/faketime
+# is available. We don't COPY libfaketime from the libfaketime stage
+# here because it'd file-conflict with the package install.
+# finalize-image.sh removes the shim before bootc-lint so the runtime
+# image has plain /usr/bin/dkms behavior.
 RUN install -d /usr/local/bin \
  && printf '#!/bin/sh\nexec /usr/bin/faketime "2026-05-06 00:00:00" /usr/bin/dkms "$@"\n' \
         > /usr/local/bin/dkms \
