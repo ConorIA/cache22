@@ -26,6 +26,11 @@
 # --allow-active-sessions   Reboot even if users are logged in to
 #                           graphical or SSH sessions. Default off — the
 #                           reboot defers and retries when sessions end.
+# --kexec                   Use cache22-fast-reboot (kexec into the
+#                           staged UKI, skip firmware POST + bootloader)
+#                           instead of a normal reboot. Faster (~10-30s
+#                           saved depending on hardware). Falls back to
+#                           a normal reboot automatically if kexec fails.
 
 set -euo pipefail
 
@@ -37,12 +42,13 @@ die() { echo "Error: $*" >&2; exit 1; }
 
 cmd_enable() {
     require_root enable "$@"
-    local at="" window="30m" allow="no"
+    local at="" window="30m" allow="no" kexec="no"
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --at)                       at="$2"; shift 2 ;;
             --window)                   window="$2"; shift 2 ;;
             --allow-active-sessions)    allow="yes"; shift ;;
+            --kexec)                    kexec="yes"; shift ;;
             *)                          die "unknown arg: $1" ;;
         esac
     done
@@ -53,6 +59,7 @@ cmd_enable() {
 # Managed by cache22-autoreboot. Edit via: sudo cache22-autoreboot enable [...]
 WINDOW=$window
 ALLOW_ACTIVE_SESSIONS=$allow
+KEXEC=$kexec
 EOF
     cat > "$DROPIN" <<EOF
 [Timer]
@@ -61,7 +68,7 @@ OnCalendar=$at
 EOF
     systemctl daemon-reload
     systemctl enable --now cache22-autoreboot.timer
-    echo "[OK] auto-reboot enabled — at: $at, window: $window, allow-active: $allow"
+    echo "[OK] auto-reboot enabled — at: $at, window: $window, allow-active: $allow, kexec: $kexec"
     echo "     next check: $(systemctl list-timers cache22-autoreboot.timer --no-legend --no-pager | awk '{print $1, $2}')"
 }
 

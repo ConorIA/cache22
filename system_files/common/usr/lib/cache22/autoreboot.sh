@@ -15,6 +15,7 @@ set -uo pipefail
 WINDOW="${WINDOW:-30m}"
 ALLOW_ACTIVE_SESSIONS="${ALLOW_ACTIVE_SESSIONS:-no}"
 POLL_INTERVAL="${POLL_INTERVAL:-60}"
+KEXEC="${KEXEC:-no}"
 
 parse_duration() {
     # Returns seconds. Accepts 30s, 30m, 2h, or a bare integer (seconds).
@@ -71,8 +72,20 @@ while (( $(date +%s) < end_time )); do
         continue
     fi
     echo "all clear; broadcasting 5-min reboot warning"
-    shutdown -r +5 "cache22 unattended reboot for staged update" || \
-        { echo "shutdown -r failed; falling back to systemctl reboot in 5s"; sleep 5; systemctl reboot; }
+    if [[ "$KEXEC" == "yes" ]]; then
+        # shutdown -r doesn't have a kexec equivalent that broadcasts, so
+        # do it the long way: wall the warning, sleep, then kexec. The
+        # kexec helper itself goes through systemctl kexec which runs
+        # the same shutdown sequence as a normal reboot — services stop
+        # cleanly, fs unmount cleanly, only firmware POST is skipped.
+        wall "cache22 unattended kexec-reboot in 5 minutes for staged update"
+        sleep 300
+        cache22-fast-reboot || \
+            { echo "cache22-fast-reboot failed; falling back to systemctl reboot in 5s"; sleep 5; systemctl reboot; }
+    else
+        shutdown -r +5 "cache22 unattended reboot for staged update" || \
+            { echo "shutdown -r failed; falling back to systemctl reboot in 5s"; sleep 5; systemctl reboot; }
+    fi
     exit 0
 done
 

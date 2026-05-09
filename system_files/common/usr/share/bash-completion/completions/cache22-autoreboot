@@ -21,7 +21,7 @@ _cache22_autoreboot() {
                 return
                 ;;
         esac
-        COMPREPLY=( $(compgen -W "--at --window --allow-active-sessions" -- "$cur") )
+        COMPREPLY=( $(compgen -W "--at --window --allow-active-sessions --kexec" -- "$cur") )
     fi
 }
 complete -F _cache22_autoreboot cache22-autoreboot

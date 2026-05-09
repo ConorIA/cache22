@@ -142,11 +142,33 @@ sudo cache22-autoreboot enable --at 'daily 04:00'                # daily 4am che
 sudo cache22-autoreboot enable --at 'Sun 03:00'                  # Sundays only
 sudo cache22-autoreboot enable --at 'Thu,Sat 16:00' --window 1h  # Thu+Sat between 4-5pm
 sudo cache22-autoreboot enable --at 'daily 03:00' --allow-active-sessions  # don't defer for users
+sudo cache22-autoreboot enable --at 'daily 04:00' --kexec        # kexec into the staged UKI instead of full reboot
 sudo cache22-autoreboot disable
 sudo cache22-autoreboot status
 ```
 
-`--at` is required (auto-reboot is opt-in by configuration, not by default). Window defaults to 30 minutes.
+`--at` is required (auto-reboot is opt-in by configuration, not by default). Window defaults to 30 minutes. `--kexec` opts into [`cache22-fast-reboot`](#fast-reboot-via-kexec) for the actual reboot — saves ~10-30 sec by skipping firmware POST and the bootloader.
+
+### Fast reboot via kexec
+
+`cache22-fast-reboot` jumps directly into the staged UKI's kernel via `kexec_load`, skipping firmware POST + sd-boot. Userspace shutdown (stop services, sync, unmount) runs normally — this is **not** like cutting power. Net savings depend on hardware: ~10-15 sec on minimal servers with fast firmware, ~25-50 sec on machines with slow enterprise firmware.
+
+```bash
+sudo cache22-fast-reboot           # kexec into the highest-VERSION_ID UKI now
+sudo cache22-fast-reboot --check   # show what would be kexec'd, don't do it
+sudo cache22-fast-reboot --no-fallback  # abort instead of falling back to a real reboot if kexec fails
+```
+
+Typical workflow:
+
+```bash
+sudo cache22-update         # pull + stage + sign new UKI (no reboot)
+sudo cache22-fast-reboot    # 10-30 sec later you're on the new kernel
+```
+
+It picks the UKI sd-boot would auto-default to (highest `.osrel VERSION_ID`), extracts the kernel + initrd + cmdline from the signed PE, re-signs the kernel with your per-machine key (so it works under kernel lockdown if ever enabled), stages it via `kexec_load`, then triggers `systemctl kexec` for a clean shutdown into the new kernel. If anything in the kexec staging fails (some quirky hardware doesn't kexec cleanly) it falls back to a normal `systemctl reboot` so you get there regardless.
+
+Caveats: TPM PCR 11 won't reflect the running kernel after kexec (sd-stub measures during normal boot only); microcode updates won't take effect mid-kexec; some specific hardware (certain NICs, GPUs) doesn't kexec reliably and may need a real reboot. For most desktop/server use it's transparent.
 
 ### Inspecting a staged update
 
