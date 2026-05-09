@@ -58,6 +58,17 @@ RUN /tmp/cache22-build/scripts/build-aur-packages.sh \
         "/tmp/cache22-build/packages/${VARIANT_FAMILY}-common.txt" \
         "/tmp/cache22-build/packages/${VARIANT}.txt"
 
+# ─── Stage: libfaketime (tiny, just copies the .so + cli out) ────
+# We need libfaketime AVAILABLE before the main pacman -S RUN so that
+# RUN can be wrapped with faketime — DKMS module builds (broadcom-wl
+# on cachy with ThinLTO kernel) embed wall-clock-derived state into
+# their output and drift between fresh builds without faketime. A
+# dedicated RUN to install libfaketime via pacman after the main one
+# hangs in buildah's hook context (see commit history); pulling it via
+# multi-stage COPY sidesteps that.
+FROM ${BASE_IMAGE}:${BASE_TAG} AS libfaketime
+RUN pacman -Sy --noconfirm libfaketime
+
 # ─── Stage 2: main image ──────────────────────────────────────────
 FROM ${BASE_IMAGE}:${BASE_TAG}
 
@@ -121,6 +132,14 @@ RUN install -d /usr/local/bin \
  && printf '#!/bin/sh\nexec echo cache22-build\n' > /usr/local/bin/hostname \
  && chmod +x /usr/local/bin/hostname
 
+# Pull in libfaketime from its dedicated stage so it's available BEFORE
+# the main pacman -S RUN. Used to wrap pacman -S so DKMS module builds
+# triggered by alpm hooks (e.g. broadcom-wl-dkms compile under cachy's
+# ThinLTO kernel) happen at a fixed wall-clock and produce byte-stable
+# .ko output.
+COPY --from=libfaketime /usr/bin/faketime /usr/bin/faketime
+COPY --from=libfaketime /usr/lib/faketime /usr/lib/faketime
+
 # sed strips inline comments + blank lines (so commented package lines
 # don't pass through as bogus pkg names). Retry 5x: cachy/ALHP CDN
 # sometimes serves a stale 404 while a new pkg propagates.
@@ -130,8 +149,20 @@ RUN install -d /usr/local/bin \
 # the modules they build. /etc/dkms/framework.conf points them at this
 # key path; modules get signed with the cache22 SB cert, MOK-trusted at
 # boot, byte-stable across rebuilds.
+#
+# faketime wraps the entire RUN so the wall-clock that pacman, alpm
+# hooks, DKMS module builds, kbuild, and depmod see is fixed. Without
+# this, broadcom-wl wl.ko bytes drift between fresh builds (cachy's
+# ThinLTO kernel embeds wall-clock-derived state into module objects).
+# Date chosen is just after the cache22 SB cert's notBefore so signing
+# operations don't hit cert-not-yet-valid errors. faketime DOES
+# intercept utimensat — that's fine here because we don't run dracut
+# in this RUN; dracut's clamp_mtimes runs in a later, faketime-free
+# RUN where touch's mtime values must be literal SDE.
 RUN --mount=type=secret,id=sbkey,target=/run/secrets/sbkey,required=false \
-    pkglist=$(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' \
+    export LD_PRELOAD=/usr/lib/faketime/libfaketime.so.1 \
+           FAKETIME="2026-05-06 00:00:00" \
+ && pkglist=$(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' \
         "/tmp/cache22-build/packages/${VARIANT_FAMILY}-common.txt" \
         "/tmp/cache22-build/packages/${VARIANT}.txt") \
  && for attempt in 1 2 3 4 5; do \
