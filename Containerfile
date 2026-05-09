@@ -41,7 +41,14 @@ RUN dnf install -y \
 # byte-stable across fresh builds. Other operations (pacman, mirror
 # TLS, GPG keyring) keep using real time so cert/key rotations don't
 # break us.
-FROM ${BASE_IMAGE}:${BASE_TAG} AS libfaketime
+#
+# Pinned to archlinux:latest (NOT ${BASE_IMAGE}) because cachyos-v3
+# ships an alpm hook chain that hangs indefinitely on `pacman -S
+# libfaketime` in buildah's hook context (the 35-systemd-update.hook
+# trying to talk to a non-running systemd, most likely). archlinux's
+# hook set doesn't hit this. The output binary is identical either
+# way — we only COPY files out.
+FROM docker.io/archlinux:latest AS libfaketime
 RUN pacman -Sy --noconfirm libfaketime
 
 # ─── Stage 1: aur-builder ─────────────────────────────────────────
