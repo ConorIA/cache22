@@ -765,10 +765,25 @@ def main():
         print(f"    normalized INSTALL/BUILDDATE in {desc_normalized} desc files")
 
         # mtree files are gzip-compressed and contain "time=<epoch>.<frac>"
-        # on every entry. Rewrite each entry's time= to SDE.
+        # on every entry. Rewrite each entry's time= to SDE. Also
+        # normalize the sha256digest of the package-archive metadata
+        # files (.BUILDINFO, .PKGINFO) — those are inside the original
+        # .tar.zst archive and embed makepkg's wall-clock builddate,
+        # packager string, and the full "installed = pkg-ver" list of
+        # build-deps, all of which drift between builds even when the
+        # final installed file set is identical. The mtree's
+        # sha256digest field is informational on an immutable image
+        # (pacman -Qkk isn't expected to be run); pinning these to a
+        # fixed sentinel makes the mtree byte-stable.
         import gzip as _gzip, re as _re
         time_re = _re.compile(rb"time=\d+(?:\.\d+)?")
         repl = f"time={SDE}.0".encode()
+        # Match a sha256digest=<64hex> on lines starting with .BUILDINFO or .PKGINFO
+        meta_sha_re = _re.compile(
+            rb"^(\./\.(?:BUILDINFO|PKGINFO)\s.*?sha256digest=)[0-9a-f]{64}",
+            _re.MULTILINE,
+        )
+        meta_sha_repl = rb"\g<1>" + b"0" * 64
         mtree_normalized = 0
         for mtree_file in db_root_path.glob("*/mtree"):
             try:
@@ -777,6 +792,7 @@ def main():
             except OSError:
                 continue
             new_data = time_re.sub(repl, data)
+            new_data = meta_sha_re.sub(meta_sha_repl, new_data)
             if new_data != data:
                 try:
                     # gzip.open() doesn't take mtime; use GzipFile via
