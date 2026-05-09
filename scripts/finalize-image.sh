@@ -112,9 +112,11 @@ rm -rf /usr/lib/sysimage/pacman/pkg/*
 # If a recovery workflow ever needs to install packages, run
 # `pacman-key --init && pacman-key --populate` to rebuild gnupg/.
 echo "==> Stripping volatile pacman state"
-rm -f  /usr/lib/sysimage/pacman/sync/*.db \
-       /usr/lib/sysimage/pacman/sync/*.files \
-       /usr/lib/sysimage/pacman/pacman.log
+# Whole sync/ directory: mirror snapshots (.db, .files) and their
+# detached signatures (.db.sig). All useless on an immutable image
+# and all drift every build because mirror metadata changes.
+rm -rf /usr/lib/sysimage/pacman/sync
+rm -f  /usr/lib/sysimage/pacman/pacman.log
 rm -rf /usr/lib/sysimage/pacman/gnupg
 
 # DKMS now signs modules with the cache22 SB key (see /etc/dkms/
