@@ -42,20 +42,16 @@ TYPE=${VARIANT##*-}
 cd "$REPO"
 
 if [[ ! -s "$SBKEY" ]]; then
-    # Without a stable SB key, DKMS framework.conf falls back to
-    # per-build /var/lib/dkms/mok.key generation, which guarantees
-    # wl.ko / nvidia.ko drift between the two test builds — a false
-    # positive against the determinism check. Generate a stable test
-    # key cached at /tmp so repeated test runs reuse the same key.
-    SBKEY=/tmp/cache22-test-sbkey.pem
-    if [[ ! -s "$SBKEY" ]]; then
-        echo "==> Generating one-time test SB key at $SBKEY (reused on subsequent runs)"
-        openssl genpkey -algorithm RSA -out "$SBKEY" \
-            -pkeyopt rsa_keygen_bits:3072 2>/dev/null
-        chmod 0600 "$SBKEY"
-    else
-        echo "==> Reusing test SB key at $SBKEY"
-    fi
+    # Pass an empty file so:
+    #   - sign-secureboot.sh sees [[ ! -s "$KEY" ]] and skips vmlinuz signing
+    #   - DKMS framework.conf points at the empty secret → DKMS sign-file
+    #     fails → DKMS skips signing modules
+    # Both behaviors are deterministic (no signing = no wall-clock-stamped
+    # signature bytes) so wl.ko etc. are byte-stable between two test
+    # builds. The image won't be SB-bootable but that doesn't matter for
+    # a determinism test.
+    SBKEY=$(mktemp); trap "rm -f $SBKEY" EXIT
+    echo "==> Using empty SB key at $SBKEY (signing will be skipped both runs)"
 fi
 
 LOG="/tmp/cache22-buildah-test.log"
