@@ -41,11 +41,15 @@ for kver_dir in /usr/lib/modules/*/; do
     fi
 
     echo "==> $kver: sbsigning vmlinuz"
-    # faketime pins sbsign's PE-signature signing time so the resulting
-    # vmlinuz is byte-stable across rebuilds. Without this, sbsign reads
-    # wall-clock and the kernel-modules layer (~200 MiB) drifts every
-    # build even when the kernel itself didn't change.
-    faketime "@${SOURCE_DATE_EPOCH:-0}" \
+    # Pin sbsign's PE-signature signing time so the resulting vmlinuz
+    # is byte-stable across rebuilds. Without this, sbsign reads wall-
+    # clock and the kernel-modules layer (~200 MiB) drifts every build
+    # even when the kernel itself didn't change. Set LD_PRELOAD and
+    # FAKETIME directly (instead of the `faketime` CLI wrapper) — the
+    # CLI's behaviour around env var inheritance has been inconsistent
+    # in some GHA runner setups.
+    LD_PRELOAD=/usr/lib/faketime/libfaketime.so.1 \
+    FAKETIME="@${SOURCE_DATE_EPOCH:-0}" \
         sbsign --key "$KEY" --cert "$CERT" \
                --output "${vmlinuz}.signed" "$vmlinuz"
     mv "${vmlinuz}.signed" "$vmlinuz"
