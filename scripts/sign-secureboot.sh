@@ -44,12 +44,17 @@ for kver_dir in /usr/lib/modules/*/; do
     # Pin sbsign's PE-signature signing time so the resulting vmlinuz
     # is byte-stable across rebuilds. Without this, sbsign reads wall-
     # clock and the kernel-modules layer (~200 MiB) drifts every build
-    # even when the kernel itself didn't change. Set LD_PRELOAD and
-    # FAKETIME directly (instead of the `faketime` CLI wrapper) — the
-    # CLI's behaviour around env var inheritance has been inconsistent
-    # in some GHA runner setups.
+    # even when the kernel itself didn't change.
+    #
+    # Convert SOURCE_DATE_EPOCH → "YYYY-MM-DD HH:MM:SS" because
+    # libfaketime's FAKETIME env var doesn't accept the `@<epoch>`
+    # syntax that the `faketime` CLI accepts (the CLI converts it
+    # internally before setting the env var). Setting FAKETIME="@0"
+    # directly produces "libfaketime: parse_ft_string failed to
+    # parse FAKETIME timestamp" and sbsign exits 1.
+    fake_date="$(date -u -d "@${SOURCE_DATE_EPOCH:-0}" +'%Y-%m-%d %H:%M:%S')"
     LD_PRELOAD=/usr/lib/faketime/libfaketime.so.1 \
-    FAKETIME="@${SOURCE_DATE_EPOCH:-0}" \
+    FAKETIME="$fake_date" \
         sbsign --key "$KEY" --cert "$CERT" \
                --output "${vmlinuz}.signed" "$vmlinuz"
     mv "${vmlinuz}.signed" "$vmlinuz"
