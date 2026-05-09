@@ -186,7 +186,6 @@ Common flags:
                          custom       — pre-existing partitions
   --disk DEV           target disk (auto / auto-reserve / freespace)
   --esp DEV            ESP partition (custom mode)
-  --boot DEV           XBOOTLDR /boot partition (custom mode)
   --root DEV           root partition (custom mode)
   --scratch DEV|tmpfs  scratch partition (custom mode) OR force RAM-backed
                        tmpfs in auto mode (overrides the auto-detect that

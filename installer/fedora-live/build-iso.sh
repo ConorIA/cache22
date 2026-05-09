@@ -171,6 +171,7 @@ cat > "$ROOTFS/etc/ssh/sshd_config.d/00-cache22-live.conf" <<'EOF'
 PermitRootLogin yes
 PasswordAuthentication yes
 PermitEmptyPasswords no
+Banner /etc/issue.net
 EOF
 
 # ─── 4. Aggressive Fedora→cache22 rebrand ─────────────────────────
@@ -201,17 +202,22 @@ LOGO=cache22
 EOF
 ln -sf ../usr/lib/os-release "$ROOTFS/etc/os-release"
 
-# /etc/issue: shown above the login prompt on TTYs
+# /etc/issue: shown above the login prompt on TTYs.
+# /etc/issue.net: same content, used as the SSH login banner.
 cat > "$ROOTFS/etc/issue" <<'EOF'
 
   cache22 Live Installer
 
-  Login: cache22  (autologin on tty1)
-  Run:   cache22-install   (new install)
-         cache22-repair    (fix bootloader / redeploy, keep /home)
+  tty1 autologins as root. On other TTYs or via SSH:
+      user: root
+      pass: cache22
+
+  Then run one of:
+      cache22-install   (new install)
+      cache22-repair    (fix bootloader / redeploy, keep /home)
 
 EOF
-echo "cache22 Live Installer" > "$ROOTFS/etc/issue.net"
+cp "$ROOTFS/etc/issue" "$ROOTFS/etc/issue.net"
 
 # /etc/motd: shown after login (SSH and interactive shells)
 cat > "$ROOTFS/etc/motd" <<'EOF'
