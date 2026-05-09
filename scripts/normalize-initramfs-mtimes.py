@@ -85,16 +85,15 @@ def main() -> None:
     if len(early) < early_end:
         early = early + b"\x00" * (early_end - len(early))
 
-    # Decompress the main archive (zstd), rewrite, recompress with the
-    # same parameters dracut used (--zstd default level 3, single frame).
+    # Decompress the main archive (zstd), rewrite, recompress matching
+    # dracut's --zstd invocation (zstd -10 -q -T0).
     main_compressed = data[early_end:]
     decompressed = subprocess.check_output(
         ["zstd", "-dc"], input=main_compressed,
     )
     main_rewritten = rewrite_cpio_mtimes(decompressed, mtime)
-    # Match dracut's zstd invocation: default compression level (3).
     main_recompressed = subprocess.check_output(
-        ["zstd", "-T0", "--quiet", "--stdout", "-3"],
+        ["zstd", "-T0", "--quiet", "--stdout", "-10"],
         input=main_rewritten,
     )
 
