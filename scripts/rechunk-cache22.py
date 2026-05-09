@@ -734,7 +734,7 @@ def main():
 
         print("==> Building pacman-db layer")
         # Normalize wall-clock timestamps in pacman's local DB to SDE.
-        #   desc:  %INSTALLDATE% (set by pacman at install) and
+        #   desc:  %INSTALLDATE% (set by pacman at install) +
         #          %BUILDDATE%   (set by makepkg at AUR-package build)
         #   mtree: time=<epoch>.<frac> on every entry (also set by makepkg)
         # All three drift every build for AUR packages we rebuild fresh
