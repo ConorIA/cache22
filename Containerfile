@@ -132,13 +132,19 @@ RUN install -d /usr/local/bin \
  && printf '#!/bin/sh\nexec echo cache22-build\n' > /usr/local/bin/hostname \
  && chmod +x /usr/local/bin/hostname
 
-# Pull in libfaketime from its dedicated stage so it's available BEFORE
-# the main pacman -S RUN. Used to wrap pacman -S so DKMS module builds
-# triggered by alpm hooks (e.g. broadcom-wl-dkms compile under cachy's
-# ThinLTO kernel) happen at a fixed wall-clock and produce byte-stable
-# .ko output.
+# Pull in libfaketime from its dedicated stage and shim /usr/local/bin/dkms
+# so the alpm hooks (which call `dkms` via PATH, and /usr/local/bin
+# precedes /usr/bin) wrap the real binary with faketime. Scoping
+# faketime to JUST the dkms invocation avoids interfering with pacman
+# itself — pacman's TLS to mirrors and GPG signature validation continue
+# to use real wall-clock, so future cert/key rotations don't break us.
+# finalize-image.sh removes the shim before bootc-lint.
 COPY --from=libfaketime /usr/bin/faketime /usr/bin/faketime
 COPY --from=libfaketime /usr/lib/faketime /usr/lib/faketime
+RUN install -d /usr/local/bin \
+ && printf '#!/bin/sh\nexec /usr/bin/faketime "2026-05-06 00:00:00" /usr/bin/dkms "$@"\n' \
+        > /usr/local/bin/dkms \
+ && chmod +x /usr/local/bin/dkms
 
 # sed strips inline comments + blank lines (so commented package lines
 # don't pass through as bogus pkg names). Retry 5x: cachy/ALHP CDN
@@ -149,20 +155,8 @@ COPY --from=libfaketime /usr/lib/faketime /usr/lib/faketime
 # the modules they build. /etc/dkms/framework.conf points them at this
 # key path; modules get signed with the cache22 SB cert, MOK-trusted at
 # boot, byte-stable across rebuilds.
-#
-# faketime wraps the entire RUN so the wall-clock that pacman, alpm
-# hooks, DKMS module builds, kbuild, and depmod see is fixed. Without
-# this, broadcom-wl wl.ko bytes drift between fresh builds (cachy's
-# ThinLTO kernel embeds wall-clock-derived state into module objects).
-# Date chosen is just after the cache22 SB cert's notBefore so signing
-# operations don't hit cert-not-yet-valid errors. faketime DOES
-# intercept utimensat — that's fine here because we don't run dracut
-# in this RUN; dracut's clamp_mtimes runs in a later, faketime-free
-# RUN where touch's mtime values must be literal SDE.
 RUN --mount=type=secret,id=sbkey,target=/run/secrets/sbkey,required=false \
-    export LD_PRELOAD=/usr/lib/faketime/libfaketime.so.1 \
-           FAKETIME="2026-05-06 00:00:00" \
- && pkglist=$(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' \
+    pkglist=$(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' \
         "/tmp/cache22-build/packages/${VARIANT_FAMILY}-common.txt" \
         "/tmp/cache22-build/packages/${VARIANT}.txt") \
  && for attempt in 1 2 3 4 5; do \

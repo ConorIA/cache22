@@ -134,6 +134,12 @@ find /var/lib/dkms -name make.log -delete 2>/dev/null || true
 echo "==> Removing build-time hostname shim"
 rm -f /usr/local/bin/hostname
 
+# Remove the build-time dkms shim that wrapped /usr/bin/dkms with
+# faketime so DKMS module compiles were deterministic. Runtime image
+# should have plain /usr/bin/dkms behavior.
+echo "==> Removing build-time dkms shim"
+rm -f /usr/local/bin/dkms
+
 # /usr/lib/.build-id is a directory of symlinks indexed by binary
 # build-IDs. Every binary rebuild changes its build-ID, so this
 # directory dirties on every package upgrade — and it's rebuildable
