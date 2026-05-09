@@ -232,3 +232,4 @@ RUN bootc container lint
 # variants and arch-server skip the inject entirely).
 RUN sed -i '/^\[cache22-aur\]/,/^$/d' /etc/pacman.conf \
  && rm -rf /tmp/cache22-build /var/cache/pacman/cache22-aur
+
