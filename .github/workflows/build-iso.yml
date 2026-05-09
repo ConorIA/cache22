@@ -86,11 +86,14 @@ jobs:
           - Size: ${{ steps.info.outputs.size }}
           - SHA-256: \`${{ steps.info.outputs.sha }}\`
 
-          Boots under Secure Boot with default Microsoft keys (no MOK
-          enrollment needed for the ISO itself; the install process
-          queues MOK enrollment for the installed system's kernel).
-          The ISO pulls the latest cache22 image from ghcr.io at install
-          time, so a stale ISO still installs the latest image."
+          Live ISO is a Fedora environment that boots under Secure Boot
+          with default Microsoft keys. The installer generates a
+          per-machine SB key on the target, enrolls it (plus Microsoft
+          DB) into firmware via sd-boot's secure-boot-enroll=force, and
+          signs the installed system's UKI with that key — no MOK,
+          no central CI key. The ISO pulls the latest cache22 image
+          from ghcr.io at install time, so a stale ISO still installs
+          the latest image."
           gh release delete "$TAG" --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
           gh release create "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
