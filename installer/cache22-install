@@ -1190,15 +1190,17 @@ install_sb_and_uki() {
     # Boot#### entry from inside the chroot).
     mount --rbind /sys          "$DEPLOY_ROOT/sys"
 
-    _install_sb_cleanup() {
-        umount -R "$DEPLOY_ROOT/sys"     2>/dev/null || true
-        umount    "$DEPLOY_ROOT/proc"    2>/dev/null || true
-        umount    "$DEPLOY_ROOT/dev"     2>/dev/null || true
-        umount    "$DEPLOY_ROOT/efi"     2>/dev/null || true
-        umount    "$DEPLOY_ROOT/var"     2>/dev/null || true
-        umount    "$DEPLOY_ROOT/sysroot" 2>/dev/null || true
-    }
-    trap _install_sb_cleanup RETURN
+    # Bake $DEPLOY_ROOT into the trap string at registration time. A
+    # named function would resolve $DEPLOY_ROOT at trap-fire time, by
+    # which point the local has gone out of scope and set -u kills it.
+    trap "
+        umount -R '$DEPLOY_ROOT/sys'     2>/dev/null || true
+        umount    '$DEPLOY_ROOT/proc'    2>/dev/null || true
+        umount    '$DEPLOY_ROOT/dev'     2>/dev/null || true
+        umount    '$DEPLOY_ROOT/efi'     2>/dev/null || true
+        umount    '$DEPLOY_ROOT/var'     2>/dev/null || true
+        umount    '$DEPLOY_ROOT/sysroot' 2>/dev/null || true
+    " RETURN
 
     chroot "$DEPLOY_ROOT" /usr/libexec/cache22/sb-key-init
 
@@ -1484,14 +1486,15 @@ reclaim_scratch() {
     if [[ "${CFG[mode]}" == "auto-reserve" ]]; then
         # Disk-scratch + reserve: remove scratch and grow root up to
         # (disk_end - reserve), preserving the requested free-space tail.
+        # Layout is now 3 partitions: ESP=1, root=2, scratch=3.
         say "Reclaiming scratch into root, leaving ${CFG[reserve_size]} unallocated at end"
-        parted -s "${CFG[disk]}" rm 4
+        parted -s "${CFG[disk]}" rm 3
         # parted accepts negative END = distance from disk end (unit-aware).
-        parted -s "${CFG[disk]}" resizepart 3 "-${CFG[reserve_size]}"
+        parted -s "${CFG[disk]}" resizepart 2 "-${CFG[reserve_size]}"
     else
         say "Reclaiming scratch partition into root"
-        parted -s "${CFG[disk]}" rm 4
-        parted -s "${CFG[disk]}" resizepart 3 100%
+        parted -s "${CFG[disk]}" rm 3
+        parted -s "${CFG[disk]}" resizepart 2 100%
     fi
     partprobe "${CFG[disk]}" || true
     udevadm settle 2>/dev/null || true
