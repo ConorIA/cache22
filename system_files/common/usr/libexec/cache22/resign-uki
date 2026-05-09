@@ -194,8 +194,10 @@ EOF
     printf '%s\n' "$out_name"
 }
 
-# Sign + install sd-boot if the in-image binary is newer than ESP's, or
-# if no signed copy is present yet.
+# Sign + install sd-boot if the on-ESP copy is missing, unsigned, or
+# older than the in-image binary. bootctl install copies an UNSIGNED
+# sd-boot to the ESP — so on every install we MUST re-sign once. mtime
+# alone isn't enough; check signature presence too.
 sync_sd_boot() {
     [[ -f "$SDBOOT_SRC" ]] || die "sd-boot source $SDBOOT_SRC missing (systemd package broken?)"
     local dst="$SDBOOT_DIR/systemd-bootx64.efi"
@@ -204,14 +206,13 @@ sync_sd_boot() {
     local need_install=0
     if [[ ! -f "$dst" ]]; then
         need_install=1
+    elif ! sbverify --list "$dst" 2>/dev/null | grep -q 'image signature issuers'; then
+        # On-ESP sd-boot has no signature (typical post bootctl-install
+        # state). Without re-signing, firmware refuses to load it under
+        # SB enforcement.
+        need_install=1
     elif [[ "$SDBOOT_SRC" -nt "$dst" ]]; then
-        # Compare embedded version via bootctl rather than mtime to avoid
-        # spurious re-signs after a no-op pacman bump.
-        local src_ver dst_ver
-        src_ver=$(bootctl --print-systemd-boot-version --esp-path="$ESP" --boot-path="$ESP" 2>/dev/null \
-                    --root=/usr/lib/systemd/boot/efi || true)
-        dst_ver=$(bootctl --print-systemd-boot-version --esp-path="$ESP" --boot-path="$ESP" 2>/dev/null || true)
-        [[ "$src_ver" != "$dst_ver" ]] && need_install=1
+        need_install=1
     fi
 
     if (( need_install )); then
