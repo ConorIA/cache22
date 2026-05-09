@@ -33,6 +33,17 @@ RUN dnf install -y \
     done \
  && find /usr/lib/efi -mindepth 1 -maxdepth 5 -print
 
+# ─── Stage: libfaketime (tiny, just installs libfaketime so other ─
+# stages can COPY /usr/bin/faketime + /usr/lib/faketime out). Used
+# downstream to wrap dkms (alpm-hook-triggered module compiles) and
+# makepkg (aur-builder package builds) in faketime, pinning the
+# wall-clock the actual compiler/linker sees so build outputs are
+# byte-stable across fresh builds. Other operations (pacman, mirror
+# TLS, GPG keyring) keep using real time so cert/key rotations don't
+# break us.
+FROM ${BASE_IMAGE}:${BASE_TAG} AS libfaketime
+RUN pacman -Sy --noconfirm libfaketime
+
 # ─── Stage 1: aur-builder ─────────────────────────────────────────
 # Auto-detect packages cache22 lists that no configured repo provides,
 # build them (plus transitive AUR deps) via paru into /aur-out. Stage
@@ -49,6 +60,18 @@ ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
     NV_BUILD_USER=cache22 \
     NV_BUILD_HOST=cache22-build
 
+# Surgical faketime for AUR builds: shim /usr/local/bin/makepkg so the
+# actual package-build invocation (the part that runs the compiler and
+# may otherwise leak wall-clock into output binaries) sees a fixed
+# clock. paru's pacman calls and git clones for PKGBUILDs continue to
+# use real time, keeping mirror TLS + GPG verification working.
+COPY --from=libfaketime /usr/bin/faketime /usr/bin/faketime
+COPY --from=libfaketime /usr/lib/faketime /usr/lib/faketime
+RUN install -d /usr/local/bin \
+ && printf '#!/bin/sh\nexec /usr/bin/faketime "2026-05-06 00:00:00" /usr/bin/makepkg "$@"\n' \
+        > /usr/local/bin/makepkg \
+ && chmod +x /usr/local/bin/makepkg
+
 COPY scripts/  /tmp/cache22-build/scripts/
 COPY packages/ /tmp/cache22-build/packages/
 RUN chmod +x /tmp/cache22-build/scripts/*.sh
@@ -57,17 +80,6 @@ RUN /tmp/cache22-build/scripts/inject-custom-repos-${VARIANT_FAMILY}.sh
 RUN /tmp/cache22-build/scripts/build-aur-packages.sh \
         "/tmp/cache22-build/packages/${VARIANT_FAMILY}-common.txt" \
         "/tmp/cache22-build/packages/${VARIANT}.txt"
-
-# ─── Stage: libfaketime (tiny, just copies the .so + cli out) ────
-# We need libfaketime AVAILABLE before the main pacman -S RUN so that
-# RUN can be wrapped with faketime — DKMS module builds (broadcom-wl
-# on cachy with ThinLTO kernel) embed wall-clock-derived state into
-# their output and drift between fresh builds without faketime. A
-# dedicated RUN to install libfaketime via pacman after the main one
-# hangs in buildah's hook context (see commit history); pulling it via
-# multi-stage COPY sidesteps that.
-FROM ${BASE_IMAGE}:${BASE_TAG} AS libfaketime
-RUN pacman -Sy --noconfirm libfaketime
 
 # ─── Stage 2: main image ──────────────────────────────────────────
 FROM ${BASE_IMAGE}:${BASE_TAG}
