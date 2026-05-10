@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Final image cleanup + branding. Runs after pacman + initramfs, before
-# bootc lint. See docs/IMAGE_BUILD.md for the full pipeline.
+# Final image cleanup + branding. Runs after pacman + initramfs,
+# before bootc lint. See docs/IMAGE_BUILD.md for the full pipeline.
 
 set -euo pipefail
 
