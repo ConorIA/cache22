@@ -65,41 +65,25 @@ SDE: int = 0
 # builds — adding/removing patterns reshuffles only this group's
 # membership, not the unmatched packages' bucket assignment.
 GROUPS: list[tuple[str, list[str]]] = [
-    # cmspam/* repos (bootc-v3, gamescope-patched, qemu-patched,
-    # virglrenderer-patched, xe-virt-host-v3) force-rebuild at 14:00 UTC
-    # daily — image build at 18:00 always pulls fresh bytes for these.
-    ("cmspam-daily", [
-        "bootc",
-        "gamescope", "gamescope-*",
-        "qemu", "qemu-*",
-        "virglrenderer", "virglrenderer-*",
-        "xe-virt-host-v3",
-    ]),
-    # Kernel + pre-built per-kernel modules (cachy ships nvidia-open/zfs/
-    # r8125 prebuilt; arch uses dkms which lands its .ko output in the
-    # leftover layer regardless, so dkms source pkgs aren't grouped here).
+    # Kernel + pre-built per-kernel modules. These ship with hashes
+    # tied to the kernel ABI; whenever any of the bundled-module
+    # packages updates (nvidia-open / zfs / r8125), the parent kernel
+    # package version moves in lockstep, so they always change together.
+    # cachy ships these prebuilt; arch uses dkms which lands its .ko
+    # output in the leftover layer regardless, so dkms source pkgs
+    # aren't grouped here.
     ("kernel", [
         "linux", "linux-headers",
         "linux-cachyos-bore-lto", "linux-cachyos-bore-lto-*",
     ]),
-    # Qt6 framework — entire suite churns together on Qt point releases.
-    ("qt6", ["qt6-*"]),
-    # KDE Frameworks 6 + Plasma 6 desktop shell.
-    ("kf6", ["kf6-*", "plasma-*", "kde-*"]),
-    # Mesa graphics stack + Vulkan + VAAPI.
-    ("mesa", [
-        "mesa", "mesa-*",
-        "vulkan-*",
-        "libva", "libva-*",
-        "intel-compute-runtime", "intel-media-driver",
-    ]),
-    # Firmware blobs + ucode (rarely change but always together when they do).
-    ("firmware", [
-        "linux-firmware", "linux-firmware-*",
-        "sof-firmware", "alsa-firmware",
-        "amd-ucode", "intel-ucode",
-        "wireless-regdb",
-    ]),
+    # Previously grouped (qt6, kf6, mesa, firmware, cmspam-daily) — all
+    # DE-GROUPED. Members of these families rebuild individually too often;
+    # bundling them caused single-package rebuilds to amplify into multi-
+    # hundred-MB layer churn. Per-package layers (handled by the solo/bucket
+    # logic below) keep amplification proportional to the actually-changed
+    # package's size. cmspam-daily packages are now reproducible across
+    # rebuilds when source is unchanged — verified against multiple
+    # consecutive builds.
 ]
 
 # AUR packages built fresh in this image build. The list is written by
@@ -554,11 +538,23 @@ def main():
         #   5. Leftover-promotion layers (initramfs, dkms-modules)
         #   6. Leftover layer (everything else unowned)
         #
-        # OverlayFS max stacked layers = 128. Reserve headroom for groups
-        # and promotions: 8 groups + 2 promotions + N_SOLO + N_BUCKETS +
-        # pacman-db + leftover ≤ 128 → keep N_SOLO + N_BUCKETS ≤ 116.
-        N_SOLO = 40
-        N_BUCKETS = 60
+        # Hard cap is the kernel's OVL_MAX_STACK = 500 (fs/overlayfs/
+        # params.h); modern kernels (≥6.7) use the lowerdir+ mount-option
+        # syntax which removes the legacy PAGE_SIZE-based path-length
+        # limit. All cache22 environments — GH runner (Linux 6.8), Fedora
+        # live ISO (Linux 6.x), installed cache22 (Linux 7.x) — meet that
+        # requirement. We target ~480 total layers with a 20-layer safety
+        # margin under the kernel cap. The big amplification wins come
+        # from giving large packages their own layer instead of grouping;
+        # the bucket pool absorbs the long tail of small packages.
+        MAX_TOTAL_LAYERS = 480
+        N_BUCKETS = 100
+        # Solo layers: budget = MAX - buckets - fixed-overhead. Fixed
+        # overhead is groups + AUR + file-path-groups + leftover-promotions
+        # + pacman-db + leftover ≈ 10. Set N_SOLO conservatively so the
+        # final count stays ≤ MAX_TOTAL_LAYERS even if we add another
+        # group in the future.
+        N_SOLO = MAX_TOTAL_LAYERS - N_BUCKETS - 15
 
         # Load AUR sidecar (list of pkgnames built fresh in this build).
         aur_sidecar = src_mnt / AUR_SIDECAR_REL
@@ -605,6 +601,15 @@ def main():
                 f"    {len(solo_pkgs)} solo layers "
                 f"(largest: {largest} @ {pkg_sizes[largest] / 1024 / 1024:.0f} MiB)"
             )
+            # Smallest solo's size sets the floor for what counts as a
+            # "big enough to deserve its own layer" package — useful for
+            # spotting when the solo budget is tight.
+            smallest_solo = ungrouped_by_size[len(solo_pkgs) - 1] if solo_pkgs else None
+            if smallest_solo:
+                print(
+                    f"    smallest solo: {smallest_solo} @ "
+                    f"{pkg_sizes[smallest_solo] / 1024 / 1024:.2f} MiB"
+                )
             print(
                 f"    {N_BUCKETS} bucket layers "
                 f"({len(ungrouped) - len(solo_pkgs)} packages)"
@@ -931,7 +936,24 @@ def main():
             layers_desc.append(desc)
         print(f"    leftover phase done in {time.monotonic()-phase_t:.1f}s")
 
-        print(f"==> {len(layers_desc)} layers built")
+        # Budget check: warn loudly if we're approaching the kernel cap
+        # (OVL_MAX_STACK = 500). Hard fail at 495 — that should never happen
+        # with the current MAX_TOTAL_LAYERS = 480 budget but is our last
+        # line of defense against shipping an image that won't mount.
+        n_layers = len(layers_desc)
+        print(f"==> {n_layers} layers built (budget {MAX_TOTAL_LAYERS}, kernel cap 500)")
+        if n_layers > 495:
+            sys.exit(
+                f"FATAL: {n_layers} layers exceeds the safe limit (495). "
+                f"Kernel OVL_MAX_STACK is 500; shipping would risk overlay "
+                f"mount failures. Reduce MAX_TOTAL_LAYERS or N_BUCKETS."
+            )
+        if n_layers > MAX_TOTAL_LAYERS:
+            print(
+                f"WARN: {n_layers} layers exceeds soft budget "
+                f"({MAX_TOTAL_LAYERS}); under 495 hard limit so not failing, "
+                f"but consider tightening N_SOLO/N_BUCKETS."
+            )
 
         # ─── Construct OCI config ──────────────────────────────────────
         # Pull the source image config so we preserve labels, env, etc.
