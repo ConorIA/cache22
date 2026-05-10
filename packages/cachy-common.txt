@@ -176,6 +176,7 @@ docker-buildx
 distrobox
 incus
 incus-tools
+incus-ui
 lxc
 crun
 slirp4netns
