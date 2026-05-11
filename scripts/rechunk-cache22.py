@@ -251,6 +251,18 @@ def _stable_mtree_sha(mtree_path: Path) -> str | None:
         normalized,
         flags=re.MULTILINE,
     )
+    # Also zero size= on .BUILDINFO/.PKGINFO lines. The .BUILDINFO size
+    # drifts every upstream rebuild because makepkg records the current
+    # build env's "installed = pkg-ver" list inside it. Same binaries,
+    # different metadata, different size — without this strip, the
+    # cache key changes and we needlessly recompress a binary-identical
+    # package layer.
+    normalized = re.sub(
+        rb"^(\./\.(?:BUILDINFO|PKGINFO)\s.*?size=)\d+",
+        rb"\g<1>0",
+        normalized,
+        flags=re.MULTILINE,
+    )
     return hashlib.sha256(normalized).hexdigest()
 
 
@@ -1020,6 +1032,17 @@ def main():
             _re.MULTILINE,
         )
         meta_sha_repl = rb"\g<1>" + b"0" * 64
+        # Match size=<digits> on the same .BUILDINFO/.PKGINFO lines. The
+        # .BUILDINFO size drifts every upstream rebuild because makepkg
+        # records the current build environment's "installed = pkg-ver"
+        # list — same source/binaries but a different size= line. Zeroing
+        # this prevents the pacman-db layer from churning on every
+        # upstream silent rebuild of a binary-identical package.
+        meta_size_re = _re.compile(
+            rb"^(\./\.(?:BUILDINFO|PKGINFO)\s.*?size=)\d+",
+            _re.MULTILINE,
+        )
+        meta_size_repl = rb"\g<1>0"
         mtree_normalized = 0
         for mtree_file in db_root_path.glob("*/mtree"):
             try:
@@ -1029,6 +1052,7 @@ def main():
                 continue
             new_data = time_re.sub(repl, data)
             new_data = meta_sha_re.sub(meta_sha_repl, new_data)
+            new_data = meta_size_re.sub(meta_size_repl, new_data)
             if new_data != data:
                 try:
                     # gzip.open() doesn't take mtime; use GzipFile via
