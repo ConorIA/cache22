@@ -1,0 +1,23 @@
+[Unit]
+# Refresh the /run/motd.d pending-reboot marker from current bootc state.
+# Runs:
+#   - on every boot (multi-user.target) — handles both hard and soft reboot,
+#     since soft-reboot's new userspace re-runs unit starts. After a successful
+#     soft-reboot the staged deploy is now booted, so this clears the marker.
+#   - on bootc-status-updated.target — handles direct `bootc upgrade` /
+#     `bootc rollback` invocations that bypass cache22-update.
+# cache22-update also calls /usr/libexec/cache22/refresh-pending-motd directly
+# so the marker is correct the moment the wrapper finishes (no boot needed).
+Description=cache22: refresh pending-reboot MOTD marker from bootc state
+ConditionPathExists=/run/ostree-booted
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/cache22/refresh-pending-motd
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+WantedBy=bootc-status-updated.target

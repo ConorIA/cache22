@@ -94,53 +94,17 @@ fi
 # finalize here, and we don't trigger the UKI build here — both happen
 # during the next reboot's shutdown sequence.
 
-# Drop a /run/motd.d marker so the next SSH login banner mentions the
-# pending reboot. /run is tmpfs so it clears automatically on reboot.
-# Customize wording based on whether soft-reboot is possible — same-kernel
-# updates apply in ~5 sec, kernel-changing ones need a full reboot.
-install -dm755 /run/motd.d
-soft_capable=$(bootc status --json 2>/dev/null | jq -r '.status.staged.softRebootCapable // false')
-if [[ "$soft_capable" == "true" ]]; then
-    apply_hint="Apply with \`sudo cache22-reboot\` — soft-reboot available (~5 sec, same kernel)."
-else
-    apply_hint="Apply with \`sudo cache22-reboot\` — full reboot required (kernel changed)."
-fi
-cat > /run/motd.d/10-cache22-pending-reboot <<EOF
+# MOTD pending-reboot marker is now refreshed by
+# /usr/libexec/cache22/refresh-pending-motd, also wired into
+# cache22-pending-motd.service (WantedBy=multi-user.target +
+# bootc-status-updated.target) so bare `bootc upgrade` gets the same
+# behavior. We invoke it directly here so the marker reflects this
+# update without waiting for the service trigger to settle.
+/usr/libexec/cache22/refresh-pending-motd || true
 
-──────────────────────────────────────────────────────────
-  cache22 update is staged — reboot to apply.
-  Run \`cache22-changelog\` to see what changed.
-  $apply_hint
-──────────────────────────────────────────────────────────
-
-EOF
-
-# Pop a desktop notification to any active graphical session so KDE
-# users see "update ready" right when it finishes. May be missed if
-# the user wasn't at the screen — that's fine, the MOTD / shell
-# greeting / cache22-changelog catch them later. notify-send is only
-# present on KDE-variant images (libnotify dep); on server this is a
-# no-op.
-if command -v notify-send >/dev/null 2>&1; then
-    while read -r sess_id _; do
-        [[ -z "$sess_id" ]] && continue
-        sess_type=$(loginctl show-session "$sess_id" -p Type --value 2>/dev/null)
-        case "$sess_type" in wayland|x11|mir) ;; *) continue ;; esac
-        uid=$(loginctl show-session "$sess_id" -p User --value 2>/dev/null)
-        user=$(loginctl show-session "$sess_id" -p Name --value 2>/dev/null)
-        [[ -z "$uid" || -z "$user" ]] && continue
-        sudo -u "$user" \
-            XDG_RUNTIME_DIR="/run/user/$uid" \
-            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
-            notify-send --app-name="cache22" \
-                --icon=system-software-update \
-                --urgency=normal \
-                --expire-time=15000 \
-                "cache22 update ready" \
-                "An OS update has been staged. Run sudo cache22-reboot to apply (soft-reboot used when possible) or cache22-changelog to inspect." \
-            2>/dev/null || true
-    done < <(loginctl list-sessions --no-legend 2>/dev/null)
-fi
+# Desktop notification is now also handled by refresh-pending-motd
+# (above), which only fires it on actual none → staged transitions and
+# does so for both cache22-update and bare `bootc upgrade` paths.
 
 if (( APPS )); then
     echo "==> flatpak update"

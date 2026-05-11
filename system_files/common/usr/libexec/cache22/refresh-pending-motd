@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# refresh-pending-motd — write or remove the pending-reboot MOTD marker
+# based on actual bootc state. Idempotent.
+#
+# Why this exists: cache22-update used to write the marker file inline,
+# trusting /run tmpfs to clear it on next boot. That works for hard
+# reboots but NOT soft-reboots — /run survives soft-reboot by design,
+# so the marker would persist showing "update is staged" long after the
+# update was applied. By regenerating the marker from bootc state at
+# every boot AND on bootc-status-updated.target, we avoid the staleness.
+#
+# Triggers (see cache22-pending-motd.service):
+#   - WantedBy=multi-user.target          (every boot, hard or soft)
+#   - WantedBy=bootc-status-updated.target (after bootc ops outside cache22-update)
+#   - Direct invocation by cache22-update after staging.
+
+set -euo pipefail
+
+MOTD_FILE=/run/motd.d/10-cache22-pending-reboot
+
+# Are we ostree-booted? If not (e.g. running in a build chroot), do nothing.
+[[ -f /run/ostree-booted ]] || exit 0
+
+# Read staged state from bootc. If bootc isn't installed or status fails,
+# we're conservative: leave any existing marker alone.
+status=$(bootc status --json 2>/dev/null) || exit 0
+
+if echo "$status" | jq -e '.status.staged != null' >/dev/null 2>&1; then
+    # There's a staged deploy — write/refresh the marker with a dynamic
+    # apply hint based on whether soft-reboot is possible.
+    soft_capable=$(echo "$status" | jq -r '.status.staged.softRebootCapable // false')
+    if [[ "$soft_capable" == "true" ]]; then
+        apply_hint="Apply with \`sudo cache22-reboot\` — soft-reboot available (~5 sec, same kernel)."
+    else
+        apply_hint="Apply with \`sudo cache22-reboot\` — full reboot required (kernel changed)."
+    fi
+    install -dm755 "$(dirname "$MOTD_FILE")"
+    new_content=$(cat <<EOF
+
+──────────────────────────────────────────────────────────
+  cache22 update is staged — reboot to apply.
+  Run \`cache22-changelog\` to see what changed.
+  $apply_hint
+──────────────────────────────────────────────────────────
+
+EOF
+)
+    # Only treat this as a "newly staged" event if the marker is new
+    # or its content changed — avoids re-notifying on every service
+    # firing while staged stays staged.
+    is_transition=0
+    if [[ ! -f "$MOTD_FILE" ]] || [[ "$(cat "$MOTD_FILE")" != "$new_content" ]]; then
+        is_transition=1
+    fi
+    printf '%s\n' "$new_content" > "$MOTD_FILE"
+
+    # Pop a desktop notification on the transition. Only fires for
+    # graphical sessions (KDE variants ship libnotify); on server
+    # variants notify-send is absent and this branch is a no-op.
+    if (( is_transition )) && command -v notify-send >/dev/null 2>&1; then
+        while read -r sess_id _; do
+            [[ -z "$sess_id" ]] && continue
+            sess_type=$(loginctl show-session "$sess_id" -p Type --value 2>/dev/null)
+            case "$sess_type" in wayland|x11|mir) ;; *) continue ;; esac
+            uid=$(loginctl show-session "$sess_id" -p User --value 2>/dev/null)
+            user=$(loginctl show-session "$sess_id" -p Name --value 2>/dev/null)
+            [[ -z "$uid" || -z "$user" ]] && continue
+            sudo -u "$user" \
+                XDG_RUNTIME_DIR="/run/user/$uid" \
+                DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+                notify-send --app-name="cache22" \
+                    --icon=system-software-update \
+                    --urgency=normal \
+                    --expire-time=15000 \
+                    "cache22 update ready" \
+                    "An OS update has been staged. Run sudo cache22-reboot to apply (soft-reboot used when possible) or cache22-changelog to inspect." \
+                2>/dev/null || true
+        done < <(loginctl list-sessions --no-legend 2>/dev/null)
+    fi
+else
+    # No staged deploy — remove any stale marker.
+    rm -f "$MOTD_FILE"
+fi
