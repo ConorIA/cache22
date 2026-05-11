@@ -95,11 +95,16 @@ trap cleanup_on_fail ERR
 # 1. Bind the deploy as the new root.
 mount --bind "$deploy_dir" "$NEXTROOT"
 
-# 2. /etc: bind-on-self + remount. The deploy's /etc is already writable
-#    (legacy hardlink farm). The bind makes it independently controllable
-#    as a mount point so the new userspace can manage propagation.
+# 2. /etc: bind-on-self + remount RW.
+#    NOTE: this bind doesn't actually survive systemd's soft-reboot
+#    pivot (systemd only preserves a fixed list of mounts: /var, /boot,
+#    /efi, /sysroot, /home, /usr/lib/modules, etc. — /etc is NOT on
+#    that list). cache22-ensure-etc-writable.service runs early in the
+#    new userspace to re-establish the bind. We do it here too so
+#    /etc is RW for the brief window before pivot in case anything
+#    needs it then; the post-pivot service is the durable fix.
 mount --bind "$NEXTROOT/etc" "$NEXTROOT/etc"
-mount -o remount,bind "$NEXTROOT/etc"
+mount -o remount,bind,rw "$NEXTROOT/etc"
 
 # 3. /usr read-only. Two-step: bind-on-self, then remount with ro flag.
 mount --bind "$NEXTROOT/usr" "$NEXTROOT/usr"

@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# ensure-etc-writable — make /etc a writable bind-on-self if it isn't
+# already.
+#
+# Needed because systemd's soft-reboot pivot only preserves a specific
+# list of mounts across switch_root: /var, /boot, /efi, /sysroot,
+# /home, /var/log/journal, /usr/lib/modules, /run, /tmp, /sys, /proc,
+# /dev. /etc is NOT on that list. Our prepare-soft-reboot's bind on
+# /etc therefore gets dropped during the pivot, leaving /etc as a
+# plain directory on the (RO btrfs) deploy mount — so /etc is RO in
+# the new userspace.
+#
+# This script is idempotent. On a hard boot, ostree-prepare-root
+# already made /etc a writable bind in initrd (its bind survives
+# switch_root from initrd, but doesn't survive the soft-reboot pivot
+# for the reason above). On a soft boot, /etc is RO; we re-establish
+# the bind.
+#
+# Composefs runtime setups handle /etc differently — we defer to
+# upstream there.
+
+set -euo pipefail
+
+# Only relevant for ostree-booted systems.
+[[ -f /run/ostree-booted ]] || exit 0
+
+# composefs path is upstream's responsibility; don't interfere.
+if grep -qE '^[[:space:]]*enabled[[:space:]]*=[[:space:]]*(true|yes)' \
+        /usr/lib/ostree/prepare-root.conf /etc/ostree/prepare-root.conf 2>/dev/null; then
+    exit 0
+fi
+
+# Already its own mount?
+if findmnt /etc >/dev/null 2>&1; then
+    if findmnt -no OPTIONS /etc | grep -qE '(^|,)rw(,|$)'; then
+        exit 0  # already RW, nothing to do
+    fi
+    mount -o remount,bind,rw /etc
+    echo "ensure-etc-writable: remounted existing /etc bind as rw"
+    exit 0
+fi
+
+# /etc is just-a-dir on the (RO) root mount. Bind it on itself, then
+# remount RW.
+mount --bind /etc /etc
+mount -o remount,bind,rw /etc
+echo "ensure-etc-writable: established /etc as writable bind"

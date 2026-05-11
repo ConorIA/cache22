@@ -1,0 +1,26 @@
+[Unit]
+# Ensure /etc is writable as early as possible in boot.
+#
+# On hard boot, ostree-prepare-root makes /etc a writable bind in
+# initrd, the bind survives switch_root, and this service is a no-op.
+#
+# On soft boot, systemd's soft-reboot pivot drops bind mounts that
+# aren't on its preserve list — /etc isn't on that list — so /etc
+# ends up RO in the new userspace. This service re-establishes the
+# writable bind before anything depending on a writable /etc runs.
+Description=cache22: ensure /etc is writable (esp. post-soft-reboot)
+DefaultDependencies=no
+ConditionPathExists=/run/ostree-booted
+After=local-fs.target
+Before=sysinit.target basic.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/cache22/ensure-etc-writable
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=sysinit.target

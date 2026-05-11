@@ -52,6 +52,11 @@ enable cache22-resign-uki.path
 # image version is newer than the ESP version.
 disable systemd-boot-update.service
 
+# Ensure /etc is writable early in boot. Hard boots already get this
+# from ostree-prepare-root in initrd; soft-reboots need it because
+# systemd's pivot drops the /etc bind (not on its preserve list).
+enable cache22-ensure-etc-writable.service
+
 # Pending-reboot MOTD marker — refreshed on every boot (hard or soft) and
 # on bootc state changes. Replaces the previous inline write in
 # cache22-update, which left a stale marker after soft-reboot because
