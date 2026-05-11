@@ -264,6 +264,33 @@ def solo_cache_key(pkg_dir_name: str, mtree_path: Path) -> str | None:
     return f"solo-{pkg_dir_name}-{arch}-mtree-{sha[:12]}-{PKGCACHE_VERSION}"
 
 
+def file_content_cache_key(
+    layer_name: str,
+    rel_paths: list[str],
+    src_root: Path,
+) -> str | None:
+    """Cache key for a layer whose content is just a list of files (not
+    pacman-package-owned). Hashes sorted (path, sha256-of-file-content)
+    pairs. Used for leftover-promotion layers like initramfs and
+    dkms-modules, where dracut/dkms produce files at image-build time
+    that aren't in the pacman db.
+
+    Format: <layer_name>-content-<sha12>-<rN>
+
+    Returns None on any read error (caller falls back to compress fresh).
+    """
+    h = hashlib.sha256()
+    h.update(layer_name.encode() + b"\0")
+    for rel in sorted(rel_paths):
+        p = src_root / rel
+        try:
+            file_sha = sha256_file(p)
+        except (OSError, FileNotFoundError):
+            return None
+        h.update(rel.encode() + b"\0" + file_sha.encode() + b"\0")
+    return f"{layer_name}-content-{h.hexdigest()[:12]}-{PKGCACHE_VERSION}"
+
+
 def bucket_cache_key(
     bidx: int,
     pkgs_in_bucket: list[str],
@@ -1042,16 +1069,56 @@ def main():
         phase_t = time.monotonic()
         print(f"==> Building leftover-promotion layers ({len(promoted_files)} groups)")
         before_promo = len(layers_desc)
+        promo_hits = 0
+        promo_misses = 0
         for gname in sorted(promoted_files.keys()):
             files = promoted_files[gname]
+            layer_name = f"leftover-{gname}"
+
+            # ── Leftover-promotion cache lookup ──
+            # Keyed on the actual file content (not pacman metadata),
+            # because these files are produced at image-build time by
+            # dracut and the dkms alpm hook. If dracut --reproducible
+            # plus our deterministic DKMS pipeline are working, the
+            # same kernel + module set produces byte-identical initramfs
+            # → byte-identical layer → cache key matches yesterday's.
+            pkey = file_content_cache_key(layer_name, files, src_mnt)
+            entry = pkgcache.get(pkey) if pkey else None
+            if entry and entry.get("digest") and entry.get("size") and entry.get("diff_id"):
+                layers_desc.append({
+                    "mediaType": "application/vnd.oci.image.layer.v1.tar+zstd",
+                    "digest": entry["digest"],
+                    "size": entry["size"],
+                    "_diff_id": entry["diff_id"],
+                    "_cached": True,
+                })
+                new_pkgcache_entries[pkey] = entry
+                promo_hits += 1
+                print(
+                    f"    [{layer_name:32s}] CACHE HIT  ({len(files)} files)",
+                    flush=True,
+                )
+                continue
+
             file_paths = [src_mnt / f for f in files]
             arcname = {src_mnt / f: f for f in files}
             desc = add_layer_from_files(
-                out_blobs, f"leftover-{gname}", file_paths, arcname, src_mnt
+                out_blobs, layer_name, file_paths, arcname, src_mnt
             )
             if desc:
                 layers_desc.append(desc)
-        print(f"    {len(layers_desc) - before_promo} leftover-promotion layers built in {time.monotonic()-phase_t:.1f}s")
+                if pkey:
+                    new_pkgcache_entries[pkey] = {
+                        "digest": desc["digest"],
+                        "size": desc["size"],
+                        "diff_id": desc["_diff_id"],
+                    }
+                    promo_misses += 1
+        print(
+            f"    {len(layers_desc) - before_promo} leftover-promotion layers built in "
+            f"{time.monotonic()-phase_t:.1f}s "
+            f"(cache: {promo_hits} hits, {promo_misses} misses)"
+        )
 
         phase_t = time.monotonic()
         print(f"==> Building leftover layer ({len(leftover_files)} files)")
