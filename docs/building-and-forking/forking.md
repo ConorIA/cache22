@@ -26,22 +26,23 @@ The main customization points:
 
 | Path | Purpose |
 |---|---|
-| `packages/{cachy,arch}-{common,kde,server}.txt` | Package lists, one per line. |
-| `system_files/common/` | Files overlaid on top of the base image. Path under `system_files/common/` maps to absolute path in the image. |
-| `system_files/<variant>/` | Per-variant overlay (e.g., KDE-only files). |
+| `packages/layers/<family>/<layer>.txt` | Per-layer package lists (one per line). |
+| `packages/manifests/<variant>.manifest` | Per-variant list of layers, in install order. |
+| `system_files/common/` | Files overlaid on top of the base image for every variant. Path under `system_files/common/` maps to absolute path in the image. |
+| `system_files/layers/<family>/<layer>/` | Per-layer overlay applied when that layer is in the variant's manifest. |
 | `Containerfile` | Image build recipe. Usually no edits needed. |
 | `variants.json` | Variant catalog used by the installer's interactive picker. |
 
-For example, to add `htop-vim` to all variants:
+For example, to add `htop-vim` to every variant:
 
 ```
-echo 'htop-vim' >> packages/cachy-common.txt
-echo 'htop-vim' >> packages/arch-common.txt
+echo 'htop-vim' >> packages/layers/cachy/base.txt
+echo 'htop-vim' >> packages/layers/arch/base.txt
 git commit -am "add htop-vim"
 git push
 ```
 
-The push triggers a build. After ~22 minutes per variant (4 variants in parallel), the new images are at `ghcr.io/<your-username>/cache22-<variant>:rolling`.
+The push triggers a build. ~22 minutes per variant, all 20 building in parallel.
 
 ## Step 3. Install your fork
 
@@ -76,7 +77,7 @@ sudo cache22-reboot
 
 ### Add a package to all variants
 
-Edit `packages/cachy-common.txt` and `packages/arch-common.txt`:
+Edit `packages/layers/cachy/base.txt` and `packages/layers/arch/base.txt`:
 
 ```
 emacs-nox
@@ -86,11 +87,15 @@ emacs-nox
 
 ### Add a package to KDE only
 
-Edit `packages/cachy-kde.txt` and `packages/arch-kde.txt`:
+Edit `packages/layers/cachy/kde.txt` and `packages/layers/arch/kde.txt`:
 
 ```
 kdenlive
 ```
+
+### Add a new variant
+
+Drop a manifest at `packages/manifests/<id>.manifest` listing the layers it pulls, then add a row to the CI matrix in `.github/workflows/build-image.yml` and an entry in `variants.json`. See [Containerfile and Packages](../containerfile-and-packages/#adding-a-new-variant).
 
 ### Drop a system file (overlay)
 
@@ -130,7 +135,7 @@ Edit:
 
 ### Change the kernel
 
-For cachy variants: replace `linux-cachyos-bore-lto` in `packages/cachy-common.txt` with another CachyOS kernel (e.g., `linux-cachyos`).
+For cachy variants: replace `linux-cachyos-bore-lto` in `packages/layers/cachy/base.txt` with another CachyOS kernel (e.g., `linux-cachyos`).
 
 For arch variants: the kernel is `linux` by default. Replace with `linux-lts`, `linux-zen`, or any other Arch-packaged kernel.
 
@@ -138,14 +143,9 @@ Per-kernel modules (`*-nvidia-open`, `*-zfs`) need to match the chosen kernel. U
 
 ### Disable a variant entirely
 
-In `.github/workflows/build-image.yml`, remove the variant from the matrix:
+In `.github/workflows/build-image.yml`, remove the matching `include:` rows from the matrix. Each row defines one variant; deleting it skips that build entirely.
 
-```yaml
-matrix:
-  variant: [arch-kde, arch-server]    # Drop cachy-* variants.
-```
-
-Or leave the matrix alone and just delete `packages/cachy-*.txt` and `scripts/inject-custom-repos-cachy.sh`. The build for `cachy-*` will fail, which is fine if you do not need them.
+Or leave the matrix alone and just delete the matching `packages/manifests/cachy-*.manifest` files. The build for those variants will fail, which is fine if you do not need them.
 
 ## What gets pushed
 

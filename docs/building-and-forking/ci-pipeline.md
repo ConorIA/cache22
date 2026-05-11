@@ -18,13 +18,9 @@ The build runs on every variant in the matrix unless the changed paths only affe
 
 ## Matrix
 
-```yaml
-strategy:
-  matrix:
-    variant: [cachy-kde, cachy-server, arch-kde, arch-server]
-```
+20 variants, defined as `include:` rows in the matrix — one row per `family + role + gaming? + nvidia?` combination. Each row sets `variant`, `family`, and `base_image`. The `family` value picks the right base image and `inject-custom-repos-<family>.sh` script; `variant` resolves to the manifest at `packages/manifests/<variant>.manifest`.
 
-All four variants build in parallel. Each variant takes ~22 minutes on GitHub-hosted runners. Total wall-clock time for a full build is ~22 minutes (parallel) plus a few minutes for the manifest aggregation.
+All variants build in parallel. Each takes ~22 minutes on GitHub-hosted runners; total wall-clock time for a full build is ~22 minutes plus a few minutes for the manifest aggregation.
 
 ## Job steps
 

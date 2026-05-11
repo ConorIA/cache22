@@ -1,29 +1,125 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "variants": [
     {
-      "id": "arch-kde",
-      "label": "Arch (ALHP) — KDE Plasma",
-      "description": "Vanilla Arch packages built x86-64-v3-optimized via ALHP. Mainline linux 7.x, DKMS-built nvidia-open + r8125 + broadcom modules. Full Plasma 6 desktop with curated daily-driver app set. No CachyOS dependency — recommended default.",
-      "image": "ghcr.io/cmspam/cache22-arch-kde:rolling"
-    },
-    {
       "id": "arch-server",
-      "label": "Arch (ALHP) — Headless server / container host",
-      "description": "Same kernel + drivers as arch-kde, no desktop. Containers (podman, docker, distrobox, incus), libvirt+qemu, cockpit web admin.",
+      "label": "Arch — Headless server / container host",
+      "description": "Vanilla Arch (mainline linux 7.x, DKMS r8125 + broadcom). Containers (podman, docker, distrobox, incus), libvirt+qemu, cockpit web admin. No GPU userland beyond mesa headless.",
       "image": "ghcr.io/cmspam/cache22-arch-server:rolling"
     },
     {
-      "id": "cachy-kde",
-      "label": "CachyOS-based — KDE Plasma",
-      "description": "CachyOS bore-lto 7.x kernel with pre-built nvidia/zfs/r8125 modules. Full Plasma 6 desktop with curated daily-driver app set. CachyOS performance tunings + repo packages.",
-      "image": "ghcr.io/cmspam/cache22-cachy-kde:rolling"
+      "id": "arch-server-nvidia",
+      "label": "Arch — Headless server + NVIDIA",
+      "description": "arch-server plus nvidia-open-dkms and CUDA userland. For headless boxes that still need NVIDIA (transcoding, ML, passthrough hosts).",
+      "image": "ghcr.io/cmspam/cache22-arch-server-nvidia:rolling"
+    },
+    {
+      "id": "arch-kde",
+      "label": "Arch — KDE Plasma",
+      "description": "Vanilla Arch + Plasma 6 desktop with curated daily-driver app set. No NVIDIA, no Steam.",
+      "image": "ghcr.io/cmspam/cache22-arch-kde:rolling"
+    },
+    {
+      "id": "arch-kde-nvidia",
+      "label": "Arch — KDE Plasma + NVIDIA",
+      "description": "arch-kde plus nvidia-open-dkms driver and 32-bit NVIDIA userland.",
+      "image": "ghcr.io/cmspam/cache22-arch-kde-nvidia:rolling"
+    },
+    {
+      "id": "arch-kde-gaming",
+      "label": "Arch — KDE Plasma + gaming",
+      "description": "arch-kde plus Steam, gamemode, mangohud, gamescope, lutris, sunshine, Xbox controller (xone).",
+      "image": "ghcr.io/cmspam/cache22-arch-kde-gaming:rolling"
+    },
+    {
+      "id": "arch-kde-gaming-nvidia",
+      "label": "Arch — KDE Plasma + gaming + NVIDIA",
+      "description": "arch-kde-gaming plus nvidia-open-dkms. Full SteamOS-style switchable gamescope session.",
+      "image": "ghcr.io/cmspam/cache22-arch-kde-gaming-nvidia:rolling"
+    },
+    {
+      "id": "arch-gnome",
+      "label": "Arch — GNOME",
+      "description": "Vanilla Arch + GNOME Shell with curated app set. GDM, Nautilus, Loupe, Papers. No NVIDIA, no Steam.",
+      "image": "ghcr.io/cmspam/cache22-arch-gnome:rolling"
+    },
+    {
+      "id": "arch-gnome-nvidia",
+      "label": "Arch — GNOME + NVIDIA",
+      "description": "arch-gnome plus nvidia-open-dkms driver.",
+      "image": "ghcr.io/cmspam/cache22-arch-gnome-nvidia:rolling"
+    },
+    {
+      "id": "arch-gnome-gaming",
+      "label": "Arch — GNOME + gaming",
+      "description": "arch-gnome plus Steam, gamemode, mangohud, gamescope, lutris, sunshine, Xbox controller (xone). No SteamOS session switcher (KDE-only today).",
+      "image": "ghcr.io/cmspam/cache22-arch-gnome-gaming:rolling"
+    },
+    {
+      "id": "arch-gnome-gaming-nvidia",
+      "label": "Arch — GNOME + gaming + NVIDIA",
+      "description": "arch-gnome-gaming plus nvidia-open-dkms.",
+      "image": "ghcr.io/cmspam/cache22-arch-gnome-gaming-nvidia:rolling"
     },
     {
       "id": "cachy-server",
-      "label": "CachyOS-based — Headless server / container host",
-      "description": "Same kernel + drivers as cachy-kde, no desktop. Containers (podman, docker, distrobox, incus), libvirt+qemu, cockpit web admin.",
+      "label": "CachyOS — Headless server / container host",
+      "description": "CachyOS bore-lto 7.x kernel with pre-built zfs + r8125 modules. Containers (podman, docker, distrobox, incus), libvirt+qemu, cockpit web admin. No GPU userland beyond mesa headless.",
       "image": "ghcr.io/cmspam/cache22-cachy-server:rolling"
+    },
+    {
+      "id": "cachy-server-nvidia",
+      "label": "CachyOS — Headless server + NVIDIA",
+      "description": "cachy-server plus pre-built linux-cachyos-bore-lto-nvidia-open. For headless boxes that still need NVIDIA.",
+      "image": "ghcr.io/cmspam/cache22-cachy-server-nvidia:rolling"
+    },
+    {
+      "id": "cachy-kde",
+      "label": "CachyOS — KDE Plasma",
+      "description": "CachyOS bore-lto kernel + Plasma 6 desktop with curated daily-driver app set. CachyOS performance tunings + repo packages. No NVIDIA, no Steam.",
+      "image": "ghcr.io/cmspam/cache22-cachy-kde:rolling"
+    },
+    {
+      "id": "cachy-kde-nvidia",
+      "label": "CachyOS — KDE Plasma + NVIDIA",
+      "description": "cachy-kde plus pre-built linux-cachyos-bore-lto-nvidia-open and 32-bit NVIDIA userland.",
+      "image": "ghcr.io/cmspam/cache22-cachy-kde-nvidia:rolling"
+    },
+    {
+      "id": "cachy-kde-gaming",
+      "label": "CachyOS — KDE Plasma + gaming",
+      "description": "cachy-kde plus Steam, gamemode, mangohud, gamescope, lutris, sunshine, Xbox controller (xone).",
+      "image": "ghcr.io/cmspam/cache22-cachy-kde-gaming:rolling"
+    },
+    {
+      "id": "cachy-kde-gaming-nvidia",
+      "label": "CachyOS — KDE Plasma + gaming + NVIDIA",
+      "description": "cachy-kde-gaming plus pre-built linux-cachyos-bore-lto-nvidia-open. Full SteamOS-style switchable gamescope session. The default cache22 desktop image.",
+      "image": "ghcr.io/cmspam/cache22-cachy-kde-gaming-nvidia:rolling"
+    },
+    {
+      "id": "cachy-gnome",
+      "label": "CachyOS — GNOME",
+      "description": "CachyOS bore-lto kernel + GNOME Shell with curated app set. GDM, Nautilus, Loupe, Papers.",
+      "image": "ghcr.io/cmspam/cache22-cachy-gnome:rolling"
+    },
+    {
+      "id": "cachy-gnome-nvidia",
+      "label": "CachyOS — GNOME + NVIDIA",
+      "description": "cachy-gnome plus pre-built linux-cachyos-bore-lto-nvidia-open.",
+      "image": "ghcr.io/cmspam/cache22-cachy-gnome-nvidia:rolling"
+    },
+    {
+      "id": "cachy-gnome-gaming",
+      "label": "CachyOS — GNOME + gaming",
+      "description": "cachy-gnome plus Steam, gamemode, mangohud, gamescope, lutris, sunshine, Xbox controller (xone). No SteamOS session switcher (KDE-only today).",
+      "image": "ghcr.io/cmspam/cache22-cachy-gnome-gaming:rolling"
+    },
+    {
+      "id": "cachy-gnome-gaming-nvidia",
+      "label": "CachyOS — GNOME + gaming + NVIDIA",
+      "description": "cachy-gnome-gaming plus pre-built linux-cachyos-bore-lto-nvidia-open.",
+      "image": "ghcr.io/cmspam/cache22-cachy-gnome-gaming-nvidia:rolling"
     }
   ]
 }

@@ -1,7 +1,10 @@
 # cache22 image build. See docs/IMAGE_BUILD.md.
 #
-# Build args: VARIANT_FAMILY (cachy|arch), VARIANT_TYPE (kde|server),
-# VARIANT (e.g. arch-kde). CI passes all three.
+# Build args: VARIANT_FAMILY (cachy|arch), VARIANT (e.g. arch-kde-gaming-nvidia).
+# CI passes both. The manifest at packages/manifests/${VARIANT}.manifest names
+# the layers to install, in order; package and system_files content for each
+# layer live under packages/layers/${VARIANT_FAMILY}/<layer>.txt and
+# system_files/layers/${VARIANT_FAMILY}/<layer>/.
 
 ARG BASE_IMAGE=docker.io/cachyos/cachyos-v3
 ARG BASE_TAG=latest
@@ -68,15 +71,15 @@ RUN chmod +x /tmp/cache22-build/scripts/*.sh
 
 RUN /tmp/cache22-build/scripts/inject-custom-repos-${VARIANT_FAMILY}.sh
 RUN /tmp/cache22-build/scripts/build-aur-packages.sh \
-        "/tmp/cache22-build/packages/${VARIANT_FAMILY}-common.txt" \
-        "/tmp/cache22-build/packages/${VARIANT}.txt"
+        --family "${VARIANT_FAMILY}" \
+        --manifest "/tmp/cache22-build/packages/manifests/${VARIANT}.manifest" \
+        --layers-dir "/tmp/cache22-build/packages/layers/${VARIANT_FAMILY}"
 
 # ─── Stage 2: main image ──────────────────────────────────────────
 FROM ${BASE_IMAGE}:${BASE_TAG}
 
 ARG VARIANT_FAMILY=cachy
-ARG VARIANT_TYPE=kde
-ARG VARIANT=cachy-kde
+ARG VARIANT=cachy-kde-gaming-nvidia
 ARG SOURCE_DATE_EPOCH=0
 ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
     KBUILD_BUILD_TIMESTAMP="@${SOURCE_DATE_EPOCH}" \
@@ -115,10 +118,14 @@ RUN if [ -f /var/cache/pacman/cache22-aur/.has-packages ]; then \
         echo "==> Persisted AUR sidecar: $(wc -l < /usr/share/cache22/aur-pkgs.txt) packages"; \
     fi
 
-RUN cp -av --remove-destination /tmp/cache22-build/system_files/common/. / \
- && if [ -d "/tmp/cache22-build/system_files/${VARIANT}" ]; then \
-        cp -av --remove-destination "/tmp/cache22-build/system_files/${VARIANT}/." /; \
-    fi
+# Apply common system_files plus every layer overlay listed in the
+# manifest, in manifest order (later layers override earlier ones).
+RUN /tmp/cache22-build/scripts/apply-system-files.sh \
+        --family "${VARIANT_FAMILY}" \
+        --manifest "/tmp/cache22-build/packages/manifests/${VARIANT}.manifest" \
+        --common-dir /tmp/cache22-build/system_files/common \
+        --layers-dir "/tmp/cache22-build/system_files/layers/${VARIANT_FAMILY}" \
+        --root /
 
 RUN pacman -Syy --noconfirm \
  && pacman-key --populate
@@ -137,21 +144,23 @@ RUN install -d /usr/local/bin \
 # Shim /usr/local/bin/dkms so the alpm hooks (which call `dkms` via
 # PATH, and /usr/local/bin precedes /usr/bin) wrap the real binary
 # with faketime. The shim runs from a PostTransaction hook after the
-# bulk pacman -S finishes — by which point libfaketime (in
-# {arch,cachy}-common.txt) has been installed, so /usr/bin/faketime
-# is available. We don't COPY libfaketime from the libfaketime stage
-# here because it'd file-conflict with the package install.
-# finalize-image.sh removes the shim before bootc-lint so the runtime
-# image has plain /usr/bin/dkms behavior.
+# bulk pacman -S finishes — by which point libfaketime (in the base
+# layer) has been installed, so /usr/bin/faketime is available. We
+# don't COPY libfaketime from the libfaketime stage here because it'd
+# file-conflict with the package install. finalize-image.sh removes
+# the shim before bootc-lint so the runtime image has plain
+# /usr/bin/dkms behavior.
 RUN install -d /usr/local/bin \
  && printf '#!/bin/sh\nexec /usr/bin/faketime "2026-05-06 00:00:00" /usr/bin/dkms "$@"\n' \
         > /usr/local/bin/dkms \
  && chmod +x /usr/local/bin/dkms
 
-# Strip comments + blanks; retry up to 5x for transient mirror 404s.
-RUN pkglist=$(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' \
-        "/tmp/cache22-build/packages/${VARIANT_FAMILY}-common.txt" \
-        "/tmp/cache22-build/packages/${VARIANT}.txt") \
+# Expand the manifest into a deduplicated package list, then install
+# in one transaction. Retry up to 5x for transient mirror 404s.
+RUN pkglist=$(/tmp/cache22-build/scripts/expand-manifest.sh \
+        --family "${VARIANT_FAMILY}" \
+        --manifest "/tmp/cache22-build/packages/manifests/${VARIANT}.manifest" \
+        --layers-dir "/tmp/cache22-build/packages/layers/${VARIANT_FAMILY}") \
  && for attempt in 1 2 3 4 5; do \
         echo "==> pacman -S attempt $attempt"; \
         pacman -Syy --noconfirm; \
@@ -167,12 +176,14 @@ RUN pkglist=$(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' \
         sleep 60; \
     done
 
-# Re-apply overlay so post-install package files (e.g. ostree's
+# Re-apply layered overlay so post-install package files (e.g. ostree's
 # prepare-root.conf) don't clobber our config.
-RUN cp -av --remove-destination /tmp/cache22-build/system_files/common/. / \
- && if [ -d "/tmp/cache22-build/system_files/${VARIANT}" ]; then \
-        cp -av --remove-destination "/tmp/cache22-build/system_files/${VARIANT}/." /; \
-    fi
+RUN /tmp/cache22-build/scripts/apply-system-files.sh \
+        --family "${VARIANT_FAMILY}" \
+        --manifest "/tmp/cache22-build/packages/manifests/${VARIANT}.manifest" \
+        --common-dir /tmp/cache22-build/system_files/common \
+        --layers-dir "/tmp/cache22-build/system_files/layers/${VARIANT_FAMILY}" \
+        --root /
 
 RUN /tmp/cache22-build/scripts/patch-ostree-dracut.sh
 RUN /tmp/cache22-build/scripts/generate-initramfs.sh
@@ -188,7 +199,6 @@ RUN bootc container lint
 
 # Strip [cache22-aur] from pacman.conf since the file:// repo it
 # points at is about to be removed. The block (header + 2 lines)
-# ends at the next blank line. Sed is a no-op when absent (cachy
-# variants and arch-server skip the inject entirely).
+# ends at the next blank line. Sed is a no-op when absent.
 RUN sed -i '/^\[cache22-aur\]/,/^$/d' /etc/pacman.conf \
  && rm -rf /tmp/cache22-build /var/cache/pacman/cache22-aur

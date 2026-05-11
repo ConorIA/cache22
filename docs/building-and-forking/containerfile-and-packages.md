@@ -15,9 +15,9 @@ The `Containerfile` runs these steps in order for each variant:
 1. `FROM` the base image (`cachyos/cachyos-v3` for cachy variants, `archlinux/archlinux` for arch variants).
 2. Run `scripts/rewrite-pacman-paths.sh` to relocate pacman state from `/var/lib/pacman` to `/usr/lib/sysimage/pacman`. (Required because bootc does not let `/var` be in the OCI layer.)
 3. Run `scripts/inject-custom-repos-{cachy,arch}.sh` to add cmspam/* repos and the in-image cache22-aur repo to pacman.conf.
-4. First overlay of `system_files/common/` and `system_files/<variant>/`.
-5. `pacman -S` from `packages/<family>-common.txt` and `packages/<variant>.txt`.
-6. Second overlay of `system_files/` (re-applies in case package install overwrote anything).
+4. First overlay of `system_files/common/` and the per-layer overlays listed in the variant manifest.
+5. `pacman -S` from the package list expanded by `scripts/expand-manifest.sh`.
+6. Second overlay of the same files (re-applies in case package install overwrote anything).
 7. Run `scripts/patch-ostree-dracut.sh` to ensure ostree's dracut module is present.
 8. Run `scripts/generate-initramfs.sh` to build the initramfs.
 9. Run `scripts/finalize-image.sh` for last-mile fixups.
@@ -27,55 +27,79 @@ The two-overlay pattern (steps 4 and 6) is intentional: package installs may ove
 
 ## packages/
 
-One file per (family, profile) combination:
-
-| File | Applied to |
-|---|---|
-| `packages/cachy-common.txt` | cachy-kde and cachy-server. |
-| `packages/cachy-kde.txt` | cachy-kde only. |
-| `packages/cachy-server.txt` | cachy-server only. |
-| `packages/arch-common.txt` | arch-kde and arch-server. |
-| `packages/arch-kde.txt` | arch-kde only. |
-| `packages/arch-server.txt` | arch-server only. |
-
-Format: one package per line. Comment lines start with `#`. Blank lines are allowed.
-
-The build does:
+Layered. Three top-level pieces:
 
 ```
-pacman -S --needed --noconfirm $(cat packages/<family>-common.txt packages/<variant>.txt | sed 's/#.*//' | grep -v '^[[:space:]]*$')
+packages/
+├── layers/
+│   ├── cachy/
+│   │   ├── base.txt        kernel + system + non-GPU userland (always)
+│   │   ├── server.txt      cockpit
+│   │   ├── nvidia.txt      pre-built linux-cachyos-bore-lto-nvidia-open + userland
+│   │   ├── desktop.txt     GPU userland, fonts, IMEs, generic apps
+│   │   ├── gaming.txt      Steam, gamescope, mangohud, lutris, sunshine
+│   │   ├── kde.txt         Plasma 6 + KDE apps
+│   │   └── gnome.txt       GNOME Shell + GNOME apps
+│   └── arch/               same layer names, arch-specific package picks
+└── manifests/
+    ├── cachy-server.manifest
+    ├── cachy-kde-gaming-nvidia.manifest
+    ├── arch-gnome.manifest
+    └── ... (20 total)
 ```
+
+A manifest names the layers a variant pulls, one per line, in install order. Comments (`#`) and blanks are ignored.
+
+```
+# packages/manifests/cachy-kde-gaming-nvidia.manifest
+base
+desktop
+gaming
+nvidia
+kde-gaming
+kde
+```
+
+The build expands the manifest with `scripts/expand-manifest.sh`:
+
+```
+pacman -S --needed --noconfirm $(scripts/expand-manifest.sh \
+    --family cachy \
+    --manifest packages/manifests/cachy-kde-gaming-nvidia.manifest \
+    --layers-dir packages/layers/cachy)
+```
+
+Each layer's `.txt` file is one package per line, with `#` comments and blanks. A missing `.txt` is treated as empty — useful for system_files-only layers like `kde-gaming`.
 
 Packages must be available in pacman repositories the build sees. cache22 ships the standard CachyOS or Arch repos plus:
 
 - `cmspam/qemu-patched-v3`. VA-API patched QEMU.
 - `cmspam/gamescope-patched`. NVIDIA-fixed gamescope.
 - `cmspam/xe-virt-host-v3`. Intel Xe virgl-host packages.
-- `cache22-aur` (built in-image at build time). AUR packages cache22 includes.
+- `cache22-aur` (built in-image at build time). AUR packages cache22 needs.
 
-To add an AUR package:
-
-1. Edit `scripts/build-aur-packages.sh` to include the package name.
-2. Add the package to `packages/<...>.txt` so it gets installed from the in-image repo.
+To add an AUR package: just list it in the appropriate layer's `.txt` file. `scripts/build-aur-packages.sh` auto-detects names that no configured pacman repo provides and builds them (plus transitive AUR deps) into the in-image `cache22-aur` repo.
 
 ## system_files/
 
-Path under `system_files/common/` maps to absolute path in the image:
+Same layout as `packages/`. Path under `system_files/common/` maps to absolute path in the image:
 
 ```
 system_files/common/etc/foo.conf      -> /etc/foo.conf
-system_files/common/usr/bin/myscript   -> /usr/bin/myscript
-system_files/common/usr/lib/systemd/system/myunit.service
-                                        -> /usr/lib/systemd/system/myunit.service
+system_files/common/usr/bin/myscript  -> /usr/bin/myscript
 ```
 
-Per-variant overlays use `system_files/<variant>/` with the same path mapping. Per-variant overlays apply on top of common, so files in both with the same path are overridden by the variant version.
+Per-layer overlays live under `system_files/layers/<family>/<layer>/`. They apply on top of `common/` in manifest order, so files in a later layer override earlier ones (and `common/`).
+
+Intersection layers — content that should only ship when two layers are both active — are named `<a>-<b>` (e.g. `kde-gaming`) and listed explicitly in the manifests where both apply. The `kde-gaming` directory carries the SteamOS-style gamescope session switcher, which depends on both Plasma's login manager and the Steam runtime.
+
+A layer can have a system_files dir without a `.txt` and vice versa.
 
 Permissions are preserved as in the source tree. Make scripts executable BEFORE committing:
 
 ```
-chmod +x system_files/common/usr/bin/myscript
-git add --chmod=+x system_files/common/usr/bin/myscript
+chmod +x system_files/layers/cachy/desktop/usr/bin/myscript
+git add --chmod=+x system_files/layers/cachy/desktop/usr/bin/myscript
 ```
 
 ## scripts/
@@ -87,7 +111,9 @@ Scripts called by the Containerfile. Edit them to change build behavior.
 | `scripts/rewrite-pacman-paths.sh` | Move pacman state to /usr/lib/sysimage. |
 | `scripts/inject-custom-repos-cachy.sh` | Add cmspam/* + cache22-aur to pacman.conf for cachy variants. |
 | `scripts/inject-custom-repos-arch.sh` | Same for arch variants. |
-| `scripts/build-aur-packages.sh` | Build in-image AUR packages, populate cache22-aur repo. |
+| `scripts/expand-manifest.sh` | Resolve a manifest into a deduplicated package list. |
+| `scripts/apply-system-files.sh` | Apply common + manifest-listed system_files layers to a target root. |
+| `scripts/build-aur-packages.sh` | Auto-detect + build in-image AUR packages, populate cache22-aur. |
 | `scripts/patch-ostree-dracut.sh` | Ensure ostree's dracut module is in the right place. |
 | `scripts/generate-initramfs.sh` | Run dracut to build the initramfs. |
 | `scripts/var-to-tmpfiles.sh` | Move build-time /var content to /usr/share/factory/var/ + tmpfiles.d. |
@@ -134,6 +160,13 @@ This verifies:
 - BLS / kargs configurations are well-formed.
 
 If lint fails, the build fails. The error message indicates what's wrong.
+
+## Adding a new variant
+
+1. Drop a `packages/manifests/<id>.manifest` listing the layers it pulls, in order.
+2. Add a CI matrix entry in `.github/workflows/build-image.yml` (variant id, family, base image).
+3. Add a `variants.json` entry (id, label, description, image ref).
+4. If the variant introduces a new layer, add `packages/layers/<family>/<layer>.txt` and (optional) `system_files/layers/<family>/<layer>/`.
 
 ## See also
 

@@ -10,14 +10,38 @@
 # building either one drags in their own toolchain dance. We just
 # clone the AUR repo, parse .SRCINFO for deps, and recurse.
 #
-# usage: build-aur-packages.sh <pkglist1> [<pkglist2> ...]
+# usage:
+#   build-aur-packages.sh --family cachy \
+#                         --manifest packages/manifests/cachy-kde.manifest \
+#                         --layers-dir packages/layers/cachy
 
 set -euo pipefail
+
+FAMILY=""
+MANIFEST=""
+LAYERS_DIR=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --family)     FAMILY="$2"; shift 2 ;;
+        --manifest)   MANIFEST="$2"; shift 2 ;;
+        --layers-dir) LAYERS_DIR="$2"; shift 2 ;;
+        *) echo "build-aur-packages.sh: unknown arg '$1'" >&2; exit 2 ;;
+    esac
+done
+
+[[ -n "$FAMILY"     ]] || { echo "build-aur-packages.sh: --family required" >&2; exit 2; }
+[[ -n "$MANIFEST"   ]] || { echo "build-aur-packages.sh: --manifest required" >&2; exit 2; }
+[[ -n "$LAYERS_DIR" ]] || { echo "build-aur-packages.sh: --layers-dir required" >&2; exit 2; }
 
 OUT=/aur-out
 mkdir -p "$OUT"
 
-PKGS=$(sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$@" | sort -u)
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PKGS=$("$SCRIPT_DIR/expand-manifest.sh" \
+            --family "$FAMILY" \
+            --manifest "$MANIFEST" \
+            --layers-dir "$LAYERS_DIR")
 
 # pacman -Syy retry loop: GitHub Releases occasionally serves a transient
 # 404 for repo .db files when a release is being updated server-side. The
