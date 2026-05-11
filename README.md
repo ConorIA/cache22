@@ -21,6 +21,17 @@ KDE variants additionally include Steam, Lutris, gamemode, MangoHud, gamescope, 
 
 cache22 is intended as an Arch-based equivalent to [Bazzite](https://bazzite.gg/) — same atomic-image philosophy, same gaming/desktop focus, but built on the Arch/CachyOS userland instead of Fedora. Aimed at desktop and laptop use; **no Steam Deck or handheld-specific patches**.
 
+### Two fast paths for applying updates
+
+Most immutable distributions force a full reboot to apply any staged update — firmware POST, bootloader, kernel boot, services restart, the works. cache22 ships two faster paths and `cache22-reboot` picks between them automatically:
+
+- **Soft-reboot** (~5 sec) — when bootc reports the staged deploy uses the same kernel + initramfs as the booted one (typical for userspace-only updates), `systemctl soft-reboot` pivots into the new deploy's userspace without a kernel restart. Network connections survive briefly. cache22 ships its own `prepare-soft-reboot` helper to set up `/run/nextroot` for the legacy ostree backend (ostree's own equivalent requires the composefs backend).
+- **kexec** (~10-30 sec faster than a hard reboot) — when the kernel did change but you want to skip firmware POST + the bootloader. Opt-in via `KERNEL_CHANGE_STRATEGY=kexec` in `/etc/cache22/reboot.conf`.
+
+Hard reboot is still always available as `cache22-reboot --hard`, and the auto-picker falls back to it when neither fast path is viable. See [Applying an update](#applying-an-update-cache22-reboot) below.
+
+### Other highlights
+
 A handful of upstream packages are rebuilt with patches that aren't in stock Arch or CachyOS:
 
 - **[`gamescope-patched`](https://github.com/cmspam/gamescope-patched)** — fixes Steam remote-play under NVIDIA (the stock build produces a black screen with inverted colors). Pulled in automatically by `pacman -S gamescope`.
@@ -176,7 +187,9 @@ KERNEL_CHANGE_STRATEGY=hard   # or: kexec
 
 **kexec** picks the UKI sd-boot would auto-default to (highest `.osrel VERSION_ID`), extracts the kernel + initrd + cmdline from the signed PE, re-signs the kernel with your per-machine key (so it works under kernel lockdown if ever enabled), stages it via `kexec_load`, then triggers `systemctl kexec` for a clean shutdown into the new kernel. Faster than firmware POST but some quirky hardware doesn't kexec cleanly — that's why it's opt-in.
 
-Caveats for kexec: TPM PCR 11 won't reflect the running kernel after kexec (sd-stub measures during normal boot only); microcode updates won't take effect mid-kexec; some specific hardware (certain NICs, GPUs) doesn't kexec reliably and falls back to a normal reboot.
+**kexec + LUKS+TPM auto-unlock:** by default `cache22-encryption enroll` binds LUKS to PCR 11, which is measured by sd-stub at every UKI boot. kexec bypasses sd-stub, so PCR 11 won't match any signed prediction and the kernel falls through to the LUKS passphrase prompt. To get kexec auto-unlock, answer "y" to the optional PCR 7 fallback prompt when running `cache22-encryption enroll` — that adds a second TPM2 keyslot bound to PCR 7 (Secure Boot state, unchanged by kexec). The PCR 11 keyslot is still the primary; PCR 7 only kicks in when PCR 11 fails. Tradeoff and full discussion in [`docs/SECUREBOOT.md`](docs/SECUREBOOT.md).
+
+Other kexec caveats: microcode updates won't take effect mid-kexec; some specific hardware (certain NICs, GPUs) doesn't kexec reliably and falls back to a normal reboot.
 
 Typical workflow:
 
@@ -255,21 +268,27 @@ sudo cache22-karg list
 sudo cache22-karg remove nvidia_drm.fbdev
 ```
 
-For TPM2 LUKS auto-unlock (binds to firmware + Secure Boot state, so kernel updates don't break unlock):
+For TPM2 LUKS auto-unlock:
 
 ```bash
 sudo cache22-encryption enroll /dev/nvme0n1p3
 ```
+
+Always enrolls a PCR 11 signed-policy keyslot (survives UKI rebuilds without re-enrollment). Interactively asks whether to also enroll a PCR 7 keyslot — that's the kexec fallback discussed above. Pick yes if you use `cache22-reboot --kexec` regularly; pick no for stricter Type-1-BLS-entry protection. [`docs/SECUREBOOT.md`](docs/SECUREBOOT.md) has the full security model.
 
 ## Helpers reference
 
 | Command | What it does |
 | --- | --- |
 | `cache22-update` | Recommended upgrade frontend — pull + stage (finalize + UKI build deferred to next shutdown); optional `--reboot` and `--app-updates`. |
-| `cache22-rebase` | Switch between cache22 variants (cachy ↔ arch, server ↔ kde). |
+| `cache22-reboot` | Single entry-point for applying a staged update. Auto-picks soft-reboot / kexec / hard reboot. `--check` previews the strategy. |
+| `cache22-autoupdate` | Schedule unattended `cache22-update` runs. `enable`/`disable`/`status`, profile-aware. |
+| `cache22-autoreboot` | Schedule unattended reboots inside a configurable window. Delegates to `cache22-reboot` for the actual reboot. |
+| `cache22-changelog` | Show package-level diff between booted and staged deploys; `--check` is silent and used by login banners. |
+| `cache22-rebase` | Switch between cache22 variants (cachy ↔ arch, server ↔ kde) or pin to specific image refs. |
 | `cache22-secureboot` | Manage the per-machine SB key + firmware DB enrollment. `status`, `enable`, `disable`, `rotate-keys`. |
-| `cache22-karg` | Manage persistent kernel command-line args. |
-| `cache22-encryption` | TPM2 auto-unlock for LUKS volumes. |
+| `cache22-karg` | Manage persistent kernel command-line args via `/etc/cache22/extra-cmdline`. |
+| `cache22-encryption` | TPM2 auto-unlock for LUKS volumes. `enroll` interactively offers PCR 11 + optional PCR 7 (for kexec fallback). |
 | `cache22-shell` | Open a CachyOS distrobox container for non-immutable package work. |
 | `cache22-healthcheck` | Runs your `/etc/cache22/healthcheck.d/required.d/` scripts 2 min after boot; auto-rollback after 3 bad boots. |
 | `cache22-gamescope-mode` | (KDE only) Toggle SteamOS-style gamescope autologin. |
