@@ -62,15 +62,35 @@ cache22-secureboot rotate-keys    # backup + regenerate + re-enroll + re-sign + 
 
 ## TPM2 LUKS unlock
 
-Bind the LUKS keyslot to a signed PCR 11 policy:
-
 ```
 sudo cache22-encryption enroll /dev/<root-luks>
 ```
 
-This calls `systemd-cryptenroll --tpm2-public-key=/var/lib/cache22/sbkey/tpm-pcr11.pub --tpm2-public-key-pcrs=11`. Every UKI rebuilt by `resign-uki` ships a fresh `.pcrsig` signed by the matching private key, so kernel updates, karg changes, and image switches all keep TPM unseal working without re-enrollment.
+The tool prompts for a policy choice:
 
-If TPM unseal ever fails (firmware update, SB state change), the user gets a passphrase prompt instead of auto-unlock — surfacing the change.
+### PCR 11 (default)
+
+Calls `systemd-cryptenroll --tpm2-public-key=/var/lib/cache22/sbkey/tpm-pcr11.pub --tpm2-public-key-pcrs=11`. Every UKI rebuilt by `resign-uki` ships a fresh `.pcrsig` signed by the matching private key, so kernel updates, karg changes, and image switches all keep TPM unseal working without re-enrollment.
+
+Defends against the **Type 1 BLS-entry attack**: an attacker with your db signing key + ESP write access could plant `/loader/entries/x.conf` referencing a separately-signed kernel with arbitrary cmdline. sd-boot would load it (SB-signed), but no sd-stub would run, so PCR 11 wouldn't reach any signed prediction → LUKS stays sealed. PCR 7 binding does not catch this case.
+
+**Tradeoff:** `cache22-reboot --kexec` won't auto-unlock LUKS (kexec bypasses sd-stub, PCR 11 can't reach the right value). The new kernel will fall through to the passphrase prompt.
+
+### PCR 7
+
+Calls `systemd-cryptenroll --tpm2-pcrs=7`. Bound to current Secure Boot state — survives kexec because PCR 7 doesn't change between cache22 UKIs (same db key signs all of them). Loses the Type 1 attack defense above.
+
+**Re-enrollment NEEDED after `cache22-secureboot rotate-keys`** — rotating keys changes which key is enrolled in firmware db, which changes PCR 7's value, which makes the existing PCR 7 keyslot useless until re-enrolled.
+
+### Which to choose
+
+For most cache22 users on hardware where boot speed matters and threat surface is mostly remote, **PCR 7** is the practical pick: kexec works and the Type 1 attack requires an attacker who already has your db key (which means they had LUKS-unlocked access — at which point they have plenty of better options anyway).
+
+For users who never use `cache22-reboot --kexec`, **PCR 11** gives a strictly stronger guarantee at zero cost.
+
+If TPM unseal ever fails (firmware update, SB state change, or PCR-7-keyslot after rotate-keys), the user gets a passphrase prompt instead of auto-unlock — surfacing the change.
+
+Switching between policies later: `cache22-encryption remove <dev>` then `cache22-encryption enroll <dev>` again with the other choice.
 
 ## Threat model
 
@@ -78,7 +98,7 @@ What's protected:
 
 - Bootloader (sd-boot) and UKI (kernel + initramfs + cmdline) are SB-signed; firmware refuses unsigned alternatives.
 - Cmdline tampering at the loader is impossible: there is no menu editor (`editor = no` in `loader.conf`) and sd-stub ignores external cmdline overrides under SB.
-- Per-deploy UKI hash is measured into PCR 11 by sd-stub; a swapped initramfs breaks TPM unseal.
+- Per-deploy UKI hash is measured into PCR 11 by sd-stub; a swapped initramfs breaks TPM unseal (under PCR 11 binding only — see "Which to choose" above for the PCR 7 tradeoff).
 - Firmware-level SB state changes are detected: the LUKS unseal sees a different PCR set than was signed and falls back to passphrase.
 
 What's not protected:

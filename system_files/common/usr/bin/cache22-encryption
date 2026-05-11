@@ -1,8 +1,20 @@
 #!/usr/bin/env bash
-# cache22-encryption — manage TPM2 auto-unlock for LUKS volumes via
-# signed PCR 11 policy. Bound to the per-machine TPM signing key, so
-# every UKI rebuild (after `bootc upgrade`, karg change, etc.) is
-# accepted automatically without re-enrollment.
+# cache22-encryption — manage TPM2 auto-unlock for LUKS volumes.
+#
+# Two policy options, chosen interactively at enroll time:
+#
+#   PCR 11 (default) — signed-policy bound to UKI content. Defends
+#       against a Type 1 BLS-entry attack where someone with your db
+#       signing key plants a different cmdline. Re-enrollment NOT
+#       needed for normal updates (UKI rebuilds ship a new .pcrsig
+#       signed by the same key, automatically accepted).
+#       Tradeoff: cache22-reboot --kexec won't auto-unlock LUKS,
+#       you'll need to type the passphrase after kexec.
+#
+#   PCR 7 — bound to current Secure Boot state. Weaker against the
+#       Type 1 attack, but survives kexec (so cache22-reboot --kexec
+#       auto-unlocks). Re-enrollment NEEDED after running
+#       `cache22-secureboot rotate-keys` (it changes PCR 7).
 #
 # Subcommands:
 #   list                 show encrypted volumes + TPM status
@@ -51,24 +63,65 @@ cmd_enroll() {
     [[ -f "$TPM_PUB" ]] || die "$TPM_PUB missing — run cache22-secureboot enable first."
 
     cat <<EOF
-About to enroll TPM2 unlock for $device.
+About to enroll TPM2 auto-unlock for $device.
 
-Sealed via signed PCR 11 policy. The LUKS keyslot trusts any PCR 11
-value for which a signature by $TPM_PUB exists — so kernel/initramfs
-updates that produce a new UKI keep working automatically (the new
-UKI ships its own .pcrsig signed by the same key).
+Choose a policy:
 
-You will be prompted for the existing LUKS passphrase.
+  [1] PCR 11 (default, recommended)
+      Sealed via signed PCR 11 policy. Bound to UKI content; defends
+      against a Type 1 BLS-entry attack where someone with your db
+      signing key plants a different kernel cmdline. UKI rebuilds
+      keep working automatically (each new UKI ships its own .pcrsig
+      signed by the same key — no re-enrollment needed).
+      *cache22-reboot --kexec will NOT auto-unlock LUKS; you'll need
+       to type the passphrase after kexec.*
+
+  [2] PCR 7
+      Bound to current Secure Boot state. Weaker against the Type 1
+      attack (an attacker with your db key + ESP write access could
+      plant a BLS entry with arbitrary cmdline that auto-unlocks).
+      *cache22-reboot --kexec WILL auto-unlock LUKS.*
+      Re-enrollment needed after \`cache22-secureboot rotate-keys\`.
+
+Pick PCR 7 only if you regularly use cache22-reboot --kexec and want
+it to auto-unlock without typing the passphrase.
+
 EOF
-    read -rp "Continue? [y/N] " confirm
-    [[ "${confirm,,}" == "y" ]] || { echo "Aborted."; exit 0; }
+    local pcr_choice
+    read -rp "Choice [1/2, default 1]: " pcr_choice
+    pcr_choice="${pcr_choice:-1}"
+    case "$pcr_choice" in
+        1)
+            echo "==> Enrolling PCR 11 signed-policy keyslot..."
+            echo "    (You'll be prompted for the existing LUKS passphrase.)"
+            systemd-cryptenroll \
+                --tpm2-device=auto \
+                --tpm2-public-key="$TPM_PUB" \
+                --tpm2-public-key-pcrs=11 \
+                "$device"
+            echo "[OK] PCR 11 keyslot enrolled. Reboot to use it."
+            ;;
+        2)
+            echo "==> Enrolling PCR 7 keyslot..."
+            echo "    (You'll be prompted for the existing LUKS passphrase.)"
+            systemd-cryptenroll \
+                --tpm2-device=auto \
+                --tpm2-pcrs=7 \
+                "$device"
+            cat <<EOF
+[OK] PCR 7 keyslot enrolled. Reboot to use it.
 
-    systemd-cryptenroll \
-        --tpm2-device=auto \
-        --tpm2-public-key="$TPM_PUB" \
-        --tpm2-public-key-pcrs=11 \
-        "$device"
-    echo "[OK] TPM2 enrolled. Reboot to use it."
+REMEMBER:
+  - Re-run this after \`cache22-secureboot rotate-keys\` (the rotation
+    changes PCR 7 and invalidates this keyslot).
+  - To switch back to PCR 11 later: run \`cache22-encryption remove $device\`,
+    then \`cache22-encryption enroll $device\` again and pick [1].
+EOF
+            ;;
+        *)
+            die "Invalid choice '$pcr_choice'. Aborted, no changes made."
+            ;;
+    esac
 }
 
 cmd_remove() {
@@ -83,6 +136,6 @@ case "${1:-list}" in
     list)         cmd_list ;;
     enroll)       shift; cmd_enroll "$@" ;;
     remove)       shift; cmd_remove "$@" ;;
-    -h|--help)    sed -n '2,11p' "$0" | sed 's/^# \?//' ;;
+    -h|--help)    sed -n '2,23p' "$0" | sed 's/^# \?//' ;;
     *)            echo "Usage: cache22-encryption [list|enroll <device>|remove <device>|--help]" >&2; exit 1 ;;
 esac

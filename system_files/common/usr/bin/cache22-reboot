@@ -193,8 +193,37 @@ do_soft_reboot() {
 # Picks the UKI sd-boot would auto-default to (highest .osrel
 # VERSION_ID across cache22-*.efi). For a staged-but-not-finalized
 # deploy, the UKI doesn't exist yet — finalize + build first.
+#
+# kexec + LUKS+TPM caveat: kexec bypasses sd-stub, so PCR 11 isn't
+# measured for the new UKI → TPM unseal under PCR 11 binding fails.
+# If LUKS auto-unlock is bound to PCR 11 (default for cache22-encryption),
+# the new kernel will fall through to passphrase prompt. Heads-up
+# below; see `cache22-encryption --help` for the PCR 7 alternative.
 do_kexec() {
     echo "==> kexec ($(explain))"
+
+    # Best-effort detection: if any TPM2 keyslot is enrolled on a LUKS
+    # device, warn that kexec might prompt for passphrase. We can't
+    # easily tell PCR 11 vs PCR 7 enrollment without parsing tokens,
+    # so we just flag the general possibility.
+    if command -v cryptsetup >/dev/null 2>&1; then
+        local crypt_devs
+        crypt_devs=$(awk '$1 !~ /^#/ && NF >= 2 {print $2}' /etc/crypttab 2>/dev/null)
+        for dev in $crypt_devs; do
+            [[ -b "$dev" ]] || continue
+            if cryptsetup luksDump "$dev" 2>/dev/null | grep -q 'systemd-tpm2'; then
+                cat >&2 <<'EOF'
+    NOTE: a TPM2 keyslot is enrolled on this system. If it's bound to
+          PCR 11 (the default), the kexec'd kernel will not auto-unlock
+          LUKS — sd-stub doesn't run during kexec, so PCR 11 doesn't get
+          the expected measurements. You'll need to type the passphrase.
+          To make kexec auto-unlock, re-enroll with PCR 7 — see
+          `cache22-encryption --help`.
+EOF
+                break
+            fi
+        done
+    fi
 
     if [[ "$has_staged" == "yes" ]]; then
         echo "    finalizing staged deploy"
