@@ -49,7 +49,7 @@ cache22-install
 
 The installer walks through the following prompts:
 
-1. **Variant.** Choose between `cachy-kde`, `cachy-server`, `arch-kde`, or `arch-server`. The picker fetches the live variant catalog from this repository so the choices stay current. See [Variants](../variants/) for details on each.
+1. **Variant.** Choose between `cachy-server`, `cachy-kde`, `cachy-gnome`, `arch-server`, `arch-kde`, or `arch-gnome`. The picker fetches the live variant catalog from this repository so the choices stay current. See [Variants](../variants/) for details on each.
 2. **Target disk.** Lists candidate disks. Selecting a disk in whole-disk mode erases it.
 3. **LUKS encryption.** When enabled, the root partition is encrypted with LUKS2. A passphrase is required at install time. TPM2 auto-unlock can be enabled later with [`cache22-encryption`](../../boot-and-security/tpm-luks/).
 4. **User account.** Username, password, and groups (`wheel` for sudo by default).
