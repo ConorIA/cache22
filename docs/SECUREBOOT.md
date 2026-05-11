@@ -66,31 +66,32 @@ cache22-secureboot rotate-keys    # backup + regenerate + re-enroll + re-sign + 
 sudo cache22-encryption enroll /dev/<root-luks>
 ```
 
-The tool prompts for a policy choice:
+The tool always enrolls a **PCR 11 (signed-policy) keyslot** as the main unlock method, then asks whether to *also* enroll a **PCR 7 keyslot as a kexec fallback**.
 
-### PCR 11 (default)
+### PCR 11 keyslot (always enrolled)
 
 Calls `systemd-cryptenroll --tpm2-public-key=/var/lib/cache22/sbkey/tpm-pcr11.pub --tpm2-public-key-pcrs=11`. Every UKI rebuilt by `resign-uki` ships a fresh `.pcrsig` signed by the matching private key, so kernel updates, karg changes, and image switches all keep TPM unseal working without re-enrollment.
 
-Defends against the **Type 1 BLS-entry attack**: an attacker with your db signing key + ESP write access could plant `/loader/entries/x.conf` referencing a separately-signed kernel with arbitrary cmdline. sd-boot would load it (SB-signed), but no sd-stub would run, so PCR 11 wouldn't reach any signed prediction → LUKS stays sealed. PCR 7 binding does not catch this case.
+Defends against the **Type 1 BLS-entry attack**: an attacker with your db signing key + ESP write access could plant `/loader/entries/x.conf` referencing a separately-signed kernel with arbitrary cmdline. sd-boot would load it (SB-signed), but no sd-stub would run, so PCR 11 wouldn't reach any signed prediction → unseal via this keyslot fails.
 
-**Tradeoff:** `cache22-reboot --kexec` won't auto-unlock LUKS (kexec bypasses sd-stub, PCR 11 can't reach the right value). The new kernel will fall through to the passphrase prompt.
+### PCR 7 fallback keyslot (optional)
 
-### PCR 7
+Calls `systemd-cryptenroll --tpm2-pcrs=7`. Bound to current Secure Boot state — survives kexec because PCR 7 doesn't change between cache22 UKIs (same db key signs all of them).
 
-Calls `systemd-cryptenroll --tpm2-pcrs=7`. Bound to current Secure Boot state — survives kexec because PCR 7 doesn't change between cache22 UKIs (same db key signs all of them). Loses the Type 1 attack defense above.
+`systemd-cryptsetup` tries enrolled methods in order; the PCR 7 keyslot only kicks in when the PCR 11 keyslot can't unseal — specifically, after kexec (PCR 11 wasn't measured) and after firmware/SB changes that invalidate PCR 11 predictions.
 
-**Re-enrollment NEEDED after `cache22-secureboot rotate-keys`** — rotating keys changes which key is enrolled in firmware db, which changes PCR 7's value, which makes the existing PCR 7 keyslot useless until re-enrolled.
+**Tradeoff with the fallback:** the Type 1 attack defense effectively goes away. An attacker who triggers a non-sd-stub boot path will fail the PCR 11 unseal but succeed at the PCR 7 unseal — same outcome as if you enrolled only PCR 7. So enrolling PCR 7 ≈ accepting Type 1 attack risk.
+
+**Re-enrollment NEEDED after `cache22-secureboot rotate-keys`** — rotating keys changes PCR 7. The PCR 11 keyslot still works (signed-policy is rotation-stable for this), so normal boot keeps functioning; only the kexec fallback breaks until you re-enroll it.
 
 ### Which to choose
 
-For most cache22 users on hardware where boot speed matters and threat surface is mostly remote, **PCR 7** is the practical pick: kexec works and the Type 1 attack requires an attacker who already has your db key (which means they had LUKS-unlocked access — at which point they have plenty of better options anyway).
+- **Always-no for the PCR 7 fallback** if you don't use `cache22-reboot --kexec`. PCR 11 alone gives the strongest protection.
+- **Yes for the PCR 7 fallback** if kexec is part of your workflow. The Type 1 attack requires an attacker who already has your db signing key (lives on the encrypted root, requires past LUKS-unlocked access to extract). For most home setups that's an acceptable threat-model degradation.
 
-For users who never use `cache22-reboot --kexec`, **PCR 11** gives a strictly stronger guarantee at zero cost.
+`cache22-encryption list` shows which keyslots are enrolled per LUKS device. `cache22-encryption remove <dev>` wipes all TPM2 keyslots — then re-enroll with the other choice if you change your mind.
 
-If TPM unseal ever fails (firmware update, SB state change, or PCR-7-keyslot after rotate-keys), the user gets a passphrase prompt instead of auto-unlock — surfacing the change.
-
-Switching between policies later: `cache22-encryption remove <dev>` then `cache22-encryption enroll <dev>` again with the other choice.
+If TPM unseal ever fails (e.g., post-rotate-keys with no fallback enrolled), the user gets a passphrase prompt instead of auto-unlock — surfacing the change.
 
 ## Threat model
 

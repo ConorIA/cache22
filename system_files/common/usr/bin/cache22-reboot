@@ -202,27 +202,33 @@ do_soft_reboot() {
 do_kexec() {
     echo "==> kexec ($(explain))"
 
-    # Best-effort detection: if any TPM2 keyslot is enrolled on a LUKS
-    # device, warn that kexec might prompt for passphrase. We can't
-    # easily tell PCR 11 vs PCR 7 enrollment without parsing tokens,
-    # so we just flag the general possibility.
+    # Detect whether a PCR 7 fallback keyslot exists. PCR 11 keyslots
+    # alone won't auto-unlock after kexec (sd-stub doesn't run, PCR 11
+    # stays at the booted UKI's value, not the kexec'd one). A PCR 7
+    # keyslot covers this case because PCR 7 is unchanged by the kexec.
     if command -v cryptsetup >/dev/null 2>&1; then
+        local has_tpm2=0 has_pcr7=0 dev pcrs
         local crypt_devs
         crypt_devs=$(awk '$1 !~ /^#/ && NF >= 2 {print $2}' /etc/crypttab 2>/dev/null)
         for dev in $crypt_devs; do
             [[ -b "$dev" ]] || continue
-            if cryptsetup luksDump "$dev" 2>/dev/null | grep -q 'systemd-tpm2'; then
-                cat >&2 <<'EOF'
-    NOTE: a TPM2 keyslot is enrolled on this system. If it's bound to
-          PCR 11 (the default), the kexec'd kernel will not auto-unlock
-          LUKS — sd-stub doesn't run during kexec, so PCR 11 doesn't get
-          the expected measurements. You'll need to type the passphrase.
-          To make kexec auto-unlock, re-enroll with PCR 7 — see
-          `cache22-encryption --help`.
-EOF
-                break
-            fi
+            pcrs=$(cryptsetup luksDump "$dev" 2>/dev/null | awk '
+                /^[[:space:]]+[0-9]+: systemd-tpm2/ { in_token=1; next }
+                in_token && /^[[:space:]]+[0-9]+:/   { in_token=0 }
+                in_token && /tpm2-hash-pcrs:/        { gsub(/[^0-9,+]/,""); print }
+            ')
+            [[ -n "$pcrs" ]] && has_tpm2=1
+            grep -qx '7' <<<"$pcrs" && has_pcr7=1
         done
+        if (( has_tpm2 && !has_pcr7 )); then
+            cat >&2 <<'EOF'
+    NOTE: TPM2 keyslot is enrolled with PCR 11 only — kexec will not
+          auto-unlock LUKS. You'll get a passphrase prompt after the
+          kexec'd kernel boots. To auto-unlock, add a PCR 7 fallback
+          via `cache22-encryption remove <dev>` then `enroll <dev>`
+          and answer "y" to the kexec fallback prompt.
+EOF
+        fi
     fi
 
     if [[ "$has_staged" == "yes" ]]; then

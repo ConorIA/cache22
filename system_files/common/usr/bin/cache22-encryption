@@ -1,25 +1,23 @@
 #!/usr/bin/env bash
 # cache22-encryption — manage TPM2 auto-unlock for LUKS volumes.
 #
-# Two policy options, chosen interactively at enroll time:
+# Always enrolls a PCR 11 (signed-policy) keyslot. Optionally also a
+# PCR 7 keyslot as a kexec fallback.
 #
-#   PCR 11 (default) — signed-policy bound to UKI content. Defends
-#       against a Type 1 BLS-entry attack where someone with your db
-#       signing key plants a different cmdline. Re-enrollment NOT
-#       needed for normal updates (UKI rebuilds ship a new .pcrsig
-#       signed by the same key, automatically accepted).
-#       Tradeoff: cache22-reboot --kexec won't auto-unlock LUKS,
-#       you'll need to type the passphrase after kexec.
+#   PCR 11 (always)  — signed-policy bound to UKI content. Survives
+#       UKI rebuilds without re-enrollment (each new UKI ships its
+#       own .pcrsig signed by the same per-machine key).
 #
-#   PCR 7 — bound to current Secure Boot state. Weaker against the
-#       Type 1 attack, but survives kexec (so cache22-reboot --kexec
-#       auto-unlocks). Re-enrollment NEEDED after running
-#       `cache22-secureboot rotate-keys` (it changes PCR 7).
+#   PCR 7 (optional) — bound to current Secure Boot state. Used as
+#       fallback when PCR 11 unseal fails — specifically: kexec
+#       (which bypasses sd-stub, leaving PCR 11 unmeasured for the
+#       new UKI). Adds Type 1 BLS-entry attack surface (see SECUREBOOT.md).
+#       Re-enrollment NEEDED after `cache22-secureboot rotate-keys`.
 #
 # Subcommands:
-#   list                 show encrypted volumes + TPM status
+#   list                 show encrypted volumes + TPM keyslot status
 #   enroll <device>      enroll TPM2 unlock; reboot to use it
-#   remove <device>      wipe the TPM2 keyslot
+#   remove <device>      wipe ALL TPM2 keyslots on the device
 #   --help
 
 set -euo pipefail
@@ -31,11 +29,23 @@ require_root() {
 }
 die() { echo "Error: $*" >&2; exit 1; }
 
+# Returns the PCR list of each systemd-tpm2 token on a LUKS device,
+# one per line (e.g., "11" or "7"). Empty if no TPM2 keyslots enrolled.
+list_tpm2_pcrs() {
+    local device="$1"
+    cryptsetup luksDump "$device" 2>/dev/null \
+        | awk '
+            /^[[:space:]]+[0-9]+: systemd-tpm2/ { in_token=1; next }
+            in_token && /^[[:space:]]+[0-9]+:/   { in_token=0 }
+            in_token && /tpm2-hash-pcrs:/        { gsub(/[^0-9,+]/,""); print }
+        '
+}
+
 cmd_list() {
     echo "─── Encrypted volumes ───"
     lsblk -o NAME,TYPE,FSTYPE,MOUNTPOINTS | awk 'NR==1 || /crypt|LUKS/'
     echo
-    echo "─── TPM2 ───"
+    echo "─── TPM2 device ───"
     if [[ -c /dev/tpm0 || -c /dev/tpmrm0 ]]; then
         ls /dev/tpm* 2>/dev/null | sed 's/^/  /'
         systemd-cryptenroll --tpm2-device=list 2>/dev/null | sed 's/^/  /' || true
@@ -51,6 +61,29 @@ cmd_list() {
     else
         echo "  Missing — run cache22-secureboot enable to generate."
     fi
+    echo
+    echo "─── TPM2 keyslots per LUKS device ───"
+    local found=0
+    while read -r dev; do
+        [[ -n "$dev" ]] || continue
+        cryptsetup isLuks "/dev/$dev" 2>/dev/null || continue
+        found=1
+        local pcrs
+        pcrs=$(list_tpm2_pcrs "/dev/$dev")
+        if [[ -z "$pcrs" ]]; then
+            echo "  /dev/$dev: no TPM2 keyslot"
+        else
+            echo "  /dev/$dev:"
+            while read -r p; do
+                case "$p" in
+                    11) echo "    PCR 11 — signed-policy (main: survives UKI updates)" ;;
+                    7)  echo "    PCR 7  — kexec fallback (re-enroll after rotate-keys)" ;;
+                    *)  echo "    PCR $p — non-standard" ;;
+                esac
+            done <<<"$pcrs"
+        fi
+    done < <(lsblk -ndo NAME,TYPE | awk '$2=="crypt" || $2=="part" {print $1}')
+    [[ "$found" == "1" ]] || echo "  (no LUKS volumes found)"
 }
 
 cmd_enroll() {
@@ -62,66 +95,64 @@ cmd_enroll() {
     cryptsetup isLuks "$device" 2>/dev/null || die "$device is not a LUKS volume."
     [[ -f "$TPM_PUB" ]] || die "$TPM_PUB missing — run cache22-secureboot enable first."
 
+    if [[ -n "$(list_tpm2_pcrs "$device")" ]]; then
+        die "$device already has TPM2 keyslot(s) enrolled. Run \`cache22-encryption remove $device\` first to re-enroll."
+    fi
+
     cat <<EOF
 About to enroll TPM2 auto-unlock for $device.
 
-Choose a policy:
+A PCR 11 (signed-policy) keyslot will always be enrolled — that's
+the main unlock method. It accepts UKI rebuilds (kernel updates,
+karg changes, image switches) without re-enrollment.
 
-  [1] PCR 11 (default, recommended)
-      Sealed via signed PCR 11 policy. Bound to UKI content; defends
-      against a Type 1 BLS-entry attack where someone with your db
-      signing key plants a different kernel cmdline. UKI rebuilds
-      keep working automatically (each new UKI ships its own .pcrsig
-      signed by the same key — no re-enrollment needed).
-      *cache22-reboot --kexec will NOT auto-unlock LUKS; you'll need
-       to type the passphrase after kexec.*
+You can ALSO enroll a PCR 7 keyslot as a kexec fallback. The two
+keyslots cooperate: normal boots unseal via PCR 11; if PCR 11 unseal
+fails (such as after a kexec, which bypasses sd-stub and leaves PCR 11
+unmeasured), systemd-cryptsetup falls through to the PCR 7 keyslot
+and unseals via that.
 
-  [2] PCR 7
-      Bound to current Secure Boot state. Weaker against the Type 1
-      attack (an attacker with your db key + ESP write access could
-      plant a BLS entry with arbitrary cmdline that auto-unlocks).
-      *cache22-reboot --kexec WILL auto-unlock LUKS.*
-      Re-enrollment needed after \`cache22-secureboot rotate-keys\`.
+Tradeoff for the PCR 7 fallback:
+  - Pro: \`cache22-reboot --kexec\` auto-unlocks LUKS instead of
+    prompting for passphrase.
+  - Con: opens a Type 1 BLS-entry attack vector. An attacker with
+    your db signing key + ESP write access could plant
+    /loader/entries/x.conf pointing at a separately-signed kernel
+    with arbitrary cmdline. sd-boot loads it (signed), no sd-stub
+    runs, PCR 11 unseal fails, PCR 7 unseal succeeds → LUKS unlocks
+    with attacker's cmdline. (See docs/SECUREBOOT.md for context.)
+  - Maintenance: re-run this command after
+    \`cache22-secureboot rotate-keys\` to refresh the PCR 7 keyslot
+    (rotation changes PCR 7's value).
 
-Pick PCR 7 only if you regularly use cache22-reboot --kexec and want
-it to auto-unlock without typing the passphrase.
-
+Recommended: yes if you use cache22-reboot --kexec, no otherwise.
 EOF
-    local pcr_choice
-    read -rp "Choice [1/2, default 1]: " pcr_choice
-    pcr_choice="${pcr_choice:-1}"
-    case "$pcr_choice" in
-        1)
-            echo "==> Enrolling PCR 11 signed-policy keyslot..."
-            echo "    (You'll be prompted for the existing LUKS passphrase.)"
-            systemd-cryptenroll \
-                --tpm2-device=auto \
-                --tpm2-public-key="$TPM_PUB" \
-                --tpm2-public-key-pcrs=11 \
-                "$device"
-            echo "[OK] PCR 11 keyslot enrolled. Reboot to use it."
-            ;;
-        2)
-            echo "==> Enrolling PCR 7 keyslot..."
-            echo "    (You'll be prompted for the existing LUKS passphrase.)"
-            systemd-cryptenroll \
-                --tpm2-device=auto \
-                --tpm2-pcrs=7 \
-                "$device"
-            cat <<EOF
-[OK] PCR 7 keyslot enrolled. Reboot to use it.
+    local kexec_choice
+    read -rp "Also enroll PCR 7 kexec fallback? [y/N] " kexec_choice
 
-REMEMBER:
-  - Re-run this after \`cache22-secureboot rotate-keys\` (the rotation
-    changes PCR 7 and invalidates this keyslot).
-  - To switch back to PCR 11 later: run \`cache22-encryption remove $device\`,
-    then \`cache22-encryption enroll $device\` again and pick [1].
-EOF
-            ;;
-        *)
-            die "Invalid choice '$pcr_choice'. Aborted, no changes made."
-            ;;
-    esac
+    echo
+    echo "==> Enrolling PCR 11 signed-policy keyslot..."
+    echo "    (You'll be prompted for the existing LUKS passphrase.)"
+    systemd-cryptenroll \
+        --tpm2-device=auto \
+        --tpm2-public-key="$TPM_PUB" \
+        --tpm2-public-key-pcrs=11 \
+        "$device"
+    echo "[OK] PCR 11 keyslot enrolled."
+
+    if [[ "${kexec_choice,,}" == "y" ]]; then
+        echo
+        echo "==> Enrolling PCR 7 kexec-fallback keyslot..."
+        echo "    (You'll be prompted for the existing LUKS passphrase again.)"
+        systemd-cryptenroll \
+            --tpm2-device=auto \
+            --tpm2-pcrs=7 \
+            "$device"
+        echo "[OK] PCR 7 keyslot enrolled."
+    fi
+
+    echo
+    echo "Reboot to use TPM unlock."
 }
 
 cmd_remove() {
@@ -130,12 +161,13 @@ cmd_remove() {
     [[ -n "$device" ]] || die "Usage: cache22-encryption remove <device>"
     [[ -b "$device" ]] || die "$device is not a block device."
     systemd-cryptenroll --wipe-slot=tpm2 "$device"
+    echo "[OK] All TPM2 keyslots wiped from $device."
 }
 
 case "${1:-list}" in
     list)         cmd_list ;;
     enroll)       shift; cmd_enroll "$@" ;;
     remove)       shift; cmd_remove "$@" ;;
-    -h|--help)    sed -n '2,23p' "$0" | sed 's/^# \?//' ;;
+    -h|--help)    sed -n '2,21p' "$0" | sed 's/^# \?//' ;;
     *)            echo "Usage: cache22-encryption [list|enroll <device>|remove <device>|--help]" >&2; exit 1 ;;
 esac
