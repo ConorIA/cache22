@@ -167,6 +167,28 @@ class GhcrClient:
         )
         return status == 200
 
+    def blob_mount(self, target_repo: str, source_repo: str, digest: str) -> bool:
+        """Cross-repo mount: tell ghcr.io to make `digest` available in
+        `target_repo` by reference to `source_repo`, without transferring
+        bytes. Returns True on 201 (Created)."""
+        url = (
+            f"https://ghcr.io/v2/{target_repo}/blobs/uploads/"
+            f"?mount={urllib.parse.quote(digest, safe='')}"
+            f"&from={urllib.parse.quote(source_repo, safe='')}"
+        )
+        # Mount needs push scope on target. Source-repo read access is
+        # implicit (the registry validates we have it server-side).
+        status, _, _ = self._request(
+            "POST", url, target_repo, action="push",
+            headers={"Content-Length": "0"},
+            data=b"",
+            timeout=30,
+        )
+        # 201 → mounted. 202 → registry chose to start a new upload
+        # (mount declined; usually a permission issue or cross-host repo).
+        # Treat 202 as a soft fail so the caller can fall back to upload.
+        return status == 201
+
     def blob_upload(self, repo: str, blob_path: Path, digest: str) -> bool:
         """POST then PUT a blob to <repo>. Returns True on 201."""
         # 1. Initiate upload

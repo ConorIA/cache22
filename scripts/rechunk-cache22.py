@@ -796,34 +796,27 @@ def main():
                 digest = layer.get("digest")
                 size = layer.get("size")
                 if digest and size and diff_id:
-                    # Stage the blob locally so the OCI layout we hand
-                    # to skopeo is self-contained. The blob bytes
-                    # download is much cheaper than re-running zstd-19.
-                    local_blob = out_blobs / digest.removeprefix("sha256:")
-                    if local_blob.exists() or cache.blob_get(
-                        args.cache_repo, digest, local_blob
-                    ):
-                        layers_desc.append({
-                            "mediaType": layer.get(
-                                "mediaType",
-                                "application/vnd.oci.image.layer.v1.tar+zstd",
-                            ),
-                            "digest": digest,
-                            "size": size,
-                            "_diff_id": diff_id,
-                        })
-                        cache_hits += 1
-                        print(
-                            f"    [solo-{pkg:32s}] CACHE HIT  {ckey}",
-                            flush=True,
-                        )
-                        continue
-                    # If blob fetch failed, fall through to fresh build.
+                    # Cache hit. Don't fetch the blob bytes — record the
+                    # digest+size+source so push-with-cache.py can do a
+                    # cross-repo mount from the cache repo into the
+                    # variant repo at push time. Saves both the download
+                    # to runner AND the subsequent upload.
+                    layers_desc.append({
+                        "mediaType": layer.get(
+                            "mediaType",
+                            "application/vnd.oci.image.layer.v1.tar+zstd",
+                        ),
+                        "digest": digest,
+                        "size": size,
+                        "_diff_id": diff_id,
+                        "_cache_source": args.cache_repo,
+                    })
+                    cache_hits += 1
                     print(
-                        f"    [solo-{pkg:32s}] cache hit but blob fetch "
-                        f"failed; rebuilding",
+                        f"    [solo-{pkg:32s}] CACHE HIT  {ckey}",
                         flush=True,
                     )
+                    continue
 
             desc = add_layer_from_files(
                 out_blobs, f"solo-{pkg}", file_paths, arcname, src_mnt
@@ -1163,6 +1156,31 @@ def main():
         }
         (out_root / "index.json").write_bytes(
             json.dumps(index, separators=(",", ":")).encode()
+        )
+
+        # ─── Cache plan sidecar ───────────────────────────────────────
+        # push-with-cache.py reads this to decide, per layer, whether
+        # to upload bytes from the OCI dir or cross-repo mount from a
+        # cache source repo. Layers without a _cache_source are local;
+        # their blob bytes live under blobs/sha256/<digest>.
+        cache_plan = {
+            "version": 1,
+            "layers": {
+                d["digest"]: {
+                    "source": d["_cache_source"],
+                    "size": d["size"],
+                }
+                for d in layers_desc
+                if d.get("_cache_source")
+            },
+        }
+        (out_root / "cache-plan.json").write_bytes(
+            json.dumps(cache_plan, separators=(",", ":")).encode()
+        )
+        n_mountable = len(cache_plan["layers"])
+        print(
+            f"==> cache-plan.json: {n_mountable}/{len(layers_desc)} layers "
+            f"mountable from cache (rest are local)"
         )
 
         # Print summary
