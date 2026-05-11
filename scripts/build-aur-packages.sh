@@ -206,16 +206,37 @@ EOF
         pacman -U --needed --noconfirm "$OUT"/*.pkg.tar.zst 2>/dev/null || true
     fi
 
+    # Retry makepkg up to 5 times. Failures here are almost always
+    # transient network issues — PKGBUILDs often pull sources via git
+    # clone from github.com/gitlab/etc, and those hosts return 500/502
+    # often enough to be worth retrying. Real build errors (compile
+    # failures, missing deps) also fail through this loop, but a real
+    # compile error is going to fail repeatedly and exhaust the
+    # attempts, so we still exit non-zero in that case.
     echo "==> Building AUR/$pkg"
-    sudo -u builder bash -c "
-        set -e
-        export CFLAGS='-march=x86-64-v3 -mtune=generic -O3 -pipe'
-        export CXXFLAGS=\"\$CFLAGS\"
-        export RUSTFLAGS='-C opt-level=3 -C target-cpu=x86-64-v3'
-        export CARGO_BUILD_RUSTFLAGS=\"\$RUSTFLAGS\"
-        cd /tmp/$pkg
-        makepkg --noconfirm --skippgpcheck --noprogressbar -s
-    "
+    local attempt
+    for attempt in 1 2 3 4 5; do
+        if sudo -u builder bash -c "
+            set -e
+            export CFLAGS='-march=x86-64-v3 -mtune=generic -O3 -pipe'
+            export CXXFLAGS=\"\$CFLAGS\"
+            export RUSTFLAGS='-C opt-level=3 -C target-cpu=x86-64-v3'
+            export CARGO_BUILD_RUSTFLAGS=\"\$RUSTFLAGS\"
+            cd /tmp/$pkg
+            makepkg --noconfirm --skippgpcheck --noprogressbar -s
+        "; then
+            break
+        fi
+        if [[ "$attempt" == "5" ]]; then
+            echo "==> AUR/$pkg failed after 5 attempts" >&2
+            exit 1
+        fi
+        echo "==> AUR/$pkg attempt $attempt failed; retrying in 30s" >&2
+        sleep 30
+        # Clean up any partial source state from the failed attempt so
+        # the next try gets a fresh clone. Keep makepkg's own deps cache.
+        rm -rf "/tmp/$pkg"/src "/tmp/$pkg"/pkg 2>/dev/null || true
+    done
     cp /tmp/$pkg/*.pkg.tar.zst "$OUT/"
     touch "$OUT/.built-$pkg"
 }
