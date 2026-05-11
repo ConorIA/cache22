@@ -60,16 +60,28 @@ else
     flock -x 200
 fi
 
+echo "==> Checking for remote update"
+# Gate the actual pull behind --check. Without this, `bootc upgrade`
+# will re-stage the same image even when there's nothing new at the
+# registry — bootc's mental model is "make staged represent the
+# latest", and it doesn't ask "is the existing pending already equal
+# to the latest?". The result is daily redundant restages + UKI
+# rebuilds when no upstream change has happened.
+check_out=$(bootc upgrade --check 2>&1) || { echo "$check_out" >&2; exit 1; }
+echo "$check_out"
+if echo "$check_out" | grep -q '^No changes in:'; then
+    echo "[OK] Nothing to fetch."
+    exit 0
+fi
+
 echo "==> Pulling + staging next image (bootc upgrade)"
 if ! bootc upgrade; then
     echo "ERROR: bootc upgrade failed" >&2
     exit 1
 fi
 
-# Was anything actually staged? bootc returns 0 even if up to date.
-# Compact JSON has many "null" tokens (rollback, composefs, version,
-# ...) so a textual grep would false-positive — use jq for a real
-# null-vs-not check.
+# Was anything actually staged? bootc returns 0 even if a no-op slipped
+# past --check (e.g. registry race), so still defend with jq.
 if ! bootc status --json 2>/dev/null | jq -e '.status.staged != null' >/dev/null; then
     echo "[OK] Already up to date; nothing to finalize."
     exit 0
