@@ -1,5 +1,11 @@
 # cache22 manifest: cachy-kde
 # family: cachy
+# Full KDE Plasma desktop: gaming stack (Steam, gamescope, mangohud,
+# lutris, sunshine) + NVIDIA proprietary driver + SteamOS-style
+# switchable gamescope session (via the kde-gaming intersection layer).
 base
 desktop
+gaming
+nvidia
+kde-gaming
 kde

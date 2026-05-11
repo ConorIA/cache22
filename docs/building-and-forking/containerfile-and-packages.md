@@ -43,7 +43,7 @@ packages/
 │   └── arch/               same layer names, arch-specific package picks
 └── manifests/
     ├── cachy-server.manifest
-    ├── cachy-kde-gaming-nvidia.manifest
+    ├── cachy-kde.manifest
     ├── arch-gnome.manifest
     └── ... (20 total)
 ```
@@ -51,7 +51,7 @@ packages/
 A manifest names the layers a variant pulls, one per line, in install order. Comments (`#`) and blanks are ignored.
 
 ```
-# packages/manifests/cachy-kde-gaming-nvidia.manifest
+# packages/manifests/cachy-kde.manifest
 base
 desktop
 gaming
@@ -65,7 +65,7 @@ The build expands the manifest with `scripts/expand-manifest.sh`:
 ```
 pacman -S --needed --noconfirm $(scripts/expand-manifest.sh \
     --family cachy \
-    --manifest packages/manifests/cachy-kde-gaming-nvidia.manifest \
+    --manifest packages/manifests/cachy-kde.manifest \
     --layers-dir packages/layers/cachy)
 ```
 

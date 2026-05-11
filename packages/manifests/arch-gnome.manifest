@@ -1,5 +1,10 @@
 # cache22 manifest: arch-gnome
 # family: arch
+# Full GNOME Shell desktop: gaming stack (Steam, gamescope, mangohud,
+# lutris, sunshine) + NVIDIA proprietary driver. No SteamOS session
+# switcher (that's KDE-only today via plasma-login-manager).
 base
 desktop
+gaming
+nvidia
 gnome

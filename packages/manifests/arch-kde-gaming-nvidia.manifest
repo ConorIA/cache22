@@ -1,9 +1,0 @@
-# cache22 manifest: arch-kde-gaming-nvidia
-# family: arch
-# Equivalent to legacy arch-kde image (KDE + gaming + NVIDIA).
-base
-desktop
-gaming
-nvidia
-kde-gaming
-kde

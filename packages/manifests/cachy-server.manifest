@@ -1,4 +1,7 @@
 # cache22 manifest: cachy-server
 # family: cachy
+# Headless server / container host. NVIDIA included (boss uses cachy-server
+# and may add NVIDIA later; cost is ~250 MB unused firmware otherwise).
 base
 server
+nvidia

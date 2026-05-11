@@ -1,4 +1,8 @@
 # cache22 manifest: arch-server
 # family: arch
+# Headless server / container host. NVIDIA included for flexibility
+# (~250 MB cost on non-NVIDIA hardware; building separate variants for
+# every nvidia/gaming combination wasn't reliable on free GHA tier).
 base
 server
+nvidia

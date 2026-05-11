@@ -42,7 +42,7 @@ git commit -am "add htop-vim"
 git push
 ```
 
-The push triggers a build. ~22 minutes per variant, all 20 building in parallel.
+The push triggers a build. ~22 minutes per variant, all 6 building in parallel.
 
 ## Step 3. Install your fork
 

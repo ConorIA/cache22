@@ -158,82 +158,6 @@ for i, v in enumerate(d.get('variants', []), 1):
 " <<<"$VARIANTS_JSON"
 }
 
-# variant_dimensions <kind>
-#   Output sorted-unique values of a dimension across the available
-#   variant ids. <kind> is one of: family role gaming nvidia.
-#   ids follow the convention <family>-<role>[-gaming][-nvidia].
-variant_dimensions() {
-    local kind="$1"
-    variant_ids | python3 -c "
-import sys
-ids = [l.strip() for l in sys.stdin if l.strip()]
-fam, rol, gam, nv = set(), set(), set(), set()
-for i in ids:
-    parts = i.split('-')
-    if len(parts) < 2: continue
-    f, r = parts[0], parts[1]
-    fam.add(f); rol.add(r)
-    rest = parts[2:]
-    gam.add('yes' if 'gaming' in rest else 'no')
-    nv.add('yes' if 'nvidia' in rest else 'no')
-out = {'family': sorted(fam), 'role': sorted(rol),
-       'gaming': sorted(gam), 'nvidia': sorted(nv)}
-for v in out.get('$kind', []):
-    print(v)
-"
-}
-
-# build_variant_id family role gaming nvidia
-#   Compose a variant id from its dimensions ("yes"/"no" for gaming/nvidia).
-build_variant_id() {
-    local fam="$1" rol="$2" gam="$3" nv="$4"
-    local id="$fam-$rol"
-    [[ "$gam" == "yes" ]] && id="$id-gaming"
-    [[ "$nv"  == "yes" ]] && id="$id-nvidia"
-    printf '%s\n' "$id"
-}
-
-# dimensional_pick — drive the user through family/role/gaming/nvidia
-# choices and set REPLY to a valid variant id. Returns 0=ok, 1=back,
-# 2=quit, 3=abort-to-flat-list.
-dimensional_pick() {
-    local -a families roles
-    mapfile -t families < <(variant_dimensions family)
-    mapfile -t roles    < <(variant_dimensions role)
-    [[ ${#families[@]} -gt 0 && ${#roles[@]} -gt 0 ]] || return 3
-
-    local fam rol gam nv id
-    while :; do
-        say "Distribution family:"
-        pick_from "Family" "${families[0]}" "${families[@]}" || return $?
-        fam="$REPLY"
-
-        say "Role:"
-        # server omits gaming/nvidia checks for gaming; nvidia still asked.
-        pick_from "Role" "${roles[0]}" "${roles[@]}" || return $?
-        rol="$REPLY"
-
-        if [[ "$rol" == "server" ]]; then
-            gam="no"
-        else
-            say "Include gaming stack (Steam, gamescope, mangohud, lutris, sunshine)?"
-            pick_from "Gaming" "no" "no" "yes" || return $?
-            gam="$REPLY"
-        fi
-
-        say "Include NVIDIA proprietary driver?"
-        pick_from "NVIDIA" "no" "no" "yes" || return $?
-        nv="$REPLY"
-
-        id=$(build_variant_id "$fam" "$rol" "$gam" "$nv")
-        if variant_ids | grep -qx "$id"; then
-            REPLY="$id"
-            return 0
-        fi
-        say "  Combination '$id' isn't published. Picking again."
-    done
-}
-
 usage() {
     cat <<USAGE
 cache22-install — interactive installer
@@ -356,59 +280,27 @@ step_variant() {
         return 0
     fi
 
-    # Two pickers: dimensional (family/role/gaming/nvidia) is the
-    # default because it scales to dozens of variants; flat list shows
-    # every published image with its description for users who'd rather
-    # browse. Pasting an OCI ref lets advanced users supply a custom one.
-    local mode_default="dimensional"
+    say "Available cache22 variants:"
+    print_variant_picker
+    local default_idx=1 i=0 ids cur
+    mapfile -t ids < <(variant_ids)
+    cur="${CFG[image]}"
+    for ((i=0; i<${#ids[@]}; i++)); do
+        if [[ "$cur" == *"${ids[i]}"* ]]; then default_idx=$((i+1)); break; fi
+    done
     while :; do
-        cat <<'EOF'
-
-How would you like to pick a variant?
-  1) By dimensions (family / role / gaming / NVIDIA)  — recommended
-  2) Browse the full list with descriptions
-  3) Paste a full OCI image ref
-EOF
-        prompt "Picker mode (1-3)" "1" || return $?
-        case "$REPLY" in
-            1|dimensional)
-                if dimensional_pick; then
-                    CFG[image]=$(variant_image "$REPLY")
-                    say "Selected: $REPLY"
-                    return 0
-                else
-                    case $? in 1) continue ;; 2) return 2 ;; 3) ;; esac
-                fi
-                ;;
-            2|browse|list)
-                say "Available cache22 variants:"
-                print_variant_picker
-                local default_idx=1 i=0 ids cur
-                mapfile -t ids < <(variant_ids)
-                cur="${CFG[image]}"
-                for ((i=0; i<${#ids[@]}; i++)); do
-                    if [[ "$cur" == *"${ids[i]}"* ]]; then default_idx=$((i+1)); break; fi
-                done
-                prompt "Pick a variant (1-${count})" "$default_idx" || return $?
-                if [[ "$REPLY" =~ ^[0-9]+$ ]] && (( REPLY >= 1 && REPLY <= count )); then
-                    local picked="${ids[REPLY-1]}"
-                    CFG[image]=$(variant_image "$picked")
-                    say "Selected: $picked"
-                    return 0
-                fi
-                printf '  Pick a number 1-%d.\n' "$count"
-                ;;
-            3|paste|ref)
-                prompt "Full OCI image ref (e.g. ghcr.io/cmspam/cache22-arch-kde:rolling)" \
-                    "${CFG[image]}" || return $?
-                if [[ "$REPLY" == *":"* && "$REPLY" == *"/"* ]]; then
-                    CFG[image]="$REPLY"
-                    return 0
-                fi
-                printf '  That does not look like an OCI image ref.\n'
-                ;;
-            *) printf '  Pick 1, 2, or 3.\n' ;;
-        esac
+        prompt "Pick a variant (1-${count}, or paste an OCI image ref)" \
+            "$default_idx" || return $?
+        if [[ "$REPLY" =~ ^[0-9]+$ ]] && (( REPLY >= 1 && REPLY <= count )); then
+            local picked="${ids[REPLY-1]}"
+            CFG[image]=$(variant_image "$picked")
+            return 0
+        fi
+        if [[ "$REPLY" == *":"* && "$REPLY" == *"/"* ]]; then
+            CFG[image]="$REPLY"
+            return 0
+        fi
+        printf '  Pick a number 1-%d, or paste a full image ref.\n' "$count"
     done
 }
 
