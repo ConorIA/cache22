@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+# update-ostree-booted — rewrite /run/ostree-booted to point at a
+# different deploy directory, preserving any other metadata keys
+# present in the existing file.
+#
+# Why: soft-reboot pivots the running root into a new deploy dir,
+# but doesn't re-run ostree-prepare-root (which is initrd-only) — so
+# /run/ostree-booted's backing-root-device-inode would otherwise be
+# left pointing at the previously-booted deploy, making bootc status
+# / ostree admin status report the wrong "booted" deploy until the
+# next hard reboot.
+#
+# Usage:
+#   update-ostree-booted /sysroot/ostree/deploy/<state>/deploy/<csum>.<idx>
+#
+# The file format is GVariant a{sv} written by ostree-prepare-root
+# (src/libotcore/otcore-prepare-root.c). We use python-gobject's GLib
+# bindings to read + rewrite preserving the on-disk binary layout.
+
+import os
+import sys
+import gi
+gi.require_version("GLib", "2.0")
+from gi.repository import GLib
+
+PATH = "/run/ostree-booted"
+KEY_DEVINO = "backing-root-device-inode"
+
+
+def die(msg):
+    print(f"update-ostree-booted: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def main():
+    if len(sys.argv) != 2:
+        die(f"usage: {sys.argv[0]} <deploy-dir>")
+    deploy = sys.argv[1]
+    try:
+        st = os.lstat(deploy)
+    except OSError as e:
+        die(f"lstat({deploy}): {e}")
+
+    try:
+        existing = open(PATH, "rb").read()
+    except FileNotFoundError:
+        # If /run/ostree-booted doesn't exist, the system isn't ostree-booted
+        # in any normal sense and our "preserve all keys" strategy can't apply.
+        # Don't fabricate a file — bail loudly.
+        die(f"{PATH} not found; system isn't ostree-booted, refusing to fabricate")
+
+    try:
+        v = GLib.Variant.new_from_bytes(
+            GLib.VariantType.new("a{sv}"),
+            GLib.Bytes.new(existing),
+            False,
+        )
+    except GLib.Error as e:
+        die(f"failed to parse existing {PATH}: {e.message}")
+
+    new_entries = {}
+    # Preserve every key as-is, except replace backing-root-device-inode.
+    for i in range(v.n_children()):
+        entry = v.get_child_value(i)
+        key = entry.get_child_value(0).get_string()
+        val = entry.get_child_value(1).get_variant()
+        if key == KEY_DEVINO:
+            continue
+        new_entries[key] = val
+
+    new_entries[KEY_DEVINO] = GLib.Variant("(tt)", (st.st_dev, st.st_ino))
+
+    builder = GLib.VariantBuilder.new(GLib.VariantType.new("a{sv}"))
+    for k, v in new_entries.items():
+        builder.add_value(GLib.Variant("{sv}", (k, v)))
+    out = builder.end()
+    data = bytes(out.get_data_as_bytes().get_data())
+
+    tmp = PATH + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    try:
+        os.write(fd, data)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.rename(tmp, PATH)
+    print(f"update-ostree-booted: {PATH} now -> dev={st.st_dev} ino={st.st_ino} ({deploy})")
+
+
+if __name__ == "__main__":
+    main()

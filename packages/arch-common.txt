@@ -29,6 +29,7 @@ less
 diffutils
 perl
 python
+python-gobject
 man-db
 man-pages
 texinfo

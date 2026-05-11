@@ -128,6 +128,14 @@ mount --bind "$state_var" "$NEXTROOT/var"
 mount --make-slave "$NEXTROOT/var"
 mount --make-shared "$NEXTROOT/var"
 
+# 8. Update /run/ostree-booted to point at the new deploy. /run survives
+#    soft-reboot, so writing this here means the post-pivot userspace
+#    sees correct backing-root-device-inode (otherwise bootc status /
+#    ostree admin status would keep reporting the previously-booted
+#    deploy until the next hard reboot — staleness compounds).
+/usr/libexec/cache22/update-ostree-booted "$deploy_dir" \
+    || warn "failed to update /run/ostree-booted; bootc status will report stale 'booted' until next hard reboot"
+
 trap - ERR
 
 echo "==> /run/nextroot ready for soft-reboot into $target_id"

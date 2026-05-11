@@ -96,13 +96,21 @@ fi
 
 # Drop a /run/motd.d marker so the next SSH login banner mentions the
 # pending reboot. /run is tmpfs so it clears automatically on reboot.
+# Customize wording based on whether soft-reboot is possible — same-kernel
+# updates apply in ~5 sec, kernel-changing ones need a full reboot.
 install -dm755 /run/motd.d
-cat > /run/motd.d/10-cache22-pending-reboot <<'EOF'
+soft_capable=$(bootc status --json 2>/dev/null | jq -r '.status.staged.softRebootCapable // false')
+if [[ "$soft_capable" == "true" ]]; then
+    apply_hint="Apply with \`sudo cache22-reboot\` — soft-reboot available (~5 sec, same kernel)."
+else
+    apply_hint="Apply with \`sudo cache22-reboot\` — full reboot required (kernel changed)."
+fi
+cat > /run/motd.d/10-cache22-pending-reboot <<EOF
 
 ──────────────────────────────────────────────────────────
   cache22 update is staged — reboot to apply.
-  Run `cache22-changelog` to see what changed.
-  Apply with `sudo cache22-reboot` (auto-soft when same-kernel).
+  Run \`cache22-changelog\` to see what changed.
+  $apply_hint
 ──────────────────────────────────────────────────────────
 
 EOF
@@ -129,7 +137,7 @@ if command -v notify-send >/dev/null 2>&1; then
                 --urgency=normal \
                 --expire-time=15000 \
                 "cache22 update ready" \
-                "An OS update has been staged. Reboot to apply, or run cache22-changelog to see what changed." \
+                "An OS update has been staged. Run sudo cache22-reboot to apply (soft-reboot used when possible) or cache22-changelog to inspect." \
             2>/dev/null || true
     done < <(loginctl list-sessions --no-legend 2>/dev/null)
 fi
