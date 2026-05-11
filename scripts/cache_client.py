@@ -131,8 +131,42 @@ class GhcrClient:
 
     def blob_exists(self, repo: str, digest: str) -> bool:
         url = f"https://ghcr.io/v2/{repo}/blobs/{digest}"
-        status, _, _ = self._request("HEAD", url, repo, action="pull", timeout=15)
+        status, _, _ = self._request("HEAD", url, repo, action="pull", timeout=30)
         return status == 200
+
+    def known_digests_from_manifest(
+        self, repo: str, tag: str
+    ) -> set[str]:
+        """Fetch <repo>:<tag>'s manifest and return all blob digests it
+        references (layers + config). One HTTP request gives a complete
+        set of 'definitely exists in this repo' digests, replacing many
+        per-blob HEAD checks. Returns empty set on any failure (caller
+        falls back to per-blob HEAD or just uploads everything)."""
+        url = f"https://ghcr.io/v2/{repo}/manifests/{urllib.parse.quote(tag, safe='')}"
+        status, _, body = self._request(
+            "GET", url, repo, action="pull",
+            headers={
+                "Accept":
+                    "application/vnd.oci.image.manifest.v1+json,"
+                    "application/vnd.docker.distribution.manifest.v2+json",
+            },
+            timeout=30,
+        )
+        if status != 200 or body is None:
+            return set()
+        try:
+            manifest = json.loads(body)
+        except ValueError:
+            return set()
+        digests: set[str] = set()
+        for layer in manifest.get("layers") or []:
+            d = layer.get("digest")
+            if d:
+                digests.add(d)
+        cfg = manifest.get("config") or {}
+        if cfg.get("digest"):
+            digests.add(cfg["digest"])
+        return digests
 
     def blob_upload(self, repo: str, blob_path: Path, digest: str) -> bool:
         """POST upload init then PUT bytes. Returns True on 201."""

@@ -65,6 +65,32 @@ def main():
     dst_repo = args.dst_repo
     blobs_dir = oci_dir / "blobs" / "sha256"
 
+    # ── Batch existence check ──
+    # Fetch the previous :rolling manifest ONCE and use its layer digest
+    # list as a "definitely already in this repo" set. Replaces N
+    # sequential HEAD requests with one GET. On any failure, fall back
+    # to per-blob HEAD (slow but correct).
+    print(f"==> Fetching previous :{args.dst_tag} manifest for existence index")
+    known = client.known_digests_from_manifest(dst_repo, args.dst_tag)
+    if known:
+        print(f"    {len(known)} digests known to exist in {dst_repo}")
+    else:
+        print(f"    No prior manifest at :{args.dst_tag} (first build, "
+              f"or GET failed); will HEAD per-blob")
+
+    def blob_known_or_head(digest: str) -> bool:
+        if digest in known:
+            return True
+        # Fallback only when manifest GET turned up nothing useful.
+        # If `known` is empty we're in cold-start territory; HEAD each
+        # blob individually. If `known` is populated but this specific
+        # digest isn't there, it's a genuine new/changed blob — skip
+        # the HEAD and just upload (ghcr.io dedupes server-side if it
+        # turned out to exist anyway).
+        if not known:
+            return client.blob_exists(dst_repo, digest)
+        return False
+
     n_skip = 0
     n_upload = 0
     bytes_skipped = 0
@@ -80,7 +106,7 @@ def main():
         local_path = blobs_dir / digest.removeprefix("sha256:")
 
         # 1. Already in destination from a prior build?
-        if client.blob_exists(dst_repo, digest):
+        if blob_known_or_head(digest):
             n_skip += 1
             bytes_skipped += size
             print(f"  [{i:3d}/{len(layers)}] {digest[:19]}  EXISTS")
@@ -105,16 +131,15 @@ def main():
             f"to force a fresh full rebuild on the next run."
         )
 
-    # Config blob (always local, always fresh per build)
+    # Config blob (always local, always fresh per build — digest
+    # changes every build because the OCI config carries the "created"
+    # timestamp). Just upload it; HEAD-check would almost always miss.
     config = manifest["config"]
     config_digest = config["digest"]
     config_path = blobs_dir / config_digest.removeprefix("sha256:")
-    if not client.blob_exists(dst_repo, config_digest):
-        if not client.blob_upload(dst_repo, config_path, config_digest):
-            sys.exit("FATAL: config blob upload failed")
-        print(f"  config {config_digest[:19]}  UPLOAD")
-    else:
-        print(f"  config {config_digest[:19]}  EXISTS")
+    if not client.blob_upload(dst_repo, config_path, config_digest):
+        sys.exit("FATAL: config blob upload failed")
+    print(f"  config {config_digest[:19]}  UPLOAD")
 
     # Manifest PUT. Read bytes back from disk so we PUT exactly what was
     # written (preserves JSON byte ordering for digest stability).
