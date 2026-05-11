@@ -297,11 +297,19 @@ jobs:
         run: |
           mkdir -p /tmp/rechunked
           CREATED=$(git -C "$GITHUB_WORKSPACE" log -1 --format=%ct)
+          # --cache-repo points at a shared blob cache: solo (per-package)
+          # layers get looked up by mtree-derived key. Cache hit skips
+          # zstd-19 (the dominant rechunker cost). Cache miss compresses
+          # as usual then writes back. The auth file from docker/login
+          # already has push scope on cmspam/* packages owned by this
+          # workflow.
           sudo python3 scripts/rechunk-cache22.py \
             --src localhost/cache22-${{ matrix.variant }}:raw \
             --dst /tmp/rechunked \
             --source-date-epoch 0 \
-            --image-created-epoch "$CREATED"
+            --image-created-epoch "$CREATED" \
+            --cache-repo cmspam/cache22-pkgcache \
+            --auth-file "$HOME/.docker/config.json"
 
       - name: Push rechunked image to ghcr.io
         if: steps.detect.outputs.has_changes == 'true'

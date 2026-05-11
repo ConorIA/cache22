@@ -458,10 +458,44 @@ def main():
             "--source-date-epoch."
         ),
     )
+    ap.add_argument(
+        "--cache-repo",
+        default=None,
+        help=(
+            "ghcr.io repo path (e.g. cmspam/cache22-pkgcache) used as a "
+            "per-layer blob cache. For each solo (per-package) layer the "
+            "rechunker checks <cache-repo>:<key> via HEAD; on hit it "
+            "fetches the cached blob and skips the zstd compression pass; "
+            "on miss it compresses as usual then pushes the result to the "
+            "cache repo for future hits. Disabled if not set."
+        ),
+    )
+    ap.add_argument(
+        "--auth-file",
+        default=None,
+        help=(
+            "Path to a docker config.json with ghcr.io credentials. "
+            "Used only when --cache-repo is set. Defaults to "
+            "$REGISTRY_AUTH_FILE then ~/.docker/config.json."
+        ),
+    )
     args = ap.parse_args()
 
     global SDE
     SDE = args.source_date_epoch
+
+    # Lazy cache client. Stays None when --cache-repo isn't set, in which
+    # case all the cache_* helpers below short-circuit and the rechunker
+    # behaves exactly as it did pre-cache.
+    cache = None
+    if args.cache_repo:
+        try:
+            from cache_client import GhcrClient, solo_cache_key  # noqa: F401
+        except ImportError:
+            sys.path.insert(0, str(Path(__file__).parent))
+            from cache_client import GhcrClient, solo_cache_key  # noqa: F401
+        cache = GhcrClient.from_authfile(args.auth_file)
+        print(f"==> Layer cache enabled: ghcr.io/{args.cache_repo}")
     if args.image_created_epoch is None:
         args.image_created_epoch = args.source_date_epoch
 
@@ -736,16 +770,103 @@ def main():
         phase_t = time.monotonic()
         print(f"==> Building solo layers ({len(solo_pkgs)} packages)")
         before_solo = len(layers_desc)
+        cache_hits = 0
+        cache_misses = 0
+        cache_writes_pending: list[tuple[str, dict, Path]] = []  # (key, desc, blob_path)
+        db_root_solo = src_mnt / "usr/lib/sysimage/pacman/local"
         for i, pkg in enumerate(sorted(solo_pkgs), 1):
             files = pkg_files[pkg]
             file_paths = [src_mnt / f for f in files]
             arcname = {src_mnt / f: f for f in files}
+
+            # ── Cache lookup ──
+            ckey = None
+            manifest = None
+            if cache is not None:
+                ckey = solo_cache_key(pkg, db_root_solo / pkg / "mtree")
+                if ckey:
+                    manifest = cache.manifest_get(args.cache_repo, ckey)
+            if manifest and manifest.get("layers"):
+                layer = manifest["layers"][0]
+                diff_id = (layer.get("annotations") or {}).get(
+                    "io.cache22.diff_id"
+                ) or (manifest.get("annotations") or {}).get(
+                    "io.cache22.diff_id"
+                )
+                digest = layer.get("digest")
+                size = layer.get("size")
+                if digest and size and diff_id:
+                    # Stage the blob locally so the OCI layout we hand
+                    # to skopeo is self-contained. The blob bytes
+                    # download is much cheaper than re-running zstd-19.
+                    local_blob = out_blobs / digest.removeprefix("sha256:")
+                    if local_blob.exists() or cache.blob_get(
+                        args.cache_repo, digest, local_blob
+                    ):
+                        layers_desc.append({
+                            "mediaType": layer.get(
+                                "mediaType",
+                                "application/vnd.oci.image.layer.v1.tar+zstd",
+                            ),
+                            "digest": digest,
+                            "size": size,
+                            "_diff_id": diff_id,
+                        })
+                        cache_hits += 1
+                        print(
+                            f"    [solo-{pkg:32s}] CACHE HIT  {ckey}",
+                            flush=True,
+                        )
+                        continue
+                    # If blob fetch failed, fall through to fresh build.
+                    print(
+                        f"    [solo-{pkg:32s}] cache hit but blob fetch "
+                        f"failed; rebuilding",
+                        flush=True,
+                    )
+
             desc = add_layer_from_files(
                 out_blobs, f"solo-{pkg}", file_paths, arcname, src_mnt
             )
             if desc:
                 layers_desc.append(desc)
-        print(f"    {len(layers_desc) - before_solo} solo layers built in {time.monotonic()-phase_t:.1f}s")
+                if ckey:
+                    cache_misses += 1
+                    blob_path = out_blobs / desc["digest"].removeprefix("sha256:")
+                    cache_writes_pending.append((ckey, desc, blob_path))
+        print(
+            f"    {len(layers_desc) - before_solo} solo layers built in "
+            f"{time.monotonic()-phase_t:.1f}s "
+            f"(cache: {cache_hits} hits, {cache_misses} misses)"
+        )
+
+        # Write cache misses back so future runs find them. Done after
+        # all solo layers are built (rather than per-package) to keep
+        # network and zstd phases interleaved cleanly in the log. Failures
+        # are non-fatal — cache writes are an optimization, not a
+        # correctness requirement.
+        if cache_writes_pending:
+            phase_t = time.monotonic()
+            print(f"==> Pushing {len(cache_writes_pending)} new layers to cache repo")
+            written = 0
+            for ckey, desc, blob_path in cache_writes_pending:
+                if not blob_path.exists():
+                    continue
+                ok = cache.push_layer_image(
+                    args.cache_repo,
+                    ckey,
+                    blob_path,
+                    desc["digest"],
+                    desc["size"],
+                    desc["_diff_id"],
+                    media_type=desc["mediaType"],
+                )
+                if ok:
+                    written += 1
+            print(
+                f"    {written}/{len(cache_writes_pending)} cache writes "
+                f"succeeded in {time.monotonic()-phase_t:.1f}s"
+            )
 
         phase_t = time.monotonic()
         nonempty_buckets = sum(1 for b in range(N_BUCKETS) if bucket_assignment[b])
