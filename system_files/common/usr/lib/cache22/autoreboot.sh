@@ -30,13 +30,15 @@ parse_duration() {
 }
 
 is_staged() {
-    # bootc status --json emits compact single-line JSON, so a textual
-    # grep -A1 '"staged"' would match the whole blob and false-positive
-    # on "image"/"imageDigest" appearing in the booted/spec sections.
-    # Use jq for a real null-vs-not check.
-    local staged
-    staged=$(bootc status --json 2>/dev/null | jq -r '.status.staged // "null"' 2>/dev/null)
-    [[ -n "$staged" && "$staged" != "null" ]]
+    # "Reboot would apply something new" — covers both bootc's staged
+    # slot AND ostree's pending slot. cache22-update finalizes early
+    # (so power-loss is benign), which moves the deploy from bootc's
+    # staged slot to ostree's pending slot. bootc's status.staged then
+    # reads null even though there's a real deploy waiting for boot.
+    # Mirror cache22-changelog's pattern: any non-booted, non-rollback
+    # deploy in `ostree admin status` means we have something to apply.
+    ostree admin status 2>/dev/null \
+        | awk '!/^\*/ && !/\(rollback\)/ && /[0-9a-f]+\.[0-9]+/ {found=1} END {exit !found}'
 }
 
 last_update_failed() {

@@ -61,9 +61,18 @@ if (( KEXEC )); then
 fi
 
 # ─── Strategy decision ────────────────────────────────────────────
+# "Reboot would apply something new" comes from two places:
+#   - bootc's status.staged slot — set after `bootc upgrade` and
+#     before finalize.
+#   - ostree's pending slot — where the deploy lives after
+#     `ostree admin finalize-staged` runs (cache22-update finalizes
+#     early so power-loss between stage and reboot is benign). bootc
+#     reports staged=null at this point, but the deploy is real.
+# Either case means there's an update to apply.
 status=$(bootc status --json 2>/dev/null || echo '{}')
 
 has_staged=no
+has_pending=no
 soft_capable=false
 staged_digest=""
 
@@ -71,14 +80,26 @@ if echo "$status" | jq -e '.status.staged != null' >/dev/null 2>&1; then
     has_staged=yes
     soft_capable=$(echo "$status" | jq -r '.status.staged.softRebootCapable // false')
     staged_digest=$(echo "$status" | jq -r '.status.staged.image.imageDigest // ""')
+elif ostree admin status 2>/dev/null | awk '!/^\*/ && !/\(rollback\)/ && /[0-9a-f]+\.[0-9]+/ {found=1} END {exit !found}'; then
+    has_pending=yes
+    # cachedUpdate describes the most-recently-pulled image's relation
+    # to booted. In steady state (one update fetched + finalized, no
+    # newer pull yet) this matches the pending deploy. Fall back to a
+    # hard reboot if it's stale or missing — soft-reboot is a fast-path
+    # optimization, not a correctness requirement.
+    soft_capable=$(echo "$status" | jq -r '.status.booted.cachedUpdate.softRebootCapable // false')
+    staged_digest=$(echo "$status" | jq -r '.status.booted.cachedUpdate.image.imageDigest // ""')
 fi
+
+has_next=no
+[[ "$has_staged" == "yes" || "$has_pending" == "yes" ]] && has_next=yes
 
 decide() {
     if (( HARD )); then
         echo hard; return
     fi
-    if [[ "$has_staged" != "yes" ]]; then
-        # No staged deploy; user explicitly invoked a reboot tool, so reboot.
+    if [[ "$has_next" != "yes" ]]; then
+        # No staged or pending deploy; user explicitly invoked a reboot tool, so reboot.
         echo hard; return
     fi
     if [[ "$soft_capable" == "true" ]]; then
@@ -100,8 +121,8 @@ explain() {
         soft)  echo "soft-reboot (kernel unchanged, fastest)" ;;
         kexec) echo "kexec (kernel changed; --kexec or KERNEL_CHANGE_STRATEGY=kexec preferred)" ;;
         hard)
-            if [[ "$has_staged" != "yes" ]]; then
-                echo "hard reboot (no staged deploy; rebooting current)"
+            if [[ "$has_next" != "yes" ]]; then
+                echo "hard reboot (nothing staged or pending; rebooting current)"
             elif (( HARD )); then
                 echo "hard reboot (--hard forced)"
             else
@@ -114,10 +135,13 @@ explain() {
 if (( CHECK )); then
     echo "strategy: $strategy — $(explain)"
     if [[ "$has_staged" == "yes" ]]; then
-        echo "  staged digest:        ${staged_digest:0:23}…"
+        echo "  staged (bootc):       ${staged_digest:0:23}…"
         echo "  softRebootCapable:    $soft_capable"
+    elif [[ "$has_pending" == "yes" ]]; then
+        echo "  pending (ostree):     deploy already finalized, awaiting reboot"
+        echo "  softRebootCapable:    $soft_capable (from cachedUpdate; best-effort)"
     else
-        echo "  staged:               (none)"
+        echo "  staged/pending:       (none)"
     fi
     echo "  KERNEL_CHANGE_STRATEGY: $KERNEL_CHANGE_STRATEGY (from ${CONFIG} + flags)"
     exit 0

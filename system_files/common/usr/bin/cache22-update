@@ -135,6 +135,6 @@ if (( APPS )); then
 fi
 
 if (( REBOOT )); then
-    echo "==> Rebooting"
-    systemctl reboot
+    echo "==> Rebooting (via cache22-reboot — auto-picks soft-reboot when possible)"
+    exec cache22-reboot
 fi

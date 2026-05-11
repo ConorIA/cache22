@@ -177,7 +177,7 @@ done <<<"$removed"
 
 cat <<'EOF'
 
-  Reboot:    sudo systemctl reboot
+  Reboot:    sudo cache22-reboot     (auto-picks soft-reboot when possible)
   Cancel:    sudo bootc rollback
 ══════════════════════════════════════════════════════════
 EOF
