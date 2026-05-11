@@ -253,10 +253,10 @@ def _stable_mtree_sha(mtree_path: Path) -> str | None:
     )
     # Also zero size= on .BUILDINFO/.PKGINFO lines. The .BUILDINFO size
     # drifts every upstream rebuild because makepkg records the current
-    # build env's "installed = pkg-ver" list inside it. Same binaries,
-    # different metadata, different size — without this strip, the
-    # cache key changes and we needlessly recompress a binary-identical
-    # package layer.
+    # build env's "installed = pkg-ver" list inside the .BUILDINFO file.
+    # Same binaries, different metadata, different size — without this
+    # strip, the cache key changes and we needlessly recompress a
+    # binary-identical package layer.
     normalized = re.sub(
         rb"^(\./\.(?:BUILDINFO|PKGINFO)\s.*?size=)\d+",
         rb"\g<1>0",
