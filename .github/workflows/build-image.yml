@@ -284,7 +284,7 @@ jobs:
           EOF
           fi
 
-      - name: Rechunk into ~120 per-package/bucket layers
+      - name: Rechunk into ~480 per-package/bucket layers
         if: steps.detect.outputs.has_changes == 'true'
         # Splits the install image into per-package/bucket layers so
         # daily updates only redownload the layers containing changed
