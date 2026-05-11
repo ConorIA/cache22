@@ -223,6 +223,47 @@ def parse_pacman_files(files_path: Path) -> list[str]:
     return out
 
 
+PKGCACHE_VERSION = "r1"
+
+
+def solo_cache_key(pkg_dir_name: str, mtree_path: Path) -> str | None:
+    """Compute a stable cache key for a solo (per-package) layer.
+
+    Format: solo-<pkg-ver-rel>-<arch>-mtree-<sha12>-<rN>
+
+    Hashes a normalized copy of the package's mtree: strip the per-install
+    time= entries and zero out the .BUILDINFO/.PKGINFO sha256digest fields
+    (both of which drift across installs of the same package version).
+    What remains is the per-file sha256digests + file metadata, which is
+    a true content fingerprint — same package version always hashes the
+    same, and an upstream silent rebuild of the same version (different
+    file content) hashes differently.
+
+    Returns None if the mtree is missing or unreadable (package can't be
+    cached without a content fingerprint).
+    """
+    if not mtree_path.exists():
+        return None
+    try:
+        import gzip as _gzip
+        with _gzip.open(mtree_path, "rb") as f:
+            raw = f.read()
+    except OSError:
+        return None
+    # Strip time= entries (pacman INSTALLDATE drift)
+    normalized = re.sub(rb"time=\d+(?:\.\d+)?", b"time=0", raw)
+    # Zero out the BUILDINFO/PKGINFO sha256digest (makepkg builddate drift)
+    normalized = re.sub(
+        rb"^(\./\.(?:BUILDINFO|PKGINFO)\s.*?sha256digest=)[0-9a-f]{64}",
+        rb"\g<1>" + b"0" * 64,
+        normalized,
+        flags=re.MULTILINE,
+    )
+    sha12 = hashlib.sha256(normalized).hexdigest()[:12]
+    arch = "x86_64"
+    return f"solo-{pkg_dir_name}-{arch}-mtree-{sha12}-{PKGCACHE_VERSION}"
+
+
 def parse_pacman_desc(desc_path: Path) -> dict[str, str]:
     """Parse a pacman 'desc' file into a dict of single-value fields."""
     out: dict[str, str] = {}
@@ -458,12 +499,39 @@ def main():
             "--source-date-epoch."
         ),
     )
+    ap.add_argument(
+        "--pkgcache-index",
+        default=None,
+        help=(
+            "Path to a JSON file storing per-variant cache entries: "
+            "{cache_key: {digest, size, diff_id}, ...}. Restored from "
+            "GHA's actions/cache at build start, written back at end. "
+            "For each solo (per-package) layer, the rechunker computes a "
+            "cache key from the package's mtree (normalized to strip "
+            "install-date drift). If the key is in the index, the "
+            "compressed blob already exists in the variant's own ghcr.io "
+            "repo from a prior build — record the descriptor and skip "
+            "the zstd-19 pass. Without --pkgcache-index, behaves exactly "
+            "as before (compresses everything)."
+        ),
+    )
     args = ap.parse_args()
 
     global SDE
     SDE = args.source_date_epoch
     if args.image_created_epoch is None:
         args.image_created_epoch = args.source_date_epoch
+
+    # Load pkgcache index. Missing file = empty index = full cold start.
+    pkgcache: dict[str, dict] = {}
+    if args.pkgcache_index:
+        try:
+            data = json.loads(Path(args.pkgcache_index).read_text())
+            if isinstance(data.get("entries"), dict):
+                pkgcache = data["entries"]
+            print(f"==> Pkgcache index: {len(pkgcache)} entries from previous build")
+        except (OSError, ValueError) as e:
+            print(f"==> Pkgcache index: starting empty ({e})")
 
     out_root = Path(args.dst).absolute()
     out_blobs = out_root / "blobs" / "sha256"
@@ -736,16 +804,59 @@ def main():
         phase_t = time.monotonic()
         print(f"==> Building solo layers ({len(solo_pkgs)} packages)")
         before_solo = len(layers_desc)
+        # Track new index entries to write back at the end. Existing
+        # pkgcache entries flow through unchanged unless overwritten.
+        new_pkgcache_entries: dict[str, dict] = {}
+        cache_hits = 0
+        cache_misses = 0
+        db_root_solo = src_mnt / "usr/lib/sysimage/pacman/local"
         for i, pkg in enumerate(sorted(solo_pkgs), 1):
             files = pkg_files[pkg]
             file_paths = [src_mnt / f for f in files]
             arcname = {src_mnt / f: f for f in files}
+
+            # ── Cache lookup ──
+            ckey = solo_cache_key(pkg, db_root_solo / pkg / "mtree")
+            entry = pkgcache.get(ckey) if ckey else None
+            if entry and entry.get("digest") and entry.get("size") and entry.get("diff_id"):
+                # Cache hit. Skip zstd entirely. Blob bytes are NOT
+                # written to the local OCI dir — push-with-cache.py
+                # will HEAD the destination repo (where the blob still
+                # lives from the previous build) and skip the upload.
+                layers_desc.append({
+                    "mediaType": "application/vnd.oci.image.layer.v1.tar+zstd",
+                    "digest": entry["digest"],
+                    "size": entry["size"],
+                    "_diff_id": entry["diff_id"],
+                    "_cached": True,
+                })
+                # Carry the entry forward in the index unchanged.
+                new_pkgcache_entries[ckey] = entry
+                cache_hits += 1
+                print(
+                    f"    [solo-{pkg:32s}] CACHE HIT  (skip zstd)",
+                    flush=True,
+                )
+                continue
+
+            # Cache miss — compress as today.
             desc = add_layer_from_files(
                 out_blobs, f"solo-{pkg}", file_paths, arcname, src_mnt
             )
             if desc:
                 layers_desc.append(desc)
-        print(f"    {len(layers_desc) - before_solo} solo layers built in {time.monotonic()-phase_t:.1f}s")
+                if ckey:
+                    new_pkgcache_entries[ckey] = {
+                        "digest": desc["digest"],
+                        "size": desc["size"],
+                        "diff_id": desc["_diff_id"],
+                    }
+                    cache_misses += 1
+        elapsed = time.monotonic() - phase_t
+        print(
+            f"    {len(layers_desc) - before_solo} solo layers built in "
+            f"{elapsed:.1f}s (cache: {cache_hits} hits, {cache_misses} misses)"
+        )
 
         phase_t = time.monotonic()
         nonempty_buckets = sum(1 for b in range(N_BUCKETS) if bucket_assignment[b])
@@ -1043,6 +1154,25 @@ def main():
         (out_root / "index.json").write_bytes(
             json.dumps(index, separators=(",", ":")).encode()
         )
+
+        # ─── Write back the pkgcache index ────────────────────────────
+        # Only entries seen in this build (hits we carried forward +
+        # misses we just compressed). Anything in the previous index
+        # that no longer corresponds to an installed package is dropped
+        # so the index doesn't accumulate dead entries forever.
+        if args.pkgcache_index:
+            out_index = {
+                "version": 1,
+                "rechunker_version": PKGCACHE_VERSION,
+                "entries": new_pkgcache_entries,
+            }
+            Path(args.pkgcache_index).write_text(
+                json.dumps(out_index, separators=(",", ":"))
+            )
+            print(
+                f"==> Pkgcache index: wrote {len(new_pkgcache_entries)} "
+                f"entries to {args.pkgcache_index}"
+            )
 
         # Print summary
         total = sum(d["size"] for d in layers_desc)

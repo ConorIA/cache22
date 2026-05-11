@@ -270,6 +270,22 @@ jobs:
           EOF
           fi
 
+      - name: Restore pkgcache index from previous build
+        if: steps.detect.outputs.has_changes == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          # Per-variant cache key. Map cache_key → (digest, size, diff_id)
+          # for every solo (per-package) layer compressed in a prior
+          # build. The actual compressed blobs live in the variant's
+          # ghcr.io repo from that prior push; this index just tells the
+          # rechunker "you already compressed glibc-2.41-3 yesterday at
+          # this digest — skip the zstd pass." Cold start (cache miss
+          # here) = full rebuild, populates index for next time.
+          path: /tmp/pkgcache.json
+          key: pkgcache-${{ matrix.variant }}-v1
+          restore-keys: |
+            pkgcache-${{ matrix.variant }}-
+
       - name: Rechunk into ~480 per-package/bucket layers
         if: steps.detect.outputs.has_changes == 'true'
         # Splits the install image into per-package/bucket layers so
@@ -280,6 +296,10 @@ jobs:
         # bootc upgrades work. The OCI image config "created" field
         # is set separately (--image-created-epoch) to the commit
         # timestamp so `bootc status` shows a real build date.
+        #
+        # --pkgcache-index points at the restored index. The rechunker
+        # consults it for each solo package and skips zstd-19 when the
+        # mtree-derived cache key matches an entry from a prior build.
         run: |
           mkdir -p /tmp/rechunked
           CREATED=$(git -C "$GITHUB_WORKSPACE" log -1 --format=%ct)
@@ -287,23 +307,28 @@ jobs:
             --src localhost/cache22-${{ matrix.variant }}:raw \
             --dst /tmp/rechunked \
             --source-date-epoch 0 \
-            --image-created-epoch "$CREATED"
+            --image-created-epoch "$CREATED" \
+            --pkgcache-index /tmp/pkgcache.json
 
       - name: Push rechunked image to ghcr.io
         if: steps.detect.outputs.has_changes == 'true'
         run: |
-          # Push the rechunker's zstd-compressed layers as-is. No
-          # --dest-compress-format flag, so skopeo skips re-encoding.
-          # The rechunker writes zstd at level -19; same input bytes
-          # produce the same output bytes (zstd CLI is deterministic
-          # by design), so layer blob digests are stable across builds
-          # with unchanged content, and bootc upgrades only download
-          # layers whose underlying files actually changed.
-          echo "==> Pushing :rolling"
-          sudo skopeo copy \
-            --authfile $HOME/.docker/config.json \
-            oci:/tmp/rechunked:rechunked \
-            "docker://${{ steps.tags.outputs.tag_rolling }}"
+          # push-with-cache.py replaces `skopeo copy`. Per layer:
+          #   1. HEAD destination repo. Blob there from yesterday → skip.
+          #   2. Blob in local OCI dir → upload (cache miss this build).
+          #   3. Neither → FATAL (cache lied / ghcr.io GC'd blob).
+          # No bytes flow for cache hits. No new ghcr.io infrastructure;
+          # the variant's own repo serves as the cache.
+          DST_REF="${{ steps.tags.outputs.tag_rolling }}"
+          DST_REPO="${DST_REF%:*}"
+          DST_REPO="${DST_REPO#ghcr.io/}"
+          DST_TAG="${DST_REF##*:}"
+          echo "==> Pushing :$DST_TAG to $DST_REPO"
+          sudo python3 scripts/push-with-cache.py \
+            --src /tmp/rechunked \
+            --dst-repo "$DST_REPO" \
+            --dst-tag "$DST_TAG" \
+            --auth-file "$HOME/.docker/config.json"
 
           # For the date and sha tags, use `crane tag` — registry-protocol
           # primitive that writes a new manifest reference pointing at the
@@ -329,6 +354,16 @@ jobs:
               # The first arg is the source image, second is JUST the new tag name.
               crane tag "${{ steps.tags.outputs.tag_rolling }}" "${tag##*:}"
           done
+
+      - name: Save pkgcache index for next build
+        if: steps.detect.outputs.has_changes == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/pkgcache.json
+          # Run-id-suffixed key keeps each save unique (GHA cache keys
+          # are immutable once written). Restore-keys prefix-match on
+          # `pkgcache-<variant>-` picks the most recent save.
+          key: pkgcache-${{ matrix.variant }}-v1-${{ github.run_id }}
 
       - name: Inspect pushed image
         if: steps.detect.outputs.has_changes == 'true'
