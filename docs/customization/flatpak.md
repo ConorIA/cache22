@@ -112,6 +112,16 @@ Launch from the KDE application menu. Bazaar replaces GNOME Software / KDE Disco
 | Testing a one-off `pacman -S` change to cache22 itself | [usroverlay](../usroverlay/) (discarded on reboot) |
 | Permanent additions to cache22 | [Fork the repo](../../building-and-forking/forking/) |
 
+## What about .rpm, .deb, .exe files
+
+KDE variants of cache22 register `cache22-foreign-pkg` as the default handler for `application/x-rpm`, `application/vnd.debian.binary-package`, and `application/x-ms-dos-executable`. Double-clicking a downloaded `.rpm`, `.deb`, `.exe`, or `.msi` opens a kdialog explaining why direct installation is not supported on an immutable image and pointing to Flatpak or distrobox as the alternatives.
+
+For `.rpm` and `.deb`: search Flatpak first. If the app is not on Flathub, install via [Distrobox](../distrobox/) using the matching distro's package manager (Fedora distrobox for `.rpm`, Debian/Ubuntu distrobox for `.deb`).
+
+For `.exe` and `.msi`: install [Bottles](https://flathub.org/apps/com.usebottles.bottles) or [Wine](https://flathub.org/apps/org.winehq.Wine) from Flathub, or run the executable via Steam's Proton if it is a game.
+
+The handler is informational only. It does not attempt to install the file. To bypass and use a different handler, right-click the file and pick "Open With".
+
 ## See also
 
 - [Distrobox](../distrobox/) for CLI tools and dev environments.

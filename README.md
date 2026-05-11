@@ -52,6 +52,7 @@ For details on each variant see [Variants](https://cmspam.github.io/cache22/gett
 | [`cache22-karg`](https://cmspam.github.io/cache22/customization/kernel-args/) | Manage persistent kernel command-line args. |
 | [`cache22-shell`](https://cmspam.github.io/cache22/customization/distrobox/) | Open a CachyOS distrobox container for non-immutable package work. |
 | [`cache22-healthcheck`](https://cmspam.github.io/cache22/system-ops/healthcheck/) | Auto-rollback after 3 consecutive bad boots. |
+| [`cache22-gamescope-mode`](https://cmspam.github.io/cache22/customization/gamescope-mode/) | (KDE only) Toggle SteamOS-style gamescope autologin. |
 
 ## Forking
 
