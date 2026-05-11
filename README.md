@@ -135,40 +135,55 @@ Both profiles have `Persistent=true` (catches missed firings after sleep/shutdow
 - The most recent `cache22-autoupdate` run did NOT fail
 - No active sessions are blocking (default — overridable)
 
-When all clear, it broadcasts a 5-minute warning via `shutdown -r +5` so logged-in users can save work, then reboots into the staged image. SSH session ends mid-window? The next poll catches it. Window expires with sessions still active? Skip until next firing.
+When all clear, it broadcasts a 5-minute warning so logged-in users can save work, then delegates to `cache22-reboot` (see below) to apply the staged image. SSH session ends mid-window? The next poll catches it. Window expires with sessions still active? Skip until next firing.
 
 ```bash
 sudo cache22-autoreboot enable --at 'daily 04:00'                # daily 4am check
 sudo cache22-autoreboot enable --at 'Sun 03:00'                  # Sundays only
 sudo cache22-autoreboot enable --at 'Thu,Sat 16:00' --window 1h  # Thu+Sat between 4-5pm
 sudo cache22-autoreboot enable --at 'daily 03:00' --allow-active-sessions  # don't defer for users
-sudo cache22-autoreboot enable --at 'daily 04:00' --kexec        # kexec into the staged UKI instead of full reboot
 sudo cache22-autoreboot disable
 sudo cache22-autoreboot status
 ```
 
-`--at` is required (auto-reboot is opt-in by configuration, not by default). Window defaults to 30 minutes. `--kexec` opts into [`cache22-fast-reboot`](#fast-reboot-via-kexec) for the actual reboot — saves ~10-30 sec by skipping firmware POST and the bootloader.
+`--at` is required (auto-reboot is opt-in by configuration, not by default). Window defaults to 30 minutes. The reboot strategy itself (soft-reboot vs kexec vs full reboot) is owned by [`cache22-reboot`](#applying-an-update-cache22-reboot) and configured separately in `/etc/cache22/reboot.conf`.
 
-### Fast reboot via kexec
+### Applying an update: `cache22-reboot`
 
-`cache22-fast-reboot` jumps directly into the staged UKI's kernel via `kexec_load`, skipping firmware POST + sd-boot. Userspace shutdown (stop services, sync, unmount) runs normally — this is **not** like cutting power. Net savings depend on hardware: ~10-15 sec on minimal servers with fast firmware, ~25-50 sec on machines with slow enterprise firmware.
+`cache22-reboot` is the single entry point for rebooting into a staged update. It picks the fastest safe strategy automatically:
+
+| Strategy | When | Speed |
+|---|---|---|
+| **soft-reboot** | bootc reports `softRebootCapable: true` (kernel + initrd unchanged in staged deploy) | ~5-10 sec — only userspace pivots, kernel keeps running |
+| **kernel-change strategy** | Kernel changed in staged deploy. Default `hard`; opt-in `kexec` via config or `--kexec` | hard: ~30-90 sec; kexec: ~10-30 sec faster than hard |
 
 ```bash
-sudo cache22-fast-reboot           # kexec into the highest-VERSION_ID UKI now
-sudo cache22-fast-reboot --check   # show what would be kexec'd, don't do it
-sudo cache22-fast-reboot --no-fallback  # abort instead of falling back to a real reboot if kexec fails
+sudo cache22-reboot                # auto-pick (soft-reboot if possible, else hard)
+sudo cache22-reboot --kexec        # if kernel changed, prefer kexec over full reboot
+sudo cache22-reboot --hard         # force a full reboot regardless
+sudo cache22-reboot --check        # print what would happen, don't reboot
+sudo cache22-reboot --no-fallback  # abort instead of falling back to hard reboot if chosen strategy fails
 ```
+
+Persistent preference (CLI flags override per-invocation):
+
+```ini
+# /etc/cache22/reboot.conf
+KERNEL_CHANGE_STRATEGY=hard   # or: kexec
+```
+
+**Soft-reboot** (`systemctl soft-reboot`, systemd 254+) serializes systemd state to `/run`, switch_root's into the staged deploy's userspace, and re-execs PID 1. The running kernel keeps its in-memory state (uptime, mounted devices, network connections that survive briefly). This is what bootc's `softRebootCapable` flag tells us is safe to do.
+
+**kexec** picks the UKI sd-boot would auto-default to (highest `.osrel VERSION_ID`), extracts the kernel + initrd + cmdline from the signed PE, re-signs the kernel with your per-machine key (so it works under kernel lockdown if ever enabled), stages it via `kexec_load`, then triggers `systemctl kexec` for a clean shutdown into the new kernel. Faster than firmware POST but some quirky hardware doesn't kexec cleanly — that's why it's opt-in.
+
+Caveats for kexec: TPM PCR 11 won't reflect the running kernel after kexec (sd-stub measures during normal boot only); microcode updates won't take effect mid-kexec; some specific hardware (certain NICs, GPUs) doesn't kexec reliably and falls back to a normal reboot.
 
 Typical workflow:
 
 ```bash
-sudo cache22-update         # pull + stage + sign new UKI (no reboot)
-sudo cache22-fast-reboot    # 10-30 sec later you're on the new kernel
+sudo cache22-update    # pull + stage + sign new UKI (no reboot)
+sudo cache22-reboot    # auto-pick the fastest safe strategy
 ```
-
-It picks the UKI sd-boot would auto-default to (highest `.osrel VERSION_ID`), extracts the kernel + initrd + cmdline from the signed PE, re-signs the kernel with your per-machine key (so it works under kernel lockdown if ever enabled), stages it via `kexec_load`, then triggers `systemctl kexec` for a clean shutdown into the new kernel. If anything in the kexec staging fails (some quirky hardware doesn't kexec cleanly) it falls back to a normal `systemctl reboot` so you get there regardless.
-
-Caveats: TPM PCR 11 won't reflect the running kernel after kexec (sd-stub measures during normal boot only); microcode updates won't take effect mid-kexec; some specific hardware (certain NICs, GPUs) doesn't kexec reliably and may need a real reboot. For most desktop/server use it's transparent.
 
 ### Inspecting a staged update
 

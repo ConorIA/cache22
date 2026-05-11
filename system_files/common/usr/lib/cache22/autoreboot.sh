@@ -7,15 +7,16 @@
 #   2. The most recent cache22-autoupdate.service run did NOT fail
 #   3. No active sessions block (unless ALLOW_ACTIVE_SESSIONS=yes)
 #
-# Reboot uses `shutdown -r +5` so logged-in users get a 5-minute wall
-# warning to save work.
+# Reboot is delegated to cache22-reboot, which auto-picks soft-reboot
+# (kernel unchanged) or honors KERNEL_CHANGE_STRATEGY in
+# /etc/cache22/reboot.conf when the kernel changed. A 5-minute wall
+# warning is broadcast first so logged-in users can save work.
 
 set -uo pipefail
 
 WINDOW="${WINDOW:-30m}"
 ALLOW_ACTIVE_SESSIONS="${ALLOW_ACTIVE_SESSIONS:-no}"
 POLL_INTERVAL="${POLL_INTERVAL:-60}"
-KEXEC="${KEXEC:-no}"
 
 parse_duration() {
     # Returns seconds. Accepts 30s, 30m, 2h, or a bare integer (seconds).
@@ -72,20 +73,10 @@ while (( $(date +%s) < end_time )); do
         continue
     fi
     echo "all clear; broadcasting 5-min reboot warning"
-    if [[ "$KEXEC" == "yes" ]]; then
-        # shutdown -r doesn't have a kexec equivalent that broadcasts, so
-        # do it the long way: wall the warning, sleep, then kexec. The
-        # kexec helper itself goes through systemctl kexec which runs
-        # the same shutdown sequence as a normal reboot — services stop
-        # cleanly, fs unmount cleanly, only firmware POST is skipped.
-        wall "cache22 unattended kexec-reboot in 5 minutes for staged update"
-        sleep 300
-        cache22-fast-reboot || \
-            { echo "cache22-fast-reboot failed; falling back to systemctl reboot in 5s"; sleep 5; systemctl reboot; }
-    else
-        shutdown -r +5 "cache22 unattended reboot for staged update" || \
-            { echo "shutdown -r failed; falling back to systemctl reboot in 5s"; sleep 5; systemctl reboot; }
-    fi
+    wall "cache22 unattended reboot in 5 minutes for staged update"
+    sleep 300
+    cache22-reboot || \
+        { echo "cache22-reboot failed; falling back to systemctl reboot in 5s"; sleep 5; systemctl reboot; }
     exit 0
 done
 

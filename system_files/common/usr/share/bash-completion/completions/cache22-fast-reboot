@@ -1,7 +1,0 @@
-# bash-completion for cache22-fast-reboot
-_cache22_fast_reboot() {
-    local cur prev words cword
-    _init_completion || return
-    COMPREPLY=( $(compgen -W "--check --no-fallback --help" -- "$cur") )
-}
-complete -F _cache22_fast_reboot cache22-fast-reboot

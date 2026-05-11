@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+# cache22-reboot — apply a staged update with the optimal reboot
+# strategy.
+#
+# Strategy is picked automatically based on whether the staged
+# deploy can be soft-rebooted (same kernel + initramfs as booted):
+#
+#   soft-reboot   bootc says staged deploy is softRebootCapable.
+#                 ~5-10 sec; same kernel keeps running, only userspace
+#                 pivots to the new rootfs. Default when applicable.
+#
+#   hard reboot   Kernel changed in the staged deploy. Full system
+#                 restart through firmware POST + bootloader. Default
+#                 when soft-reboot isn't applicable.
+#
+#   kexec         Kernel changed AND user opted into kexec (via
+#                 /etc/cache22/reboot.conf or the --kexec flag).
+#                 Faster than full reboot when the hardware supports
+#                 it; some hardware doesn't kexec cleanly.
+#
+# Flags:
+#   --kexec         Prefer kexec when the kernel changed (instead of
+#                   full reboot). No effect if soft-reboot applies.
+#   --hard          Force full reboot regardless of staged state.
+#   --check         Print the strategy that would run; do not execute.
+#   --no-fallback   On strategy failure, abort instead of falling back
+#                   to a full reboot.
+#   --help
+#
+# Persistent preference: /etc/cache22/reboot.conf
+#   KERNEL_CHANGE_STRATEGY=hard|kexec    (default: hard)
+# CLI flags override the config for that invocation.
+
+set -euo pipefail
+
+CONFIG=/etc/cache22/reboot.conf
+KERNEL_CHANGE_STRATEGY=hard
+[[ -f $CONFIG ]] && . "$CONFIG"
+
+KEXEC=0
+HARD=0
+CHECK=0
+FALLBACK=1
+
+for arg in "$@"; do
+    case "$arg" in
+        --kexec)        KEXEC=1 ;;
+        --hard)         HARD=1 ;;
+        --check)        CHECK=1 ;;
+        --no-fallback)  FALLBACK=0 ;;
+        -h|--help)      sed -n '2,30p' "$0" | sed 's/^# \?//'; exit 0 ;;
+        *)              echo "Unknown arg: $arg" >&2; exit 1 ;;
+    esac
+done
+
+die() { echo "Error: $*" >&2; exit 1; }
+
+# CLI flag overrides config-file preference.
+if (( KEXEC )); then
+    KERNEL_CHANGE_STRATEGY=kexec
+fi
+
+# ─── Strategy decision ────────────────────────────────────────────
+status=$(bootc status --json 2>/dev/null || echo '{}')
+
+has_staged=no
+soft_capable=false
+staged_digest=""
+
+if echo "$status" | jq -e '.status.staged != null' >/dev/null 2>&1; then
+    has_staged=yes
+    soft_capable=$(echo "$status" | jq -r '.status.staged.softRebootCapable // false')
+    staged_digest=$(echo "$status" | jq -r '.status.staged.image.imageDigest // ""')
+fi
+
+decide() {
+    if (( HARD )); then
+        echo hard; return
+    fi
+    if [[ "$has_staged" != "yes" ]]; then
+        # No staged deploy; user explicitly invoked a reboot tool, so reboot.
+        echo hard; return
+    fi
+    if [[ "$soft_capable" == "true" ]]; then
+        echo soft; return
+    fi
+    # Kernel changed (or some other invariant blocks soft-reboot).
+    case "$KERNEL_CHANGE_STRATEGY" in
+        kexec) echo kexec ;;
+        *)     echo hard ;;
+    esac
+}
+
+strategy=$(decide)
+
+# Why did we pick this? Build a one-line explanation for both --check
+# and the actual run output.
+explain() {
+    case "$strategy" in
+        soft)  echo "soft-reboot (kernel unchanged, fastest)" ;;
+        kexec) echo "kexec (kernel changed; --kexec or KERNEL_CHANGE_STRATEGY=kexec preferred)" ;;
+        hard)
+            if [[ "$has_staged" != "yes" ]]; then
+                echo "hard reboot (no staged deploy; rebooting current)"
+            elif (( HARD )); then
+                echo "hard reboot (--hard forced)"
+            else
+                echo "hard reboot (kernel changed; --kexec or KERNEL_CHANGE_STRATEGY=kexec to use kexec instead)"
+            fi
+            ;;
+    esac
+}
+
+if (( CHECK )); then
+    echo "strategy: $strategy — $(explain)"
+    if [[ "$has_staged" == "yes" ]]; then
+        echo "  staged digest:        ${staged_digest:0:23}…"
+        echo "  softRebootCapable:    $soft_capable"
+    else
+        echo "  staged:               (none)"
+    fi
+    echo "  KERNEL_CHANGE_STRATEGY: $KERNEL_CHANGE_STRATEGY (from ${CONFIG} + flags)"
+    exit 0
+fi
+
+[[ ${EUID} -eq 0 ]] || die "must run as root (try: sudo cache22-reboot)"
+
+# ─── Fallback to hard reboot on failure ───────────────────────────
+fallback() {
+    if (( FALLBACK )); then
+        echo "==> falling back to hard reboot"
+        exec systemctl reboot
+    else
+        die "$1 failed and --no-fallback set; system unchanged"
+    fi
+}
+
+# ─── soft-reboot ──────────────────────────────────────────────────
+do_soft_reboot() {
+    echo "==> soft-reboot ($(explain))"
+    # systemctl soft-reboot performs:
+    #   1. Serialize systemd state to /run
+    #   2. switch_root into /run/nextroot (which bootc has populated
+    #      with the staged deploy's rootfs)
+    #   3. re-exec PID 1 in the new root
+    #   4. Restart all userspace services in the new tree
+    # Same kernel keeps running.
+    if ! exec systemctl soft-reboot; then
+        fallback "soft-reboot"
+    fi
+}
+
+# ─── hard reboot ──────────────────────────────────────────────────
+do_hard_reboot() {
+    echo "==> hard reboot ($(explain))"
+    exec systemctl reboot
+}
+
+# ─── kexec ────────────────────────────────────────────────────────
+# Picks the UKI sd-boot would auto-default to (highest .osrel
+# VERSION_ID across cache22-*.efi), extracts kernel/initrd/cmdline
+# from the signed PE, re-signs the kernel with the per-machine SB key
+# (so it works under kernel lockdown if ever enabled), kexec --load,
+# then systemctl kexec for a clean shutdown.
+do_kexec() {
+    echo "==> kexec ($(explain))"
+
+    local ESP=/efi
+    [[ -d "$ESP" ]] || ESP=/boot/efi
+    local UKI_DIR="$ESP/EFI/Linux"
+    [[ -d "$UKI_DIR" ]] || { echo "ESP UKI directory not found at $UKI_DIR" >&2; fallback "kexec"; return; }
+
+    local KEYDIR=/var/lib/cache22/sbkey
+    local SBKEY="$KEYDIR/keys/db/db.key"
+    local SBCRT="$KEYDIR/keys/db/db.pem"
+
+    local best="" best_ver=-1 uki ver osrel
+    shopt -s nullglob
+    for uki in "$UKI_DIR"/cache22-*.efi; do
+        osrel=$(objcopy -O binary --only-section=.osrel "$uki" /dev/stdout 2>/dev/null | tr -d '\0' || true)
+        ver=$(echo "$osrel" | sed -n 's/^VERSION_ID=//p' | head -1)
+        [[ -z "$ver" ]] && continue
+        if (( ver > best_ver )); then
+            best_ver=$ver
+            best="$uki"
+        fi
+    done
+    shopt -u nullglob
+    [[ -n "$best" ]] || { echo "No cache22 UKI found in $UKI_DIR" >&2; fallback "kexec"; return; }
+    echo "    target UKI: $(basename "$best")"
+
+    local TMP
+    TMP=$(mktemp -d)
+    trap "rm -rf $TMP" EXIT
+
+    objcopy -O binary --only-section=.linux   "$best" "$TMP/vmlinuz" 2>/dev/null \
+        || { echo "Could not extract .linux section" >&2; fallback "kexec"; return; }
+    objcopy -O binary --only-section=.initrd  "$best" "$TMP/initrd"  2>/dev/null \
+        || { echo "Could not extract .initrd section" >&2; fallback "kexec"; return; }
+    objcopy -O binary --only-section=.cmdline "$best" "$TMP/cmdline" 2>/dev/null \
+        || { echo "Could not extract .cmdline section" >&2; fallback "kexec"; return; }
+
+    local CMDLINE
+    CMDLINE=$(tr -d '\0' < "$TMP/cmdline")
+    [[ -n "$CMDLINE" ]] || { echo "Extracted cmdline is empty" >&2; fallback "kexec"; return; }
+
+    # Sign kernel with per-machine SB key so kexec works under kernel
+    # lockdown (Fedora-style). Harmless if lockdown is off (Arch default).
+    if [[ -f "$SBKEY" && -f "$SBCRT" ]]; then
+        if sbsign --key "$SBKEY" --cert "$SBCRT" --output "$TMP/vmlinuz.signed" "$TMP/vmlinuz" >/dev/null 2>&1; then
+            mv "$TMP/vmlinuz.signed" "$TMP/vmlinuz"
+        fi
+    fi
+
+    if ! kexec --load --kexec-syscall-auto \
+            "$TMP/vmlinuz" \
+            --initrd="$TMP/initrd" \
+            --command-line="$CMDLINE"; then
+        echo "    kexec --load failed" >&2
+        fallback "kexec"
+        return
+    fi
+    echo "==> systemctl kexec (clean shutdown then jump to staged kernel)"
+    exec systemctl kexec
+}
+
+case "$strategy" in
+    soft)  do_soft_reboot ;;
+    kexec) do_kexec ;;
+    hard)  do_hard_reboot ;;
+esac
