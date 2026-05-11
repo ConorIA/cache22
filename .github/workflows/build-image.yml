@@ -198,24 +198,35 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Pull the previous successful run's diagnostics artifact for
-          # this variant. We only get here if a previous build exists
-          # within the artifact retention window — first build / artifact
-          # expired both fall through to the no-prev case below.
+          # Pull the most recent run's diagnostics artifact for this
+          # variant. Don't filter --status=success: the diagnostics
+          # upload step runs early in the job, before anything that
+          # typically fails (rechunk/push), so failed runs usually have
+          # valid diagnostics too. Skipping them would mean the "package
+          # changes" report measures against a stale baseline from
+          # days/weeks ago when most recent runs failed.
+          #
+          # Walk the recent run list and download from the first one
+          # that has the artifact we need.
           mkdir -p /tmp/prev
-          PREV=$(gh run list --workflow=build-image.yml --branch=main \
-                  --status=success --limit=1 \
-                  --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)
-          if [ -n "$PREV" ]; then
-              echo "==> Pulling diagnostics from run $PREV"
-              gh run download "$PREV" \
-                  --name "var-tmpfiles-${{ matrix.variant }}" \
-                  --dir /tmp/prev/ 2>&1 || true
-          fi
+          mapfile -t RECENT < <(gh run list --workflow=build-image.yml --branch=main \
+                  --status=completed --limit=20 \
+                  --json databaseId --jq '.[].databaseId' 2>/dev/null || true)
+          for run_id in "${RECENT[@]}"; do
+              # Skip current run (its artifact doesn't exist yet).
+              [[ "$run_id" == "${{ github.run_id }}" ]] && continue
+              echo "==> Trying diagnostics from run $run_id"
+              if gh run download "$run_id" \
+                      --name "var-tmpfiles-${{ matrix.variant }}" \
+                      --dir /tmp/prev/ 2>/dev/null; then
+                  echo "==> Got diagnostics from run $run_id"
+                  break
+              fi
+          done
           if [ -f "/tmp/prev/pkgs-${{ matrix.variant }}.txt" ]; then
               echo "==> Previous pkgs: $(wc -l < /tmp/prev/pkgs-${{ matrix.variant }}.txt) packages"
           else
-              echo "==> No previous pkgs.txt — first build or artifact expired"
+              echo "==> No previous pkgs.txt found in last 20 runs — first build or artifacts expired"
           fi
 
       - name: Detect changes vs previous build

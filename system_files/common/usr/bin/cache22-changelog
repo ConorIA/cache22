@@ -99,17 +99,21 @@ list_pkgs() {
         }'
 }
 
-# LC_ALL=C is load-bearing: sort uses locale-aware collation by default
-# (e.g. en_US.UTF-8 treats '-' and '_' as ignorable in some positions),
-# while comm uses byte-wise comparison. Without forcing C locale, sort
-# and comm disagree on edge-case orderings → comm prints "file N is not
-# in sorted order" warnings even though the data is correct.
-booted_pkgs=$(list_pkgs "$booted_root" | LC_ALL=C sort)
-staged_pkgs=$(list_pkgs "$staged_root" | LC_ALL=C sort)
+# LC_ALL=C is load-bearing on BOTH sort and comm: sort uses locale-aware
+# collation by default (e.g. en_US.UTF-8 treats '-' and '_' as ignorable
+# in some positions), comm uses byte-wise comparison. Setting LC_ALL=C
+# only on sort makes the input bytewise-sorted, but comm then runs
+# under the shell's UTF-8 locale and reads the input as "not sorted"
+# under its own collation rules → emits "file N is not in sorted order"
+# warnings AND can compute incorrect added/removed sets on edge cases.
+# Force C locale on the comm process itself too.
+export LC_ALL=C
+booted_pkgs=$(list_pkgs "$booted_root" | sort)
+staged_pkgs=$(list_pkgs "$staged_root" | sort)
 
-added=$(  comm -13 <(cut -f1 <<<"$booted_pkgs" | LC_ALL=C sort -u) <(cut -f1 <<<"$staged_pkgs" | LC_ALL=C sort -u))
-removed=$(comm -23 <(cut -f1 <<<"$booted_pkgs" | LC_ALL=C sort -u) <(cut -f1 <<<"$staged_pkgs" | LC_ALL=C sort -u))
-common=$( comm -12 <(cut -f1 <<<"$booted_pkgs" | LC_ALL=C sort -u) <(cut -f1 <<<"$staged_pkgs" | LC_ALL=C sort -u))
+added=$(  comm -13 <(cut -f1 <<<"$booted_pkgs" | sort -u) <(cut -f1 <<<"$staged_pkgs" | sort -u))
+removed=$(comm -23 <(cut -f1 <<<"$booted_pkgs" | sort -u) <(cut -f1 <<<"$staged_pkgs" | sort -u))
+common=$( comm -12 <(cut -f1 <<<"$booted_pkgs" | sort -u) <(cut -f1 <<<"$staged_pkgs" | sort -u))
 
 upgraded=()
 while IFS= read -r pkg; do
