@@ -61,7 +61,7 @@ ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
 COPY --from=libfaketime /usr/bin/faketime /usr/bin/faketime
 COPY --from=libfaketime /usr/lib/faketime /usr/lib/faketime
 RUN install -d /usr/local/bin \
- && printf '#!/bin/sh\nexec /usr/bin/faketime "2026-05-06 00:00:00" /usr/bin/makepkg "$@"\n' \
+ && printf '#!/bin/sh\nexec /usr/bin/faketime "2099-01-01 00:00:00" /usr/bin/makepkg "$@"\n' \
         > /usr/local/bin/makepkg \
  && chmod +x /usr/local/bin/makepkg
 
@@ -151,7 +151,7 @@ RUN install -d /usr/local/bin \
 # the shim before bootc-lint so the runtime image has plain
 # /usr/bin/dkms behavior.
 RUN install -d /usr/local/bin \
- && printf '#!/bin/sh\nexec /usr/bin/faketime "2026-05-06 00:00:00" /usr/bin/dkms "$@"\n' \
+ && printf '#!/bin/sh\nexec /usr/bin/faketime "2099-01-01 00:00:00" /usr/bin/dkms "$@"\n' \
         > /usr/local/bin/dkms \
  && chmod +x /usr/local/bin/dkms
 
