@@ -226,21 +226,15 @@ def parse_pacman_files(files_path: Path) -> list[str]:
 PKGCACHE_VERSION = "r1"
 
 
-def solo_cache_key(pkg_dir_name: str, mtree_path: Path) -> str | None:
-    """Compute a stable cache key for a solo (per-package) layer.
+def _stable_mtree_sha(mtree_path: Path) -> str | None:
+    """Return a content-stable sha256 of a package's mtree.
 
-    Format: solo-<pkg-ver-rel>-<arch>-mtree-<sha12>-<rN>
-
-    Hashes a normalized copy of the package's mtree: strip the per-install
-    time= entries and zero out the .BUILDINFO/.PKGINFO sha256digest fields
-    (both of which drift across installs of the same package version).
-    What remains is the per-file sha256digests + file metadata, which is
-    a true content fingerprint — same package version always hashes the
-    same, and an upstream silent rebuild of the same version (different
-    file content) hashes differently.
-
-    Returns None if the mtree is missing or unreadable (package can't be
-    cached without a content fingerprint).
+    Strips the per-install time= entries and zeros out the
+    .BUILDINFO/.PKGINFO sha256digest fields (both drift across installs
+    of the same package version). What remains is the per-file
+    sha256digests + file metadata — same package version always hashes
+    the same, and an upstream silent rebuild of the same version
+    (different file content) hashes differently.
     """
     if not mtree_path.exists():
         return None
@@ -250,18 +244,48 @@ def solo_cache_key(pkg_dir_name: str, mtree_path: Path) -> str | None:
             raw = f.read()
     except OSError:
         return None
-    # Strip time= entries (pacman INSTALLDATE drift)
     normalized = re.sub(rb"time=\d+(?:\.\d+)?", b"time=0", raw)
-    # Zero out the BUILDINFO/PKGINFO sha256digest (makepkg builddate drift)
     normalized = re.sub(
         rb"^(\./\.(?:BUILDINFO|PKGINFO)\s.*?sha256digest=)[0-9a-f]{64}",
         rb"\g<1>" + b"0" * 64,
         normalized,
         flags=re.MULTILINE,
     )
-    sha12 = hashlib.sha256(normalized).hexdigest()[:12]
+    return hashlib.sha256(normalized).hexdigest()
+
+
+def solo_cache_key(pkg_dir_name: str, mtree_path: Path) -> str | None:
+    """Cache key for a solo (one-package) layer.
+    Format: solo-<pkg-ver-rel>-<arch>-mtree-<sha12>-<rN>"""
+    sha = _stable_mtree_sha(mtree_path)
+    if sha is None:
+        return None
     arch = "x86_64"
-    return f"solo-{pkg_dir_name}-{arch}-mtree-{sha12}-{PKGCACHE_VERSION}"
+    return f"solo-{pkg_dir_name}-{arch}-mtree-{sha[:12]}-{PKGCACHE_VERSION}"
+
+
+def bucket_cache_key(
+    bidx: int,
+    pkgs_in_bucket: list[str],
+    db_root: Path,
+) -> str | None:
+    """Cache key for a bucket layer (multiple small packages).
+
+    Format: bucket-<bidx>-<sha12>-<rN>, where sha12 hashes the
+    concatenation of "<pkg-ver-rel>:<mtree-sha>" lines for every package
+    in the bucket (sorted). Any change to bucket membership OR to any
+    package's content invalidates the key. Returns None if any package's
+    mtree is missing.
+    """
+    parts: list[str] = []
+    for pkg in sorted(pkgs_in_bucket):
+        sha = _stable_mtree_sha(db_root / pkg / "mtree")
+        if sha is None:
+            return None
+        parts.append(f"{pkg}:{sha}")
+    blob_input = "\n".join(parts).encode()
+    sha12 = hashlib.sha256(blob_input).hexdigest()[:12]
+    return f"bucket-{bidx:03d}-{sha12}-{PKGCACHE_VERSION}"
 
 
 def parse_pacman_desc(desc_path: Path) -> dict[str, str]:
@@ -862,10 +886,35 @@ def main():
         nonempty_buckets = sum(1 for b in range(N_BUCKETS) if bucket_assignment[b])
         print(f"==> Building bucket layers ({nonempty_buckets} non-empty of {N_BUCKETS})")
         before_buckets = len(layers_desc)
+        bucket_hits = 0
+        bucket_misses = 0
         for bidx in range(N_BUCKETS):
             pkgs_in = sorted(bucket_assignment[bidx])
             if not pkgs_in:
                 continue
+
+            # ── Bucket cache lookup ──
+            # Key is stable iff bucket composition AND every member's
+            # content is unchanged. Drop-in for the solo cache pattern.
+            bkey = bucket_cache_key(bidx, pkgs_in, db_root_solo)
+            entry = pkgcache.get(bkey) if bkey else None
+            if entry and entry.get("digest") and entry.get("size") and entry.get("diff_id"):
+                layers_desc.append({
+                    "mediaType": "application/vnd.oci.image.layer.v1.tar+zstd",
+                    "digest": entry["digest"],
+                    "size": entry["size"],
+                    "_diff_id": entry["diff_id"],
+                    "_cached": True,
+                })
+                new_pkgcache_entries[bkey] = entry
+                bucket_hits += 1
+                print(
+                    f"    [bucket-{bidx:03d}                          ] "
+                    f"CACHE HIT  ({len(pkgs_in)} pkgs)",
+                    flush=True,
+                )
+                continue
+
             file_paths: list[Path] = []
             arcname: dict[Path, str] = {}
             for pkg in pkgs_in:
@@ -878,7 +927,18 @@ def main():
             )
             if desc:
                 layers_desc.append(desc)
-        print(f"    {len(layers_desc) - before_buckets} bucket layers built in {time.monotonic()-phase_t:.1f}s")
+                if bkey:
+                    new_pkgcache_entries[bkey] = {
+                        "digest": desc["digest"],
+                        "size": desc["size"],
+                        "diff_id": desc["_diff_id"],
+                    }
+                    bucket_misses += 1
+        print(
+            f"    {len(layers_desc) - before_buckets} bucket layers built in "
+            f"{time.monotonic()-phase_t:.1f}s "
+            f"(cache: {bucket_hits} hits, {bucket_misses} misses)"
+        )
 
         phase_t = time.monotonic()
         print("==> Building pacman-db layer")
@@ -1160,15 +1220,26 @@ def main():
         # misses we just compressed). Anything in the previous index
         # that no longer corresponds to an installed package is dropped
         # so the index doesn't accumulate dead entries forever.
+        #
+        # Unlink first: actions/cache restored the file with the runner
+        # user's perms; even running as root we can't always overwrite
+        # in place. Removing then creating fresh sidesteps it cleanly.
         if args.pkgcache_index:
+            out_path = Path(args.pkgcache_index)
             out_index = {
                 "version": 1,
                 "rechunker_version": PKGCACHE_VERSION,
                 "entries": new_pkgcache_entries,
             }
-            Path(args.pkgcache_index).write_text(
-                json.dumps(out_index, separators=(",", ":"))
-            )
+            content = json.dumps(out_index, separators=(",", ":"))
+            out_path.unlink(missing_ok=True)
+            out_path.write_text(content)
+            # actions/cache/save runs as the runner user, so make sure
+            # the freshly-written (root-owned) file is world-readable.
+            try:
+                os.chmod(out_path, 0o644)
+            except OSError:
+                pass
             print(
                 f"==> Pkgcache index: wrote {len(new_pkgcache_entries)} "
                 f"entries to {args.pkgcache_index}"
