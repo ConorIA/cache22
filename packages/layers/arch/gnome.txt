@@ -26,7 +26,6 @@ gvfs-gphoto2
 gvfs-mtp
 gvfs-nfs
 gvfs-smb
-gvfs-google
 
 # ─── GNOME daily-driver apps ──────────────────────────────
 gnome-text-editor
