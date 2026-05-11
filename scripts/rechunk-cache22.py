@@ -780,12 +780,24 @@ def main():
             arcname = {src_mnt / f: f for f in files}
 
             # ── Cache lookup ──
+            # Outer try/except is belt-and-suspenders on top of
+            # cache_client's already-swallowed exceptions: any cache
+            # failure here must fall through to a fresh compress, never
+            # abort the build.
             ckey = None
             manifest = None
             if cache is not None:
-                ckey = solo_cache_key(pkg, db_root_solo / pkg / "mtree")
-                if ckey:
-                    manifest = cache.manifest_get(args.cache_repo, ckey)
+                try:
+                    ckey = solo_cache_key(pkg, db_root_solo / pkg / "mtree")
+                    if ckey:
+                        manifest = cache.manifest_get(args.cache_repo, ckey)
+                except Exception as e:  # noqa: BLE001
+                    print(
+                        f"    [solo-{pkg:32s}] cache lookup error "
+                        f"({type(e).__name__}: {e}); proceeding fresh",
+                        flush=True,
+                    )
+                    manifest = None
             if manifest and manifest.get("layers"):
                 layer = manifest["layers"][0]
                 diff_id = (layer.get("annotations") or {}).get(
@@ -845,15 +857,23 @@ def main():
             for ckey, desc, blob_path in cache_writes_pending:
                 if not blob_path.exists():
                     continue
-                ok = cache.push_layer_image(
-                    args.cache_repo,
-                    ckey,
-                    blob_path,
-                    desc["digest"],
-                    desc["size"],
-                    desc["_diff_id"],
-                    media_type=desc["mediaType"],
-                )
+                try:
+                    ok = cache.push_layer_image(
+                        args.cache_repo,
+                        ckey,
+                        blob_path,
+                        desc["digest"],
+                        desc["size"],
+                        desc["_diff_id"],
+                        media_type=desc["mediaType"],
+                    )
+                except Exception as e:  # noqa: BLE001
+                    print(
+                        f"    cache write {ckey} error "
+                        f"({type(e).__name__}: {e})",
+                        flush=True,
+                    )
+                    ok = False
                 if ok:
                     written += 1
             print(

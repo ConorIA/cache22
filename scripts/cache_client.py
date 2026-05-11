@@ -71,8 +71,15 @@ class GhcrClient:
         try:
             with urllib.request.urlopen(req, timeout=15) as r:
                 body = json.loads(r.read())
-        except urllib.error.URLError as e:
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
             print(f"  cache: token request failed: {e}", file=sys.stderr)
+            return None
+        except Exception as e:  # noqa: BLE001
+            print(
+                f"  cache: token request unexpected error: "
+                f"{type(e).__name__}: {e}",
+                file=sys.stderr,
+            )
             return None
         token = body.get("token") or body.get("access_token")
         if not token:
@@ -91,7 +98,13 @@ class GhcrClient:
         stream_to: Path | None = None,
         timeout: float = 60,
     ) -> tuple[int, dict, bytes | None]:
-        """Make an HTTP request with bearer auth. Returns (status, headers, body)."""
+        """Make an HTTP request with bearer auth. Returns (status, headers, body).
+
+        All network errors (timeouts, connection failures, SSL hiccups,
+        URL errors) collapse to (0, {}, None) so the caller can treat the
+        cache as a pure optimization layer — any failure falls through to
+        the "no cache" path without aborting the build.
+        """
         token = self._bearer(repo, action)
         h = {"User-Agent": "cache22-rechunk/1"}
         if headers:
@@ -115,8 +128,20 @@ class GhcrClient:
         except urllib.error.HTTPError as e:
             body = e.read() if method != "HEAD" else b""
             return e.code, dict(e.headers.items()), body
-        except urllib.error.URLError as e:
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+            # OSError catches socket.timeout/socket.gaierror;
+            # TimeoutError catches builtin read-timeouts on 3.10+;
+            # ValueError catches malformed responses.
             print(f"  cache: {method} {url} failed: {e}", file=sys.stderr)
+            return 0, {}, None
+        except Exception as e:  # noqa: BLE001
+            # Last-line safety net: anything we didn't anticipate should
+            # still be a soft fail, not a hard rechunker crash.
+            print(
+                f"  cache: {method} {url} unexpected error: "
+                f"{type(e).__name__}: {e}",
+                file=sys.stderr,
+            )
             return 0, {}, None
 
     # ── Public ops ──
@@ -135,7 +160,8 @@ class GhcrClient:
         return status == 200
 
     def manifest_get(self, repo: str, tag: str) -> dict | None:
-        """GET /v2/<repo>/manifests/<tag>."""
+        """GET /v2/<repo>/manifests/<tag>. Tight timeout — this runs per
+        package and is on the critical path for build wall-clock."""
         url = f"https://ghcr.io/v2/{repo}/manifests/{urllib.parse.quote(tag, safe='')}"
         status, _, body = self._request(
             "GET", url, repo, action="pull",
@@ -143,7 +169,7 @@ class GhcrClient:
                 "Accept": "application/vnd.oci.image.manifest.v1+json,"
                           "application/vnd.docker.distribution.manifest.v2+json",
             },
-            timeout=30,
+            timeout=10,
         )
         if status != 200 or body is None:
             return None
