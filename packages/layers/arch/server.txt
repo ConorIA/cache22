@@ -1,0 +1,8 @@
+# cache22 — arch server layer.
+# Server-only additions on top of base. Not pulled by desktop variants.
+
+# ─── Web admin ────────────────────────────────────────────
+cockpit
+cockpit-podman
+cockpit-machines
+cockpit-storaged

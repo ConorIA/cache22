@@ -1,0 +1,6 @@
+# cache22 manifest: cachy-kde-nvidia
+# family: cachy
+base
+desktop
+nvidia
+kde

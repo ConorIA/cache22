@@ -1,0 +1,19 @@
+# cache22 — cachy gaming layer.
+# Steam + adjacent. Pulled by *-gaming variants only.
+
+# ─── Steam + ecosystem ────────────────────────────────────
+steam
+gamemode
+lib32-gamemode
+mangohud
+lib32-mangohud
+gamescope
+lutris
+goverlay
+xdg-desktop-portal-gtk
+
+# ─── Xbox controller (USB + wireless dongle) ──────────────
+xone-dkms
+
+# ─── Game streaming server (Moonlight / Steam Link) ───────
+sunshine

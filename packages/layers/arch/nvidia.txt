@@ -1,0 +1,18 @@
+# cache22 — arch NVIDIA layer.
+# Driver + userland for NVIDIA GPUs. Optional, pulled by *-nvidia variants.
+
+# ─── NVIDIA driver + DKMS module ──────────────────────────
+nvidia-open-dkms
+nvidia-utils
+opencl-nvidia
+libva-nvidia-driver
+
+# ─── Desktop NVIDIA bits ──────────────────────────────────
+nvidia-settings
+egl-wayland
+nvidia-prime
+switcheroo-control
+
+# ─── 32-bit (Steam, Wine) ─────────────────────────────────
+lib32-nvidia-utils
+lib32-opencl-nvidia

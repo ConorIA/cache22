@@ -1,0 +1,81 @@
+# cache22 — cachy desktop layer.
+# Desktop-common: GPU userland (non-NVIDIA), fonts, codecs, IMEs,
+# generic desktop apps. Pulled by every desktop variant (kde, gnome).
+
+# ─── Desktop GPU userland (non-NVIDIA) ────────────────────
+xf86-video-amdgpu
+mesa-utils
+vulkan-tools
+vulkan-mesa-layers
+vulkan-swrast
+lib32-mesa
+lib32-vulkan-icd-loader
+lib32-vulkan-radeon
+lib32-vulkan-intel
+lib32-vulkan-virtio
+xorg-xwayland
+
+# ─── User-facing apps not bound to a specific DE ──────────
+firefox
+bazaar
+pavucontrol
+virt-manager
+qemu-desktop
+veracrypt
+
+# ─── Printing + scanning ──────────────────────────────────
+cups
+cups-pdf
+cups-pk-helper
+sane
+sane-airscan
+
+# ─── Fonts ────────────────────────────────────────────────
+noto-fonts
+noto-fonts-cjk
+noto-fonts-emoji
+noto-fonts-extra
+ttf-dejavu
+ttf-liberation
+ttf-meslo-nerd
+ttf-bitstream-vera
+ttf-fira-code
+cantarell-fonts
+
+# ─── Asian language input methods (fcitx5) ────────────────
+fcitx5-im
+fcitx5-mozc
+fcitx5-chinese-addons
+fcitx5-hangul
+
+# ─── Tesseract OCR data ───────────────────────────────────
+tesseract-data-eng
+tesseract-data-jpn
+tesseract-data-chi_sim
+tesseract-data-chi_tra
+tesseract-data-kor
+
+# ─── GStreamer codec stack ────────────────────────────────
+gst-plugins-base
+gst-plugins-good
+gst-plugins-bad
+gst-plugins-ugly
+gst-libav
+
+# ─── Image format libraries ───────────────────────────────
+libheif
+libavif
+libjxl
+libraw
+webp-pixbuf-loader
+
+# ─── Connectivity ─────────────────────────────────────────
+sshfs
+
+# ─── Hybrid GPU control daemon (laptop dGPU/iGPU) ─────────
+supergfxctl
+
+# ─── Misc desktop QoL ─────────────────────────────────────
+usbmuxd
+drm-info
+plocate

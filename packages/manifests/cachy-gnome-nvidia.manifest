@@ -1,0 +1,6 @@
+# cache22 manifest: cachy-gnome-nvidia
+# family: cachy
+base
+desktop
+nvidia
+gnome

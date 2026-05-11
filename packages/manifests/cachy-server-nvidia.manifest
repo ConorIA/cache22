@@ -1,0 +1,5 @@
+# cache22 manifest: cachy-server-nvidia
+# family: cachy
+base
+server
+nvidia

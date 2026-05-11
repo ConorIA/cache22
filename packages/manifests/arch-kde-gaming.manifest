@@ -1,0 +1,7 @@
+# cache22 manifest: arch-kde-gaming
+# family: arch
+base
+desktop
+gaming
+kde-gaming
+kde

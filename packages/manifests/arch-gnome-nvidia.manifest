@@ -1,0 +1,6 @@
+# cache22 manifest: arch-gnome-nvidia
+# family: arch
+base
+desktop
+nvidia
+gnome

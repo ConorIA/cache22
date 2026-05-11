@@ -1,0 +1,84 @@
+# cache22 — arch KDE layer.
+# Plasma 6 + KDE-specific apps. Pulled by *-kde variants only.
+
+# ─── Plasma desktop core ──────────────────────────────────
+plasma-desktop
+plasma-workspace
+plasma-pa
+plasma-nm
+plasma-systemmonitor
+plasma-thunderbolt
+plasma-firewall
+plasma-disks
+plasma-browser-integration
+plasma-login-manager
+kdeplasma-addons
+kwin
+kwayland-integration
+kactivitymanagerd
+kglobalacceld
+kpipewire
+kscreen
+bluedevil
+powerdevil
+breeze
+breeze-gtk
+breeze-icons
+oxygen-sounds
+xdg-desktop-portal-kde
+qt5-wayland
+qt6-wayland
+
+# ─── Settings + system management ─────────────────────────
+systemsettings
+kinfocenter
+kcmutils
+kde-cli-tools
+discover
+
+# ─── Wallets / auth / secrets ─────────────────────────────
+kwallet-pam
+kwalletmanager
+ksshaskpass
+polkit-kde-agent
+
+# ─── GTK/X11 cross-toolkit integration ────────────────────
+kde-gtk-config
+xsettingsd
+
+# ─── Daily-driver KDE applications ────────────────────────
+dolphin
+dolphin-plugins
+ark
+konsole
+kate
+kcalc
+kfind
+kgpg
+gwenview
+okular
+spectacle
+partitionmanager
+filelight
+kcolorchooser
+
+# ─── Media playback (KDE-native) ──────────────────────────
+haruna
+phonon-qt6-vlc
+ffmpegthumbs
+kdegraphics-thumbnailers
+
+# ─── Qt image format plugins (Dolphin/Gwenview thumbnails) ──
+kimageformats
+qt6-imageformats
+
+# ─── KDE Connect ──────────────────────────────────────────
+kdeconnect
+
+# ─── Flatpak runtime + portal (Qt/KDE side) ───────────────
+flatpak-kcm
+packagekit-qt6
+
+# ─── KDE-specific quality-of-life ─────────────────────────
+kup
+plasma6-applets-supergfxctl

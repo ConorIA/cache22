@@ -1,0 +1,9 @@
+# cache22 manifest: cachy-kde-gaming-nvidia
+# family: cachy
+# Equivalent to legacy cachy-kde image (KDE + gaming + NVIDIA).
+base
+desktop
+gaming
+nvidia
+kde-gaming
+kde

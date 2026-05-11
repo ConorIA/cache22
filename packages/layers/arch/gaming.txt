@@ -1,0 +1,20 @@
+# cache22 — arch gaming layer.
+# Steam + adjacent. Pulled by *-gaming variants only.
+
+# ─── Steam + ecosystem ────────────────────────────────────
+steam
+gamemode
+lib32-gamemode
+mangohud
+lib32-mangohud
+gamescope
+lutris
+goverlay
+xdg-desktop-portal-gtk
+
+# ─── Xbox controller (USB + wireless dongle; AUR-built) ───
+xone-dkms-git
+xone-dongle-firmware
+
+# ─── Game streaming server (LizardByte repo) ──────────────
+sunshine

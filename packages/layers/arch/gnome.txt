@@ -1,0 +1,56 @@
+# cache22 — arch GNOME layer.
+# GNOME Shell + GNOME-native apps. Pulled by *-gnome variants only.
+
+# ─── GNOME Shell + core ───────────────────────────────────
+gnome-shell
+gnome-shell-extensions
+gnome-control-center
+gnome-keyring
+gnome-session
+gnome-tweaks
+gnome-color-manager
+gnome-disk-utility
+gnome-system-monitor
+gnome-themes-extra
+adwaita-icon-theme
+adwaita-cursors
+xdg-desktop-portal-gnome
+gdm
+
+# ─── Files (Nautilus) and gvfs backends ──────────────────
+nautilus
+sushi
+gvfs
+gvfs-afc
+gvfs-gphoto2
+gvfs-mtp
+gvfs-nfs
+gvfs-smb
+gvfs-google
+
+# ─── GNOME daily-driver apps ──────────────────────────────
+gnome-text-editor
+loupe
+gnome-screenshot
+papers
+file-roller
+gnome-calculator
+gnome-calendar
+gnome-clocks
+gnome-weather
+gnome-maps
+gnome-contacts
+showtime
+snapshot
+baobab
+yelp
+
+# ─── Wallets / auth / secrets ─────────────────────────────
+seahorse
+
+# ─── XDG user dirs ────────────────────────────────────────
+xdg-user-dirs
+xdg-user-dirs-gtk
+
+# ─── Per-app touchpad scroll factor (AUR) ─────────────────
+wayland-scroll-factor

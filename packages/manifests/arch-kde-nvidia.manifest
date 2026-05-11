@@ -1,0 +1,6 @@
+# cache22 manifest: arch-kde-nvidia
+# family: arch
+base
+desktop
+nvidia
+kde

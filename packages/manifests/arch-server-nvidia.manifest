@@ -1,0 +1,5 @@
+# cache22 manifest: arch-server-nvidia
+# family: arch
+base
+server
+nvidia
