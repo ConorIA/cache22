@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# prepare-soft-reboot — set up /run/nextroot from a finalized ostree
+# deploy so `systemctl soft-reboot` can switch_root into it.
+#
+# Why this exists: ostree's `ostree admin prepare-soft-reboot` refuses
+# to run unless the system uses the composefs runtime backend (cache22
+# uses the legacy hardlink-farm backend). The composefs gate is
+# upstream policy, not a technical limit — for legacy, the prep work
+# is just a sequence of bind mounts. We replicate what
+# `ostree-prepare-root` does in the initrd at boot, but write to
+# /run/nextroot instead of /sysroot.
+#
+# Mount layout (mirrors src/switchroot/ostree-prepare-root.c +
+# src/libotcore/otcore-prepare-root.c, legacy non-composefs path):
+#   /run/nextroot/             ← bind mount of <deploy-dir>
+#   /run/nextroot/etc          ← writable bind-on-self of <deploy>/etc
+#   /run/nextroot/usr          ← read-only bind of <deploy>/usr
+#   /run/nextroot/sysroot      ← bind of /sysroot (physical root)
+#   /run/nextroot/boot         ← bind of /sysroot/boot (when loader symlink)
+#   /run/nextroot/efi          ← bind of /efi (when ESP mounted there)
+#   /run/nextroot/var          ← bind of /sysroot/ostree/deploy/<state>/var
+#
+# After this, systemctl soft-reboot will detect /run/nextroot and pivot
+# into it; same kernel keeps running, only userspace switches.
+
+set -euo pipefail
+
+NEXTROOT=/run/nextroot
+
+die()  { echo "prepare-soft-reboot: $*" >&2; exit 1; }
+warn() { echo "prepare-soft-reboot: $*" >&2; }
+
+[[ ${EUID} -eq 0 ]] || die "must run as root"
+
+# We only support the legacy ostree backend deliberately. If a future
+# refactor enables composefs (composefs.enabled=true in prepare-root.conf),
+# defer to ostree's own prep which handles composefs natively.
+if grep -qE '^[[:space:]]*enabled[[:space:]]*=[[:space:]]*(true|yes)' \
+        /usr/lib/ostree/prepare-root.conf /etc/ostree/prepare-root.conf 2>/dev/null; then
+    die "composefs is enabled — use 'ostree admin prepare-soft-reboot' instead"
+fi
+
+# Refuse if /run/nextroot is already populated (idempotency / no double-mount).
+if mountpoint -q "$NEXTROOT" 2>/dev/null; then
+    die "$NEXTROOT is already a mountpoint — clear with 'ostree admin prepare-soft-reboot --reset' or umount manually"
+fi
+
+# Identify the target deploy. Prefer the most-recently-finalized non-booted
+# deploy (i.e. ostree's "pending" slot) since that's what we want to apply.
+# `ostree admin status` lists deploys in priority order; the booted one is
+# `*`-prefixed, the rollback is "(rollback)"-tagged. The pending is the
+# first non-booted, non-rollback line.
+status=$(ostree admin status 2>/dev/null) || die "ostree admin status failed"
+
+target_id=$(awk '!/^\*/ && !/\(rollback\)/ {
+    for (i=1; i<=NF; i++) if ($i ~ /^[0-9a-f]+\.[0-9]+$/) { print $i; exit }
+}' <<<"$status")
+
+[[ -n "$target_id" ]] || die "no pending deploy found (nothing to soft-reboot into)"
+
+# State root from the same status line. Format: "  default <csum>.<idx>"
+stateroot=$(awk -v id="$target_id" '!/^\*/ && !/\(rollback\)/ {
+    for (i=1; i<=NF; i++) if ($i == id) { print $(i-1); exit }
+}' <<<"$status")
+[[ -n "$stateroot" ]] || die "could not determine stateroot for $target_id"
+
+deploy_dir="/sysroot/ostree/deploy/$stateroot/deploy/$target_id"
+state_var="/sysroot/ostree/deploy/$stateroot/var"
+
+[[ -d "$deploy_dir" ]] || die "deploy dir not found: $deploy_dir"
+[[ -d "$state_var"  ]] || die "stateroot var not found: $state_var"
+
+echo "==> target deploy: $deploy_dir"
+
+# Verify same-kernel invariant (soft-reboot only works without kernel
+# change). bootc records this; we double-check by comparing kver dirs.
+booted_kver=$(uname -r)
+target_kver=$(ls "$deploy_dir/usr/lib/modules/" 2>/dev/null | head -1)
+[[ -n "$target_kver" ]] || die "target deploy has no kernel modules dir"
+if [[ "$booted_kver" != "$target_kver" ]]; then
+    die "kernel mismatch (booted=$booted_kver, target=$target_kver) — soft-reboot impossible, use hard reboot or kexec"
+fi
+
+mkdir -p "$NEXTROOT"
+
+# Cleanup on failure: if any mount fails we leave a partial /run/nextroot
+# which would either confuse systemctl soft-reboot or just sit unused.
+# Best to roll back.
+cleanup_on_fail() {
+    warn "mount setup failed — unmounting $NEXTROOT tree"
+    umount -R "$NEXTROOT" 2>/dev/null || true
+}
+trap cleanup_on_fail ERR
+
+# 1. Bind the deploy as the new root.
+mount --bind "$deploy_dir" "$NEXTROOT"
+
+# 2. /etc: bind-on-self + remount. The deploy's /etc is already writable
+#    (legacy hardlink farm). The bind makes it independently controllable
+#    as a mount point so the new userspace can manage propagation.
+mount --bind "$NEXTROOT/etc" "$NEXTROOT/etc"
+mount -o remount,bind "$NEXTROOT/etc"
+
+# 3. /usr read-only. Two-step: bind-on-self, then remount with ro flag.
+mount --bind "$NEXTROOT/usr" "$NEXTROOT/usr"
+mount -o remount,bind,ro "$NEXTROOT/usr"
+
+# 4. /sysroot — the physical root partition, where the ostree repo lives.
+#    The new userspace's ostree commands need this to find deploys.
+mount --bind /sysroot "$NEXTROOT/sysroot"
+
+# 5. /boot — only when ostree manages it (loader symlink present). On
+#    cache22 /boot lives on the same partition as /sysroot.
+if [[ -L /sysroot/boot/loader ]] && [[ -d "$NEXTROOT/boot" ]]; then
+    mount --bind /sysroot/boot "$NEXTROOT/boot"
+fi
+
+# 6. /efi — ESP. cache22 mounts ESP at /efi; needed by resign-uki and
+#    cache22-secureboot in the new userspace.
+if [[ -d /efi ]] && [[ -d "$NEXTROOT/efi" ]]; then
+    mount --bind /efi "$NEXTROOT/efi"
+fi
+
+# 7. /var — per-stateroot. Mirrors ostree-prepare-root: bind, then make
+#    slave (so propagation from old root doesn't leak in), then shared
+#    (so the new userspace's mounts under /var propagate normally).
+mount --bind "$state_var" "$NEXTROOT/var"
+mount --make-slave "$NEXTROOT/var"
+mount --make-shared "$NEXTROOT/var"
+
+trap - ERR
+
+echo "==> /run/nextroot ready for soft-reboot into $target_id"

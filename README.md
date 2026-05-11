@@ -89,7 +89,7 @@ See [`docs/SECUREBOOT.md`](docs/SECUREBOOT.md) for the full chain, threat model,
 ## Upgrading
 
 ```bash
-sudo cache22-update              # pull, stage, finalize — no reboot
+sudo cache22-update              # pull + stage; finalize + UKI build deferred to shutdown
 sudo cache22-update --reboot     # ... then reboot when done
 sudo cache22-update --check      # is there an upgrade available?
 sudo cache22-update --app-updates  # also: flatpak update + distrobox upgrade --all
@@ -265,7 +265,7 @@ sudo cache22-encryption enroll /dev/nvme0n1p3
 
 | Command | What it does |
 | --- | --- |
-| `cache22-update` | Recommended upgrade frontend — pull + stage + finalize, optional `--reboot` and `--app-updates`. |
+| `cache22-update` | Recommended upgrade frontend — pull + stage (finalize + UKI build deferred to next shutdown); optional `--reboot` and `--app-updates`. |
 | `cache22-rebase` | Switch between cache22 variants (cachy ↔ arch, server ↔ kde). |
 | `cache22-secureboot` | Manage the per-machine SB key + firmware DB enrollment. `status`, `enable`, `disable`, `rotate-keys`. |
 | `cache22-karg` | Manage persistent kernel command-line args. |

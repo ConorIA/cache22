@@ -30,15 +30,12 @@ parse_duration() {
 }
 
 is_staged() {
-    # "Reboot would apply something new" — covers both bootc's staged
-    # slot AND ostree's pending slot. cache22-update finalizes early
-    # (so power-loss is benign), which moves the deploy from bootc's
-    # staged slot to ostree's pending slot. bootc's status.staged then
-    # reads null even though there's a real deploy waiting for boot.
-    # Mirror cache22-changelog's pattern: any non-booted, non-rollback
-    # deploy in `ostree admin status` means we have something to apply.
-    ostree admin status 2>/dev/null \
-        | awk '!/^\*/ && !/\(rollback\)/ && /[0-9a-f]+\.[0-9]+/ {found=1} END {exit !found}'
+    # Standard bootc/ostree model: a staged deploy lives in bootc's
+    # `staged` slot until shutdown, when ostree-finalize-staged.service
+    # writes the BLS entry. Either side counts as "an update is waiting".
+    local staged
+    staged=$(bootc status --json 2>/dev/null | jq -r '.status.staged // "null"' 2>/dev/null)
+    [[ -n "$staged" && "$staged" != "null" ]]
 }
 
 last_update_failed() {
@@ -77,6 +74,10 @@ while (( $(date +%s) < end_time )); do
     echo "all clear; broadcasting 5-min reboot warning"
     wall "cache22 unattended reboot in 5 minutes for staged update"
     sleep 300
+    # cache22-reboot auto-picks soft when capable, otherwise hard
+    # (or kexec if KERNEL_CHANGE_STRATEGY=kexec). Fallback to
+    # systemctl reboot covers the unlikely case of cache22-reboot
+    # exiting nonzero before exec'ing into a real reboot.
     cache22-reboot || \
         { echo "cache22-reboot failed; falling back to systemctl reboot in 5s"; sleep 5; systemctl reboot; }
     exit 0

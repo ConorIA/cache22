@@ -2,26 +2,26 @@
 # cache22-reboot — apply a staged update with the optimal reboot
 # strategy.
 #
-# Strategy is picked automatically based on whether the staged
-# deploy can be soft-rebooted (same kernel + initramfs as booted):
+# Auto-picks based on what bootc says is possible:
 #
-#   soft-reboot   bootc says staged deploy is softRebootCapable.
-#                 ~5-10 sec; same kernel keeps running, only userspace
-#                 pivots to the new rootfs. Default when applicable.
+#   soft-reboot   bootc reports staged.softRebootCapable=true.
+#                 Same kernel keeps running; only userspace pivots
+#                 into the staged deploy. ~5 sec, network connections
+#                 survive. Default when applicable.
 #
-#   hard reboot   Kernel changed in the staged deploy. Full system
+#   hard reboot   Kernel changed (soft-reboot not capable). Full system
 #                 restart through firmware POST + bootloader. Default
-#                 when soft-reboot isn't applicable.
+#                 when soft-reboot isn't possible.
 #
-#   kexec         Kernel changed AND user opted into kexec (via
-#                 /etc/cache22/reboot.conf or the --kexec flag).
-#                 Faster than full reboot when the hardware supports
-#                 it; some hardware doesn't kexec cleanly.
+#   kexec         Kernel changed AND user opted into kexec (via config
+#                 or --kexec). Faster than full reboot when hardware
+#                 supports it; some hardware doesn't kexec cleanly.
 #
 # Flags:
-#   --kexec         Prefer kexec when the kernel changed (instead of
-#                   full reboot). No effect if soft-reboot applies.
-#   --hard          Force full reboot regardless of staged state.
+#   --soft          Force soft-reboot (fail if not capable, unless
+#                   --no-fallback omitted).
+#   --kexec         Prefer kexec when the kernel changed.
+#   --hard          Force full reboot regardless.
 #   --check         Print the strategy that would run; do not execute.
 #   --no-fallback   On strategy failure, abort instead of falling back
 #                   to a full reboot.
@@ -29,50 +29,39 @@
 #
 # Persistent preference: /etc/cache22/reboot.conf
 #   KERNEL_CHANGE_STRATEGY=hard|kexec    (default: hard)
+#   SOFT_REBOOT=auto|never               (default: auto)
 # CLI flags override the config for that invocation.
 
 set -euo pipefail
 
 CONFIG=/etc/cache22/reboot.conf
 KERNEL_CHANGE_STRATEGY=hard
+SOFT_REBOOT=auto
 [[ -f $CONFIG ]] && . "$CONFIG"
 
-KEXEC=0
-HARD=0
+FORCE_SOFT=0
+FORCE_KEXEC=0
+FORCE_HARD=0
 CHECK=0
 FALLBACK=1
 
 for arg in "$@"; do
     case "$arg" in
-        --kexec)        KEXEC=1 ;;
-        --hard)         HARD=1 ;;
+        --soft)         FORCE_SOFT=1 ;;
+        --kexec)        FORCE_KEXEC=1 ;;
+        --hard)         FORCE_HARD=1 ;;
         --check)        CHECK=1 ;;
         --no-fallback)  FALLBACK=0 ;;
-        -h|--help)      sed -n '2,30p' "$0" | sed 's/^# \?//'; exit 0 ;;
+        -h|--help)      sed -n '2,33p' "$0" | sed 's/^# \?//'; exit 0 ;;
         *)              echo "Unknown arg: $arg" >&2; exit 1 ;;
     esac
 done
 
 die() { echo "Error: $*" >&2; exit 1; }
 
-# CLI flag overrides config-file preference.
-if (( KEXEC )); then
-    KERNEL_CHANGE_STRATEGY=kexec
-fi
-
-# ─── Strategy decision ────────────────────────────────────────────
-# "Reboot would apply something new" comes from two places:
-#   - bootc's status.staged slot — set after `bootc upgrade` and
-#     before finalize.
-#   - ostree's pending slot — where the deploy lives after
-#     `ostree admin finalize-staged` runs (cache22-update finalizes
-#     early so power-loss between stage and reboot is benign). bootc
-#     reports staged=null at this point, but the deploy is real.
-# Either case means there's an update to apply.
+# ─── State discovery ─────────────────────────────────────────────
 status=$(bootc status --json 2>/dev/null || echo '{}')
-
 has_staged=no
-has_pending=no
 soft_capable=false
 staged_digest=""
 
@@ -80,32 +69,23 @@ if echo "$status" | jq -e '.status.staged != null' >/dev/null 2>&1; then
     has_staged=yes
     soft_capable=$(echo "$status" | jq -r '.status.staged.softRebootCapable // false')
     staged_digest=$(echo "$status" | jq -r '.status.staged.image.imageDigest // ""')
-elif ostree admin status 2>/dev/null | awk '!/^\*/ && !/\(rollback\)/ && /[0-9a-f]+\.[0-9]+/ {found=1} END {exit !found}'; then
-    has_pending=yes
-    # cachedUpdate describes the most-recently-pulled image's relation
-    # to booted. In steady state (one update fetched + finalized, no
-    # newer pull yet) this matches the pending deploy. Fall back to a
-    # hard reboot if it's stale or missing — soft-reboot is a fast-path
-    # optimization, not a correctness requirement.
-    soft_capable=$(echo "$status" | jq -r '.status.booted.cachedUpdate.softRebootCapable // false')
-    staged_digest=$(echo "$status" | jq -r '.status.booted.cachedUpdate.image.imageDigest // ""')
 fi
 
-has_next=no
-[[ "$has_staged" == "yes" || "$has_pending" == "yes" ]] && has_next=yes
-
+# ─── Strategy decision ──────────────────────────────────────────
 decide() {
-    if (( HARD )); then
-        echo hard; return
-    fi
-    if [[ "$has_next" != "yes" ]]; then
-        # No staged or pending deploy; user explicitly invoked a reboot tool, so reboot.
-        echo hard; return
-    fi
-    if [[ "$soft_capable" == "true" ]]; then
+    if (( FORCE_HARD ));  then echo hard;  return; fi
+    if (( FORCE_KEXEC )); then echo kexec; return; fi
+    if (( FORCE_SOFT )); then
+        # Honor the user's explicit ask; the executor will fail-fast
+        # if soft isn't actually capable.
         echo soft; return
     fi
-    # Kernel changed (or some other invariant blocks soft-reboot).
+    if [[ "$has_staged" != "yes" ]]; then
+        echo hard; return
+    fi
+    if [[ "$soft_capable" == "true" && "$SOFT_REBOOT" != "never" ]]; then
+        echo soft; return
+    fi
     case "$KERNEL_CHANGE_STRATEGY" in
         kexec) echo kexec ;;
         *)     echo hard ;;
@@ -114,19 +94,19 @@ decide() {
 
 strategy=$(decide)
 
-# Why did we pick this? Build a one-line explanation for both --check
-# and the actual run output.
 explain() {
     case "$strategy" in
         soft)  echo "soft-reboot (kernel unchanged, fastest)" ;;
-        kexec) echo "kexec (kernel changed; --kexec or KERNEL_CHANGE_STRATEGY=kexec preferred)" ;;
+        kexec) echo "kexec (kernel changed; --kexec or KERNEL_CHANGE_STRATEGY=kexec)" ;;
         hard)
-            if [[ "$has_next" != "yes" ]]; then
-                echo "hard reboot (nothing staged or pending; rebooting current)"
-            elif (( HARD )); then
+            if [[ "$has_staged" != "yes" ]]; then
+                echo "hard reboot (nothing staged; rebooting current)"
+            elif (( FORCE_HARD )); then
                 echo "hard reboot (--hard forced)"
+            elif [[ "$soft_capable" == "true" && "$SOFT_REBOOT" == "never" ]]; then
+                echo "hard reboot (SOFT_REBOOT=never in $CONFIG)"
             else
-                echo "hard reboot (kernel changed; --kexec or KERNEL_CHANGE_STRATEGY=kexec to use kexec instead)"
+                echo "hard reboot (kernel changed; set KERNEL_CHANGE_STRATEGY=kexec or pass --kexec for kexec)"
             fi
             ;;
     esac
@@ -135,21 +115,18 @@ explain() {
 if (( CHECK )); then
     echo "strategy: $strategy — $(explain)"
     if [[ "$has_staged" == "yes" ]]; then
-        echo "  staged (bootc):       ${staged_digest:0:23}…"
+        echo "  staged digest:        ${staged_digest:0:23}…"
         echo "  softRebootCapable:    $soft_capable"
-    elif [[ "$has_pending" == "yes" ]]; then
-        echo "  pending (ostree):     deploy already finalized, awaiting reboot"
-        echo "  softRebootCapable:    $soft_capable (from cachedUpdate; best-effort)"
     else
-        echo "  staged/pending:       (none)"
+        echo "  staged:               (none)"
     fi
-    echo "  KERNEL_CHANGE_STRATEGY: $KERNEL_CHANGE_STRATEGY (from ${CONFIG} + flags)"
+    echo "  KERNEL_CHANGE_STRATEGY: $KERNEL_CHANGE_STRATEGY"
+    echo "  SOFT_REBOOT:            $SOFT_REBOOT"
     exit 0
 fi
 
 [[ ${EUID} -eq 0 ]] || die "must run as root (try: sudo cache22-reboot)"
 
-# ─── Fallback to hard reboot on failure ───────────────────────────
 fallback() {
     if (( FALLBACK )); then
         echo "==> falling back to hard reboot"
@@ -159,35 +136,74 @@ fallback() {
     fi
 }
 
-# ─── soft-reboot ──────────────────────────────────────────────────
-do_soft_reboot() {
-    echo "==> soft-reboot ($(explain))"
-    # systemctl soft-reboot performs:
-    #   1. Serialize systemd state to /run
-    #   2. switch_root into /run/nextroot (which bootc has populated
-    #      with the staged deploy's rootfs)
-    #   3. re-exec PID 1 in the new root
-    #   4. Restart all userspace services in the new tree
-    # Same kernel keeps running.
-    if ! exec systemctl soft-reboot; then
-        fallback "soft-reboot"
-    fi
-}
-
-# ─── hard reboot ──────────────────────────────────────────────────
+# ─── Hard reboot ────────────────────────────────────────────────
+# Standard bootc/ostree path: shutdown sequence runs
+# ostree-finalize-staged.service ExecStop (which finalizes the staged
+# deploy and, via our drop-in, builds the UKI) before the actual
+# reboot. No manual orchestration needed here.
 do_hard_reboot() {
     echo "==> hard reboot ($(explain))"
     exec systemctl reboot
 }
 
-# ─── kexec ────────────────────────────────────────────────────────
+# ─── Soft-reboot ────────────────────────────────────────────────
+# Manual orchestration because:
+#   1. Soft-reboot doesn't go through the normal shutdown's
+#      finalize-staged path the same way (we want to be sure finalize
+#      runs BEFORE we try to mount the deploy at /run/nextroot).
+#   2. ostree's `ostree admin prepare-soft-reboot` refuses to run on
+#      the legacy backend; we replicate the prep ourselves via
+#      /usr/libexec/cache22/prepare-soft-reboot.
+do_soft_reboot() {
+    if [[ "$has_staged" != "yes" ]]; then
+        die "no staged deploy — soft-reboot is only meaningful when applying an update"
+    fi
+    if [[ "$soft_capable" != "true" ]]; then
+        if (( FALLBACK )); then
+            echo "==> soft-reboot not capable (kernel changed); falling back"
+            strategy=$(case "$KERNEL_CHANGE_STRATEGY" in kexec) echo kexec ;; *) echo hard ;; esac)
+            case "$strategy" in
+                kexec) do_kexec; return ;;
+                hard)  do_hard_reboot; return ;;
+            esac
+        else
+            die "staged deploy is not soft-reboot capable (kernel changed)"
+        fi
+    fi
+
+    echo "==> soft-reboot ($(explain))"
+
+    echo "    finalizing staged deploy"
+    ostree admin finalize-staged \
+        || { echo "    finalize-staged failed" >&2; fallback "soft-reboot"; return; }
+
+    echo "    building + signing UKI for the new deploy"
+    /usr/libexec/cache22/resign-uki \
+        || { echo "    resign-uki failed" >&2; fallback "soft-reboot"; return; }
+
+    echo "    populating /run/nextroot"
+    /usr/libexec/cache22/prepare-soft-reboot \
+        || { echo "    prepare-soft-reboot failed" >&2; fallback "soft-reboot"; return; }
+
+    echo "==> systemctl soft-reboot"
+    exec systemctl soft-reboot
+}
+
+# ─── kexec ──────────────────────────────────────────────────────
 # Picks the UKI sd-boot would auto-default to (highest .osrel
-# VERSION_ID across cache22-*.efi), extracts kernel/initrd/cmdline
-# from the signed PE, re-signs the kernel with the per-machine SB key
-# (so it works under kernel lockdown if ever enabled), kexec --load,
-# then systemctl kexec for a clean shutdown.
+# VERSION_ID across cache22-*.efi). For a staged-but-not-finalized
+# deploy, the UKI doesn't exist yet — finalize + build first.
 do_kexec() {
     echo "==> kexec ($(explain))"
+
+    if [[ "$has_staged" == "yes" ]]; then
+        echo "    finalizing staged deploy"
+        ostree admin finalize-staged \
+            || { echo "    finalize-staged failed" >&2; fallback "kexec"; return; }
+        echo "    building + signing UKI for the new deploy"
+        /usr/libexec/cache22/resign-uki \
+            || { echo "    resign-uki failed" >&2; fallback "kexec"; return; }
+    fi
 
     local ESP=/efi
     [[ -d "$ESP" ]] || ESP=/boot/efi
@@ -244,7 +260,7 @@ do_kexec() {
         fallback "kexec"
         return
     fi
-    echo "==> systemctl kexec (clean shutdown then jump to staged kernel)"
+    echo "==> systemctl kexec"
     exec systemctl kexec
 }
 

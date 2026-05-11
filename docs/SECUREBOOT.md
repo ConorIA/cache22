@@ -44,7 +44,8 @@ On that first boot, sd-boot auto-enrolls cache22's keys and Microsoft DB keys, t
 
 `/usr/libexec/cache22/resign-uki` runs:
 
-- automatically after every `bootc upgrade` / `bootc switch` / `bootc rollback` (via `cache22-resign-uki.service`, `WantedBy=bootc-status-updated.target`),
+- automatically during shutdown right after `ostree-finalize-staged.service` writes the BLS entry — via the `50-cache22-uki.conf` drop-in that appends a second `ExecStop=` to that unit,
+- explicitly by `cache22-reboot --soft` and `cache22-reboot --kexec` before the soft-reboot/kexec is triggered,
 - automatically when the user edits `/etc/cache22/extra-cmdline` (via `cache22-resign-uki.path`),
 - on demand via `systemctl start cache22-resign-uki.service`.
 

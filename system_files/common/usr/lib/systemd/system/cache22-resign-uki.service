@@ -1,9 +1,17 @@
 [Unit]
-Description=cache22: rebuild + sign + place UKIs on the ESP
+# Runtime trigger for resign-uki — used by:
+#   - cache22-resign-uki.path (when /etc/cache22/extra-cmdline changes,
+#     so kargs edits regenerate UKIs for live deploys without waiting
+#     for a reboot)
+#   - manual `systemctl start cache22-resign-uki.service` for diagnostics
+#     or after rotating the per-machine SB key.
+#
+# At reboot/shutdown, UKI building for newly-finalized deploys happens
+# via the drop-in on ostree-finalize-staged.service (50-cache22-uki.conf).
+# That path runs after ostree writes the BLS entry, which is when
+# resign-uki has the data it needs.
+Description=cache22: rebuild + sign + place UKIs on the ESP (runtime)
 ConditionPathExists=/run/ostree-booted
-After=local-fs.target
-Before=systemd-reboot.service systemd-poweroff.service systemd-halt.service
-DefaultDependencies=no
 
 [Service]
 Type=oneshot
@@ -11,6 +19,3 @@ ExecStart=/usr/libexec/cache22/resign-uki
 TimeoutStartSec=600
 StandardOutput=journal
 StandardError=journal
-
-[Install]
-WantedBy=bootc-status-updated.target

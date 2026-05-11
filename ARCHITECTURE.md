@@ -20,7 +20,7 @@ bootc's tooling assumes dracut's hook model. mkinitcpio works for stock Arch but
 
 ## Bootloader: systemd-boot + signed UKI, managed by cache22-resign-uki
 
-The Containerfile ships no bootloader binaries. sd-boot comes from Arch's `systemd` package and is staged on the ESP at install time by `bootctl install`. UKIs (kernel + initramfs + cmdline + signed PCR-policy, all in one signed PE) are assembled and signed at install / `bootc upgrade` time on the user's machine by `/usr/libexec/cache22/resign-uki`, which fires automatically via `cache22-resign-uki.service` (`WantedBy=bootc-status-updated.target`). Each live ostree deploy gets one UKI at `/efi/EFI/Linux/cache22-<csum>.efi` with `.osrel VERSION_ID` set so sd-boot's auto-default picks the staged or booted deploy as intended.
+The Containerfile ships no bootloader binaries. sd-boot comes from Arch's `systemd` package and is staged on the ESP at install time by `bootctl install`. UKIs (kernel + initramfs + cmdline + signed PCR-policy, all in one signed PE) are assembled and signed at install time and at every shutdown that has work to do (post-update or post-rollback) by `/usr/libexec/cache22/resign-uki`. The shutdown trigger is a second `ExecStop=` on `ostree-finalize-staged.service` via the `50-cache22-uki.conf` drop-in — same systemd job as ostree's finalize, ordered to run right after the BLS entry is written. Each live ostree deploy gets one UKI at `/efi/EFI/Linux/cache22-<csum>.efi` with `.osrel VERSION_ID` set so sd-boot's auto-default picks the staged or booted deploy as intended.
 
 Kernel + initramfs + cmdline are a single signed artifact. sd-stub ignores any external cmdline override under SB. There is no loader-level menu editor.
 

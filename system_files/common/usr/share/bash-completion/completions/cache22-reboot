@@ -2,6 +2,6 @@
 _cache22_reboot() {
     local cur prev words cword
     _init_completion || return
-    COMPREPLY=( $(compgen -W "--kexec --hard --check --no-fallback --help" -- "$cur") )
+    COMPREPLY=( $(compgen -W "--soft --kexec --hard --check --no-fallback --help" -- "$cur") )
 }
 complete -F _cache22_reboot cache22-reboot

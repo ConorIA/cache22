@@ -9,13 +9,13 @@ CI rebuilds and re-pushes the `rolling` tag for all four variants on every push 
 ## Recommended: `cache22-update`
 
 ```
-sudo cache22-update              # pull + stage + sign UKI; no reboot
-sudo cache22-update --reboot     # ... then reboot
+sudo cache22-update              # pull + stage; finalize + UKI build at next shutdown
+sudo cache22-update --reboot     # ... then reboot via cache22-reboot (auto-soft when same-kernel)
 sudo cache22-update --check      # read-only status check
 sudo cache22-update --app-updates  # also flatpak update + distrobox upgrade --all
 ```
 
-Runs `bootc upgrade` (without `--apply` — that races our hook), drives `ostree-finalize-staged` synchronously, then triggers `cache22-resign-uki.service` to build + sign + place the per-deploy UKI on the ESP. Power loss after the wrapper finishes but before reboot is benign — sd-boot picks the highest-`VERSION_ID` UKI on the ESP, and our hook always writes atomically.
+Runs `bootc upgrade --check` first (skips work when the registry has nothing new), then `bootc upgrade` to fetch + stage. Returns immediately — finalize and UKI build are deferred to shutdown via the standard `ostree-finalize-staged.service` path, with our `50-cache22-uki.conf` drop-in appending a second `ExecStop=` for the UKI build right after ostree writes the BLS entry. Same job, same timeout semantics, same shutdown-blocking guarantees as ostree's own finalize.
 
 ## Switching variants: `cache22-rebase`
 
@@ -26,7 +26,7 @@ sudo cache22-rebase --image ghcr.io/foo:bar  # arbitrary OCI ref
 sudo cache22-rebase --reboot                 # reboot when done
 ```
 
-Same chain as `cache22-update`: `bootc switch` → finalize → resign UKI. Flips between cachy/arch families and kde/server types without reinstalling.
+Same shape as `cache22-update`: `bootc switch` stages the new image; finalize + UKI build happen at next shutdown. Flips between cachy/arch families and kde/server types without reinstalling.
 
 The picker pulls `variants.json` live from `raw.githubusercontent.com/cmspam/cache22/main/variants.json` so new variants show up without a system update; falls back to `/etc/cache22/variants.json` (baked into the image) when offline.
 
@@ -35,12 +35,12 @@ Rebasing to a non-cache22 bootc image (e.g. `ghcr.io/ublue-os/bazzite:latest`) i
 ## Manual / advanced
 
 ```
-sudo bootc upgrade        # fetch + stage; cache22-resign-uki.path fires
-sudo systemctl reboot     # apply
-sudo bootc rollback       # swap staged + booted; resign-uki re-orders UKIs
+sudo bootc upgrade        # fetch + stage; finalize + UKI build at next shutdown
+sudo cache22-reboot       # auto-soft when same-kernel, hard otherwise
+sudo bootc rollback       # swap staged + booted; UKI ordering updates at next shutdown
 ```
 
-The wrappers above move the finalize + UKI build earlier (while the system is up), which is safer than relying on a sequence that ends with `--apply`.
+`cache22-reboot` reads `bootc status .status.staged.softRebootCapable` to decide between soft-reboot, kexec, and hard reboot. Soft-reboot uses our own `/usr/libexec/cache22/prepare-soft-reboot` to populate `/run/nextroot` (since ostree's own `prepare-soft-reboot` only supports the composefs backend, which cache22 doesn't use yet).
 
 ## Bootloader updates
 
@@ -74,4 +74,4 @@ sudo cache22-autoreboot status
 
 ## How rollback works
 
-`bootc rollback` flips the staged/booted/rollback ordering inside bootc's state, which bumps `/ostree/bootc` mtime, which fires `bootc-status-updated.target`, which starts `cache22-resign-uki.service`. The hook regenerates UKIs with new `.osrel VERSION_ID` priorities so sd-boot's auto-default picks the rolled-back deploy on next reboot. UKIs for live deploys are kept; UKIs for pruned deploys are GC'd only after every desired UKI is confirmed present.
+`bootc rollback` flips the staged/booted/rollback ordering inside bootc's state. UKIs aren't immediately regenerated — instead, on next shutdown the `ostree-finalize-staged.service` drop-in re-runs `resign-uki`, which reads the now-flipped BLS entries and rewrites UKIs with updated `.osrel VERSION_ID` priorities so sd-boot's auto-default picks the rolled-back deploy. UKIs for live deploys are kept; UKIs for pruned deploys are GC'd only after every desired UKI is confirmed present. (To force an immediate rebuild without rebooting, run `sudo systemctl start cache22-resign-uki.service`.)

@@ -87,14 +87,12 @@ if ! bootc status --json 2>/dev/null | jq -e '.status.staged != null' >/dev/null
     exit 0
 fi
 
-. /usr/lib/cache22/bootc-finalize.sh
-
-echo "==> Building + signing UKI for the staged deploy"
-if ! systemctl start cache22-resign-uki.service; then
-    echo "ERROR: cache22-resign-uki failed — staged deploy will boot the prior UKI" >&2
-    echo "       Inspect: journalctl -u cache22-resign-uki.service" >&2
-    exit 1
-fi
+# Standard bootc/ostree flow: the staged deploy stays in ostree's
+# "staged" slot until shutdown, when ostree-finalize-staged.service's
+# ExecStop writes the BLS entry. cache22's UKI build runs in the same
+# shutdown step via the 50-cache22-uki.conf drop-in. So we don't
+# finalize here, and we don't trigger the UKI build here — both happen
+# during the next reboot's shutdown sequence.
 
 # Drop a /run/motd.d marker so the next SSH login banner mentions the
 # pending reboot. /run is tmpfs so it clears automatically on reboot.
@@ -104,6 +102,7 @@ cat > /run/motd.d/10-cache22-pending-reboot <<'EOF'
 ──────────────────────────────────────────────────────────
   cache22 update is staged — reboot to apply.
   Run `cache22-changelog` to see what changed.
+  Apply with `sudo cache22-reboot` (auto-soft when same-kernel).
 ──────────────────────────────────────────────────────────
 
 EOF
@@ -147,6 +146,6 @@ if (( APPS )); then
 fi
 
 if (( REBOOT )); then
-    echo "==> Rebooting (via cache22-reboot — auto-picks soft-reboot when possible)"
+    echo "==> Rebooting via cache22-reboot (auto-picks soft when same-kernel)"
     exec cache22-reboot
 fi
