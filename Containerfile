@@ -19,24 +19,6 @@ ARG BASE_TAG=latest
 #   if not set explicitly; pinning eliminates that source of variance
 ARG SOURCE_DATE_EPOCH=0
 
-# ─── Stage: libfaketime (tiny, just installs libfaketime so other ─
-# stages can COPY /usr/bin/faketime + /usr/lib/faketime out). Used
-# downstream to wrap dkms (alpm-hook-triggered module compiles) and
-# makepkg (aur-builder package builds) in faketime, pinning the
-# wall-clock the actual compiler/linker sees so build outputs are
-# byte-stable across fresh builds. Other operations (pacman, mirror
-# TLS, GPG keyring) keep using real time so cert/key rotations don't
-# break us.
-#
-# Pinned to archlinux:latest (NOT ${BASE_IMAGE}) because cachyos-v3
-# ships an alpm hook chain that hangs indefinitely on `pacman -S
-# libfaketime` in buildah's hook context (the 35-systemd-update.hook
-# trying to talk to a non-running systemd, most likely). archlinux's
-# hook set doesn't hit this. The output binary is identical either
-# way — we only COPY files out.
-FROM docker.io/archlinux:latest AS libfaketime
-RUN pacman -Sy --noconfirm libfaketime
-
 # ─── Stage 1: aur-builder ─────────────────────────────────────────
 # Auto-detect packages cache22 lists that no configured repo provides,
 # build them (plus transitive AUR deps) via paru into /aur-out. Stage
@@ -52,18 +34,6 @@ ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
     KBUILD_BUILD_HOST=cache22 \
     NV_BUILD_USER=cache22 \
     NV_BUILD_HOST=cache22-build
-
-# Surgical faketime for AUR builds: shim /usr/local/bin/makepkg so the
-# actual package-build invocation (the part that runs the compiler and
-# may otherwise leak wall-clock into output binaries) sees a fixed
-# clock. paru's pacman calls and git clones for PKGBUILDs continue to
-# use real time, keeping mirror TLS + GPG verification working.
-COPY --from=libfaketime /usr/bin/faketime /usr/bin/faketime
-COPY --from=libfaketime /usr/lib/faketime /usr/lib/faketime
-RUN install -d /usr/local/bin \
- && printf '#!/bin/sh\nexec /usr/bin/faketime "2099-01-01 00:00:00" /usr/bin/makepkg "$@"\n' \
-        > /usr/local/bin/makepkg \
- && chmod +x /usr/local/bin/makepkg
 
 COPY scripts/  /tmp/cache22-build/scripts/
 COPY packages/ /tmp/cache22-build/packages/
@@ -140,20 +110,6 @@ RUN pacman -Syy --noconfirm \
 RUN install -d /usr/local/bin \
  && printf '#!/bin/sh\nexec echo cache22-build\n' > /usr/local/bin/hostname \
  && chmod +x /usr/local/bin/hostname
-
-# Shim /usr/local/bin/dkms so the alpm hooks (which call `dkms` via
-# PATH, and /usr/local/bin precedes /usr/bin) wrap the real binary
-# with faketime. The shim runs from a PostTransaction hook after the
-# bulk pacman -S finishes — by which point libfaketime (in the base
-# layer) has been installed, so /usr/bin/faketime is available. We
-# don't COPY libfaketime from the libfaketime stage here because it'd
-# file-conflict with the package install. finalize-image.sh removes
-# the shim before bootc-lint so the runtime image has plain
-# /usr/bin/dkms behavior.
-RUN install -d /usr/local/bin \
- && printf '#!/bin/sh\nexec /usr/bin/faketime "2099-01-01 00:00:00" /usr/bin/dkms "$@"\n' \
-        > /usr/local/bin/dkms \
- && chmod +x /usr/local/bin/dkms
 
 # Expand the manifest into a deduplicated package list, then install
 # in one transaction. Retry up to 5x for transient mirror 404s.
