@@ -135,7 +135,7 @@ Edit:
 
 ### Change the kernel
 
-For cachy variants: replace `linux-cachyos-bore-lto` in `packages/layers/cachy/base.txt` with another CachyOS kernel (e.g., `linux-cachyos`).
+For cachy variants: replace `linux-cachyos` in `packages/layers/cachy/base.txt` with another CachyOS kernel (e.g., `linux-cachyos-bore-lto` for the BORE scheduler, or `linux-cachyos-lts` for the LTS branch).
 
 For arch variants: the kernel is `linux` by default. Replace with `linux-lts`, `linux-zen`, or any other Arch-packaged kernel.
 

@@ -10,9 +10,9 @@ cache22 ships six variants. Each pairs one of two base distributions (CachyOS or
 
 | Variant | Image | Base + kernel | Use case |
 | --- | --- | --- | --- |
-| `cachy-server` | `ghcr.io/cmspam/cache22-cachy-server:rolling` | CachyOS, `linux-cachyos-bore-lto` | Headless server / container host |
-| `cachy-kde` | `ghcr.io/cmspam/cache22-cachy-kde:rolling` | CachyOS, `linux-cachyos-bore-lto` | KDE Plasma desktop + gaming |
-| `cachy-gnome` | `ghcr.io/cmspam/cache22-cachy-gnome:rolling` | CachyOS, `linux-cachyos-bore-lto` | GNOME desktop + gaming |
+| `cachy-server` | `ghcr.io/cmspam/cache22-cachy-server:rolling` | CachyOS, `linux-cachyos` | Headless server / container host |
+| `cachy-kde` | `ghcr.io/cmspam/cache22-cachy-kde:rolling` | CachyOS, `linux-cachyos` | KDE Plasma desktop + gaming |
+| `cachy-gnome` | `ghcr.io/cmspam/cache22-cachy-gnome:rolling` | CachyOS, `linux-cachyos` | GNOME desktop + gaming |
 | `arch-server` | `ghcr.io/cmspam/cache22-arch-server:rolling` | Arch, mainline `linux` | Headless server / container host |
 | `arch-kde` | `ghcr.io/cmspam/cache22-arch-kde:rolling` | Arch, mainline `linux` | KDE Plasma desktop + gaming |
 | `arch-gnome` | `ghcr.io/cmspam/cache22-arch-gnome:rolling` | Arch, mainline `linux` | GNOME desktop + gaming |
@@ -23,7 +23,7 @@ Earlier revisions of cache22 split out NVIDIA and gaming into separate variants 
 
 **CachyOS variants** (`cachy-*`) use the [CachyOS](https://cachyos.org/) base distribution:
 
-- BORE-LTO scheduler kernel (`linux-cachyos-bore-lto`) optimized for desktop responsiveness.
+- Default CachyOS kernel (`linux-cachyos`): clang + ThinLTO, AutoFDO-profiled, EEVDF scheduler, 1000 Hz tickrate.
 - v3 packages from CachyOS repos. Many rebuilt with x86-64-v3 instructions.
 - Per-kernel pre-built modules for `nvidia-open`, `zfs`, and `r8125`. No DKMS rebuilds at image-build time.
 
@@ -45,7 +45,7 @@ Earlier revisions of cache22 split out NVIDIA and gaming into separate variants 
 
 The base layer (always installed) includes:
 
-- **GPU drivers.** Mesa (AMD, Intel, virtio) + NVIDIA proprietary (`nvidia-open-dkms` on arch, `linux-cachyos-bore-lto-nvidia-open` on cachy).
+- **GPU drivers.** Mesa (AMD, Intel, virtio) + NVIDIA proprietary (`nvidia-open-dkms` on arch, `linux-cachyos-nvidia-open` on cachy).
 - **Filesystems.** ext4, xfs, btrfs, f2fs, exFAT, FAT32, NFS, SMB. ZFS on `cachy-*` only.
 - **Network.** NetworkManager, OpenVPN, WireGuard, modemmanager, `r8125`.
 - **Bluetooth.** bluez stack.

@@ -37,9 +37,9 @@ Example output:
   Staged: ghcr.io/cmspam/cache22-cachy-server:rolling
 
   Package changes (37):
-    upgraded  linux-cachyos-bore-lto                    7.0.5-1 -> 7.1.0-1
-    upgraded  linux-cachyos-bore-lto-headers            7.0.5-1 -> 7.1.0-1
-    upgraded  linux-cachyos-bore-lto-nvidia-open        7.0.5-1 -> 7.1.0-1
+    upgraded  linux-cachyos                             7.0.5-1 -> 7.1.0-1
+    upgraded  linux-cachyos-headers                     7.0.5-1 -> 7.1.0-1
+    upgraded  linux-cachyos-nvidia-open                 7.0.5-1 -> 7.1.0-1
     upgraded  systemd                                   258.4-1 -> 258.5-1
     added     btop                                      1.4.0-1
     removed   nano-syntax-highlighting                  3.5-1

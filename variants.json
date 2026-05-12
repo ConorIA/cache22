@@ -22,19 +22,19 @@
     {
       "id": "cachy-server",
       "label": "CachyOS — Headless server / container host",
-      "description": "CachyOS bore-lto 7.x kernel with pre-built zfs + r8125 + nvidia-open modules. Containers (podman, docker, distrobox, incus), libvirt+qemu, cockpit web admin. NVIDIA driver included.",
+      "description": "Default CachyOS 7.x kernel (clang+ThinLTO, AutoFDO-profiled, EEVDF scheduler) with pre-built zfs + r8125 + nvidia-open modules. Containers (podman, docker, distrobox, incus), libvirt+qemu, cockpit web admin. NVIDIA driver included.",
       "image": "ghcr.io/cmspam/cache22-cachy-server:rolling"
     },
     {
       "id": "cachy-kde",
       "label": "CachyOS — KDE Plasma desktop",
-      "description": "CachyOS bore-lto kernel + Plasma 6 desktop, full gaming stack (Steam, gamescope, mangohud, lutris, sunshine, Xbox controller), SteamOS-style switchable gamescope session, NVIDIA proprietary driver. CachyOS performance tunings.",
+      "description": "Default CachyOS kernel (clang+ThinLTO, AutoFDO, EEVDF) + Plasma 6 desktop, full gaming stack (Steam, gamescope, mangohud, lutris, sunshine, Xbox controller), SteamOS-style switchable gamescope session, NVIDIA proprietary driver. CachyOS performance tunings.",
       "image": "ghcr.io/cmspam/cache22-cachy-kde:rolling"
     },
     {
       "id": "cachy-gnome",
       "label": "CachyOS — GNOME desktop",
-      "description": "CachyOS bore-lto kernel + GNOME Shell desktop, full gaming stack (Steam, gamescope, mangohud, lutris, sunshine, Xbox controller), NVIDIA proprietary driver. No SteamOS session switcher (KDE-only today).",
+      "description": "Default CachyOS kernel (clang+ThinLTO, AutoFDO, EEVDF) + GNOME Shell desktop, full gaming stack (Steam, gamescope, mangohud, lutris, sunshine, Xbox controller), NVIDIA proprietary driver. No SteamOS session switcher (KDE-only today).",
       "image": "ghcr.io/cmspam/cache22-cachy-gnome:rolling"
     }
   ]

@@ -35,7 +35,7 @@ packages/
 │   ├── cachy/
 │   │   ├── base.txt        kernel + system + non-GPU userland (always)
 │   │   ├── server.txt      cockpit
-│   │   ├── nvidia.txt      pre-built linux-cachyos-bore-lto-nvidia-open + userland
+│   │   ├── nvidia.txt      pre-built linux-cachyos-nvidia-open + userland
 │   │   ├── desktop.txt     GPU userland, fonts, IMEs, generic apps
 │   │   ├── gaming.txt      Steam, gamescope, mangohud, lutris, sunshine
 │   │   ├── kde.txt         Plasma 6 + KDE apps

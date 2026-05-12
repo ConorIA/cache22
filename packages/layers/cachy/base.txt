@@ -29,10 +29,12 @@ usbutils
 pciutils
 
 # ─── Kernel + per-kernel pre-built modules (non-NVIDIA) ───
-linux-cachyos-bore-lto
-linux-cachyos-bore-lto-headers
-linux-cachyos-bore-lto-zfs
-linux-cachyos-bore-lto-r8125
+# linux-cachyos is the default CachyOS kernel: clang + ThinLTO,
+# AutoFDO-profiled, EEVDF scheduler, 1000 Hz tickrate.
+linux-cachyos
+linux-cachyos-headers
+linux-cachyos-zfs
+linux-cachyos-r8125
 
 # ─── GPU userland (headless-safe, non-NVIDIA) ─────────────
 mesa

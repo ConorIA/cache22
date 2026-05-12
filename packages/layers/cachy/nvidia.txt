@@ -2,7 +2,7 @@
 # Driver + userland for NVIDIA GPUs. Optional, pulled by *-nvidia variants.
 
 # ─── NVIDIA driver + kernel module (CachyOS pre-built) ────
-linux-cachyos-bore-lto-nvidia-open
+linux-cachyos-nvidia-open
 nvidia-utils
 opencl-nvidia
 libva-nvidia-driver
