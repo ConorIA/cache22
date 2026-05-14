@@ -91,6 +91,7 @@ chwd
 # ─── Network ──────────────────────────────────────────────
 networkmanager
 networkmanager-openvpn
+networkmanager-strongswan
 modemmanager
 iwd
 wpa_supplicant
@@ -102,6 +103,7 @@ usb_modeswitch
 wireless-regdb
 ufw
 wireguard-tools
+strongswan
 
 # ─── Bluetooth ────────────────────────────────────────────
 bluez
