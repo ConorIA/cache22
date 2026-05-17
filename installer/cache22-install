@@ -1307,6 +1307,12 @@ configure_deploy() {
     local HASHED; HASHED=$(openssl passwd -6 "${CFG[password]}")
     grep -q "^${CFG[username]}:" "$DEPLOY_ETC/group"  || \
         echo "${CFG[username]}:x:${GID_}:" >> "$DEPLOY_ETC/group"
+    # /etc/gshadow must mirror /etc/group or `grpck -r` (run daily by
+    # shadow.timer) flags the inconsistency. Format is
+    # name:password:admins:members — we use !  (locked) for password and
+    # leave admins/members empty.
+    grep -q "^${CFG[username]}:" "$DEPLOY_ETC/gshadow" || \
+        echo "${CFG[username]}:!::" >> "$DEPLOY_ETC/gshadow"
     grep -q "^${CFG[username]}:" "$DEPLOY_ETC/passwd" || \
         echo "${CFG[username]}:x:${UID_}:${GID_}:${CFG[fullname]}:/var/home/${CFG[username]}:/bin/bash" >> "$DEPLOY_ETC/passwd"
     # shadow lastchange is days since epoch, not seconds.
@@ -1316,13 +1322,25 @@ configure_deploy() {
 
     # Each group is added only if it exists in the deployed image —
     # server variants without audio/video get the subset they have.
+    # Every membership added to /etc/group also gets mirrored to
+    # /etc/gshadow's members field (the 4th colon-separated field).
+    # System groups generally already have a gshadow entry from
+    # systemd-sysusers at image build; we add one if missing.
     local g
     for g in wheel audio video input render storage optical lp scanner \
              games users network power kvm libvirt incus-admin docker; do
         grep -q "^${g}:" "$DEPLOY_ETC/group" || continue
-        grep -E "^${g}:[^:]*:[^:]*:.*\b${CFG[username]}\b" "$DEPLOY_ETC/group" >/dev/null && continue
-        sed -i -E "s/^(${g}:[^:]*:[^:]*:)([^,]*.*)$/\1\2,${CFG[username]}/" "$DEPLOY_ETC/group"
-        sed -i -E "s/^(${g}:[^:]*:[^:]*:),/\1/" "$DEPLOY_ETC/group"
+        if ! grep -E "^${g}:[^:]*:[^:]*:.*\b${CFG[username]}\b" "$DEPLOY_ETC/group" >/dev/null; then
+            sed -i -E "s/^(${g}:[^:]*:[^:]*:)([^,]*.*)$/\1\2,${CFG[username]}/" "$DEPLOY_ETC/group"
+            sed -i -E "s/^(${g}:[^:]*:[^:]*:),/\1/" "$DEPLOY_ETC/group"
+        fi
+        # Mirror to /etc/gshadow's members field.
+        grep -q "^${g}:" "$DEPLOY_ETC/gshadow" || \
+            echo "${g}:!::" >> "$DEPLOY_ETC/gshadow"
+        if ! grep -E "^${g}:[^:]*:[^:]*:.*\b${CFG[username]}\b" "$DEPLOY_ETC/gshadow" >/dev/null; then
+            sed -i -E "s/^(${g}:[^:]*:[^:]*:)([^,]*.*)$/\1\2,${CFG[username]}/" "$DEPLOY_ETC/gshadow"
+            sed -i -E "s/^(${g}:[^:]*:[^:]*:),/\1/" "$DEPLOY_ETC/gshadow"
+        fi
     done
     mkdir -p "$DEPLOY_ETC/sudoers.d"
     echo "%wheel ALL=(ALL:ALL) ALL" > "$DEPLOY_ETC/sudoers.d/10-wheel"
