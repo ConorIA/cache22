@@ -34,10 +34,17 @@ ISO_LABEL="CACHE22_INSTALLER"
 ISO_NAME="cache22-installer-${ISO_DATE}"
 
 [[ ${EUID} -eq 0 ]] || { echo "build-iso.sh must run as root."; exit 1; }
-for tool in dnf dracut mksquashfs xorriso mkfs.fat mcopy mmd python3; do
+for tool in dnf dracut mksquashfs xorriso mkfs.fat mcopy mmd python3 grub2-mkimage; do
     command -v "$tool" >/dev/null 2>&1 \
         || { echo "ERROR: missing $tool"; exit 1; }
 done
+# isohdpfx.bin (from syslinux) provides the hybrid-MBR boot sector so
+# the ISO boots from USB on BIOS systems. grub2-pc-modules provides
+# the i386-pc module set we wrap into the eltorito image.
+ISOHDPFX="/usr/share/syslinux/isohdpfx.bin"
+GRUB_PC_DIR="/usr/lib/grub/i386-pc"
+[[ -f "$ISOHDPFX" ]] || { echo "ERROR: missing $ISOHDPFX (install syslinux)"; exit 1; }
+[[ -d "$GRUB_PC_DIR" ]] || { echo "ERROR: missing $GRUB_PC_DIR (install grub2-pc-modules)"; exit 1; }
 
 # ─── 1. Bootstrap minimal Fedora 44 rootfs ────────────────────────
 echo "==> Bootstrapping Fedora 44 rootfs at $ROOTFS"
@@ -382,6 +389,48 @@ EOF
 # Keep a copy at the conventional ISO9660 location too.
 cp "$ISOROOT/EFI/fedora/grub.cfg" "$ISOROOT/grub/grub.cfg"
 
+# BIOS-side grub.cfg + eltorito boot image. The BIOS path uses
+# `linux`/`initrd` (not `linuxefi`/`initrdefi` like the EFI path).
+# The kernel + initrd files are shared with the EFI side at
+# /images/. Same dmsquash-live cmdline — boots the same live env
+# regardless of firmware mode.
+mkdir -p "$ISOROOT/boot/grub/i386-pc"
+cat > "$ISOROOT/boot/grub/grub.cfg" <<EOF
+set timeout=3
+set default=0
+
+# Switch \$root from the eltorito boot device to the iso9660 volume.
+search --no-floppy --set=root --label ${ISO_LABEL}
+
+menuentry 'cache22 Installer (live)' {
+    linux /images/vmlinuz root=live:CDLABEL=${ISO_LABEL} rd.live.image selinux=0 enforcing=0 audit=0 quiet rd.plymouth=0 plymouth.enable=0
+    initrd /images/initramfs.img
+}
+
+menuentry 'cache22 Installer (live, troubleshoot - rd.shell)' {
+    linux /images/vmlinuz root=live:CDLABEL=${ISO_LABEL} rd.live.image selinux=0 enforcing=0 audit=0 console=tty0 console=ttyS0,115200 rd.shell rd.debug plymouth.enable=0
+    initrd /images/initramfs.img
+}
+EOF
+
+# Build the BIOS eltorito boot image. Embeds an early grub.cfg
+# that loads /boot/grub/grub.cfg from the iso9660 volume — same
+# pattern Fedora and Arch use. Modules listed are the minimum needed
+# to read iso9660, switch root by label, and chainload to /boot/grub
+# /grub.cfg.
+echo "==> Building BIOS eltorito image"
+BIOS_ELTORITO="$ISOROOT/boot/grub/i386-pc/eltorito.img"
+grub2-mkimage \
+    --format=i386-pc-eltorito \
+    --output="$BIOS_ELTORITO" \
+    --prefix=/boot/grub \
+    iso9660 biosdisk normal configfile linux echo ls cat \
+    search search_label part_msdos part_gpt
+# i386-pc/cdboot.img is what xorrisofs uses as the El-Torito boot
+# sector; grub2-mkimage's output goes in /boot/grub/i386-pc/eltorito.img
+# but the real boot record needs cdboot.img next to it.
+cp "$GRUB_PC_DIR/cdboot.img" "$ISOROOT/boot/grub/i386-pc/"
+
 # ─── 8. Build EFI boot image (FAT) ─────────────────────────────────
 # archiso rule: round used KiB up to the next full MiB, add 8 MiB
 # buffer. mkfs.fat picks FAT32 only at ≥36 MiB; below that we get
@@ -402,17 +451,14 @@ mkfs.fat "${MKFS_OPTS[@]}" "$EFIIMG" "$EFI_SIZE_KB" >/dev/null
 mmd -i "$EFIIMG" ::/EFI ::/EFI/BOOT ::/EFI/fedora
 mcopy -i "$EFIIMG" -s "$ISOROOT/EFI"/* ::/EFI/
 
-# ─── 9. xorrisofs hybrid ISO (UEFI-only; SB-bootable on stock OEM) ──
-# Critical: `-eltorito-alt-boot` BEFORE the `-e` line. Without it,
-# xorriso mutates a placeholder/discarded El-Torito section instead
-# of registering a real UEFI alt-entry; OVMF then sees no bootable
-# option even though the ESP is present. lorax, mkarchiso, and
-# titanoboa all use this flag in this exact position.
-#
-# `-iso_mbr_part_type` and `-append_partition` GUIDs match
-# lorax/titanoboa exactly. Rock Ridge + Joliet so iso9660 paths
-# round-trip correctly (Fedora's grub2 hardcodes `/EFI/fedora/grub.cfg`
-# with that exact case).
+# ─── 9. xorrisofs hybrid ISO (BIOS + UEFI; SB-bootable on stock OEM)
+# Hybrid boot record:
+#   - Primary eltorito  → BIOS path (boot/grub/i386-pc/eltorito.img)
+#   - Alt eltorito      → UEFI path (appended partition 2, FAT ESP)
+#   - isohybrid MBR     → so USB dd of the ISO is BIOS-bootable
+# Critical: `-eltorito-alt-boot` BEFORE the `-e` line is what makes
+# xorriso register a real UEFI alt-entry instead of mutating a
+# placeholder. lorax, mkarchiso, and titanoboa all do this.
 echo "==> xorrisofs"
 mkdir -p "$OUT"
 FINAL_ISO="$OUT/${ISO_NAME}.iso"
@@ -426,13 +472,16 @@ xorriso -as mkisofs \
     -publisher 'cache22 <https://github.com/cmspam/cache22>' \
     -preparer 'cache22 build pipeline' \
     -partition_offset 16 \
+    -isohybrid-mbr "$ISOHDPFX" \
+    -b boot/grub/i386-pc/eltorito.img \
+    -no-emul-boot -boot-load-size 4 -boot-info-table \
     -appended_part_as_gpt \
     -append_partition 2 C12A7328-F81F-11D2-BA4B-00A0C93EC93B "$EFIIMG" \
     -iso_mbr_part_type EBD0A0A2-B9E5-4433-87C0-68B6B72699C7 \
     -eltorito-alt-boot \
     -e --interval:appended_partition_2:all:: \
     -no-emul-boot \
-    -eltorito-catalog 'EFI/boot.cat' \
+    -eltorito-catalog 'boot/grub/boot.cat' \
     -o "$FINAL_ISO" \
     "$ISOROOT"
 

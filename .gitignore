@@ -26,3 +26,8 @@ installer/archiso/airootfs/usr/local/
 # Local test scratch
 *-pid.txt
 __pycache__/
+
+# Local fedora-live build artifacts (CI builds in a clean container).
+installer/fedora-live/work/
+installer/fedora-live/out/
+installer/fedora-live/out-bios/

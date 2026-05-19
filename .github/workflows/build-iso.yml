@@ -35,6 +35,9 @@ jobs:
         run: |
           # Pure-Fedora live ISO build via dnf-installroot + dracut +
           # mksquashfs + xorrisofs. No lorax / Anaconda / kickstart.
+          # grub2-tools + grub2-pc-modules + syslinux are for the
+          # BIOS-side El-Torito boot record (hybrid ISO boots on both
+          # BIOS and UEFI hardware).
           dnf install -y \
               dnf \
               dracut \
@@ -48,7 +51,10 @@ jobs:
               python3 \
               git \
               gh \
-              which
+              which \
+              grub2-tools \
+              grub2-pc-modules \
+              syslinux
 
       - name: Checkout
         uses: actions/checkout@v6
