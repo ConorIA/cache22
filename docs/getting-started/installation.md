@@ -39,6 +39,34 @@ Insert the USB drive in the target machine and boot it. The live ISO auto-logins
 
 If the machine boots into its existing OS instead of the USB, enter the firmware boot menu (commonly F12, F11, F10, ESC, or F8 at power-on depending on vendor) and select the USB drive.
 
+### Alternative: Install on a VPS via kexec (no ISO mount needed)
+
+For VPS providers that do not let you mount a custom ISO, boot a NixOS-based kexec environment that has `cache22-install` baked in. The environment is built from NixOS 25.11 with the latest available kernel.
+
+From the VPS's existing OS (Debian, Ubuntu, CentOS, Alpine, Arch — anything with `bash` and `curl`), run as root:
+
+```
+curl -fsSL https://raw.githubusercontent.com/cmspam/cache22/main/installer/cache22-vps-install.sh | sudo bash
+```
+
+The bootstrap script installs `kexec-tools` if missing, downloads the latest kexec image from this repository's releases, extracts it into `/root/`, and runs the NixOS-supplied `kexec/run` script. That script captures the host's network configuration and SSH authorized_keys, then kexecs into a NixOS environment that comes back up on the same IP with sshd running.
+
+Wait 30 to 60 seconds, then SSH back in as `root` and run:
+
+```
+cache22-install
+```
+
+The installer is the same script as on the USB ISO, with the same prompts and the same result. The host's disks are free (the live env runs entirely from RAM), so the installer can wipe and install onto `/dev/sda` (or whatever your VPS disk is called).
+
+To pin a specific release tag instead of `latest`:
+
+```
+sudo TAG=iso-2026-05-19 bash <(curl -fsSL https://raw.githubusercontent.com/cmspam/cache22/main/installer/cache22-vps-install.sh)
+```
+
+If kexec hangs or the VPS does not come back, check the VPS provider's web console: the NixOS kexec environment logs to the serial port.
+
 ## Step 4. Run the installer
 
 At the live shell, run:

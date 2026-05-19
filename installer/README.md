@@ -6,10 +6,20 @@ Live ISO + scripted installer that pulls the latest cache22 image from ghcr.io a
 
 ```
 installer/
-├── fedora-live/                # Fedora-44 minimal live ISO build
+├── fedora-live/                # Fedora-44 minimal live ISO build (USB installs)
 │   └── build-iso.sh            # dnf --installroot + dracut + mksquashfs + xorrisofs
-└── cache22-install             # interactive bash TUI; supports --no-prompt scripted mode
+├── flake.nix                   # NixOS-based kexec image (VPS installs)
+├── nixos-kexec.nix             # NixOS module: cache22-install + deps + kernel pin
+├── nixos-kexec.md              # how to build the kexec image locally
+├── cache22-vps-install.sh      # one-liner bootstrap: downloads kexec image, runs it
+├── cache22-install             # interactive bash TUI; supports --no-prompt scripted mode
+└── cache22-repair              # reinstall the OS image without touching /var
 ```
+
+Two install entry points:
+
+- **USB:** Fedora 44 live ISO from `fedora-live/`, boots under stock Secure Boot.
+- **VPS:** NixOS 25.11 kexec tarball from the flake, for providers that do not let you mount a custom ISO. The same `cache22-install` script runs in both environments.
 
 ## Using it
 

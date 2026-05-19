@@ -9,8 +9,15 @@ on:
     - cron: '0 2 * * 0'
   push:
     branches: [main]
+    # Narrow set — anything outside this list (e.g., changes to the
+    # NixOS kexec flake or the VPS-bootstrap wrapper) should NOT
+    # trigger an ISO rebuild.
     paths:
-      - 'installer/**'
+      - 'installer/cache22-install'
+      - 'installer/cache22-repair'
+      - 'installer/fedora-live/**'
+      - 'installer/README.md'
+      - 'variants.json'
       - '.github/workflows/build-iso.yml'
 
 permissions:
@@ -94,9 +101,17 @@ jobs:
           no central CI key. The ISO pulls the latest cache22 image
           from ghcr.io at install time, so a stale ISO still installs
           the latest image."
-          gh release delete "$TAG" --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
-          gh release create "$TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "cache22 installer ISO ($TAG)" \
-              --notes "$NOTES" \
-              "$ISO"
+          # Don't delete the release: the kexec-image workflow may have
+          # already uploaded its tarball to this same tag. Create if
+          # missing (or replace notes if present), then upload with
+          # --clobber so re-runs are idempotent.
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release create "$TAG" \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --title "cache22 installer ISO ($TAG)" \
+                  --notes "$NOTES"
+          else
+              gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes "$NOTES"
+          fi
+          gh release upload "$TAG" "$ISO" \
+              --repo "$GITHUB_REPOSITORY" --clobber

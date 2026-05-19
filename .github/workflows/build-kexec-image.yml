@@ -1,0 +1,85 @@
+name: Build cache22 kexec image (NixOS)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * 0'
+  push:
+    branches: [main]
+    paths:
+      - 'installer/flake.nix'
+      - 'installer/flake.lock'
+      - 'installer/nixos-kexec.nix'
+      - 'installer/cache22-install'
+      - 'installer/cache22-repair'
+      - '.github/workflows/build-kexec-image.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build-kexec:
+    name: Build NixOS-based kexec tarball
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Nix (with flakes)
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Build kexec tarball
+        working-directory: installer
+        run: |
+          nix build .#kexec-tarball --print-build-logs
+          ls -lhR result/
+
+      - name: Compute artifact info
+        id: info
+        run: |
+          TARBALL=$(ls installer/result/tarball/*.tar.* | head -1)
+          DATE=$(date -u +%Y-%m-%d)
+          # Stable filename: callers (e.g. installer/cache22-vps-install.sh)
+          # rely on /releases/latest/download/<name> resolving without
+          # knowing the date. Versioning lives on the release tag.
+          OUTNAME="cache22-kexec-vps.tar.xz"
+          cp -L "$TARBALL" "$OUTNAME"
+          SIZE=$(du -h "$OUTNAME" | cut -f1)
+          SHA=$(sha256sum "$OUTNAME" | awk '{print $1}')
+          echo "tarball=$OUTNAME" >> "$GITHUB_OUTPUT"
+          echo "size=$SIZE" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "tag=iso-$DATE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload as workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: cache22-kexec-tarball
+          path: ${{ steps.info.outputs.tarball }}
+          retention-days: 14
+
+      - name: Upload to GitHub Release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARBALL: ${{ steps.info.outputs.tarball }}
+          TAG: ${{ steps.info.outputs.tag }}
+          SIZE: ${{ steps.info.outputs.size }}
+          SHA: ${{ steps.info.outputs.sha }}
+        run: |
+          # If the ISO workflow has not created the release yet, create
+          # a stub one. The ISO job runs gh release create with its own
+          # notes when it finishes; we only attach the tarball here.
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release create "$TAG" \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --title "cache22 installer release ($TAG)" \
+                  --notes "Release auto-created by build-kexec-image. The ISO will be appended by build-iso when it runs."
+          fi
+          gh release upload "$TAG" "$TARBALL" \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          echo "Uploaded $TARBALL ($SIZE, sha256 $SHA) to release $TAG"
