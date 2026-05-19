@@ -33,6 +33,32 @@
             ];
           }
           ./nixos-kexec.nix
+          # Override kexec-run.sh to force -c (kexec_load, the legacy
+          # syscall). The upstream script tries --kexec-syscall-auto
+          # which fails on most VPS host kernels with EADDRNOTAVAIL +
+          # 'PEFILE: Unsigned PE binary' in dmesg. -c bypasses
+          # placement constraints and PE signature enforcement.
+          # Baking it into the tarball means /root/kexec/run works
+          # with zero args.
+          ({ config, lib, pkgs, ... }: {
+            system.build.kexecRun = lib.mkForce (
+              let
+                patched-script = pkgs.writeText "kexec-run.sh" (
+                  builtins.replaceStrings
+                    [ "--kexec-syscall-auto" ]
+                    [ "--kexec-syscall" ]
+                    (builtins.readFile
+                      "${nixos-images}/nix/kexec-installer/kexec-run.sh")
+                );
+              in pkgs.runCommand "kexec-run" { } ''
+                install -D -m 0755 ${patched-script} $out
+                sed -i \
+                  -e 's|@init@|${config.system.build.toplevel}/init|' \
+                  -e 's|@kernelParams@|${lib.escapeShellArgs config.boot.kernelParams}|' \
+                  $out
+              ''
+            );
+          })
         ];
       };
     in {
