@@ -377,7 +377,7 @@ set default=0
 search --no-floppy --set=root --label ${ISO_LABEL}
 
 menuentry 'cache22 Installer (live)' {
-    linuxefi /images/vmlinuz root=live:CDLABEL=${ISO_LABEL} rd.live.image selinux=0 enforcing=0 audit=0 console=tty0 console=ttyS0,115200 quiet rd.plymouth=0 plymouth.enable=0
+    linuxefi /images/vmlinuz root=live:CDLABEL=${ISO_LABEL} rd.live.image selinux=0 enforcing=0 audit=0 quiet rd.plymouth=0 plymouth.enable=0
     initrdefi /images/initramfs.img
 }
 
@@ -403,7 +403,7 @@ set default=0
 search --no-floppy --set=root --label ${ISO_LABEL}
 
 menuentry 'cache22 Installer (live)' {
-    linux /images/vmlinuz root=live:CDLABEL=${ISO_LABEL} rd.live.image selinux=0 enforcing=0 audit=0 console=tty0 console=ttyS0,115200 quiet rd.plymouth=0 plymouth.enable=0
+    linux /images/vmlinuz root=live:CDLABEL=${ISO_LABEL} rd.live.image selinux=0 enforcing=0 audit=0 quiet rd.plymouth=0 plymouth.enable=0
     initrd /images/initramfs.img
 }
 
