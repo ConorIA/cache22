@@ -38,8 +38,15 @@
     in {
       nixosConfigurations.cache22-kexec = cache22-kexec;
       packages.${system} = {
-        default = cache22-kexec.config.system.build.kexecTarball;
-        kexec-tarball = cache22-kexec.config.system.build.kexecTarball;
+        # Use nixos-images' kexecInstallerTarball, not nixpkgs'
+        # upstream kexecTarball. The upstream one only ships a bare
+        # kexec script (extracts as a single /root/kexec_nixos
+        # symlink with no network/SSH preservation). nixos-images'
+        # version produces a /root/kexec/ directory containing the
+        # initrd, kernel, kexec binary, and the run script that
+        # captures host network config + authorized_keys.
+        default = cache22-kexec.config.system.build.kexecInstallerTarball;
+        kexec-tarball = cache22-kexec.config.system.build.kexecInstallerTarball;
       };
     };
 }

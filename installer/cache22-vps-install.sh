@@ -16,7 +16,7 @@
 set -euo pipefail
 
 REPO="cmspam/cache22"
-ASSET="cache22-kexec-vps.tar.xz"
+ASSET="cache22-kexec-vps.tar.gz"
 TAG="${TAG:-latest}"
 DEST="/root"
 
@@ -50,7 +50,7 @@ fi
 
 echo "==> Downloading $URL"
 curl --fail --location --progress-bar "$URL" \
-    | tar -xJf - -C "$DEST"
+    | tar -xzf - -C "$DEST"
 
 if [[ ! -x "$DEST/kexec/run" ]]; then
     echo "ERROR: $DEST/kexec/run not found after extraction." >&2

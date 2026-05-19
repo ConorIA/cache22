@@ -62,7 +62,7 @@ The installer is the same script as on the USB ISO, with the same prompts and th
 To pin a specific release tag instead of `latest`:
 
 ```
-sudo TAG=iso-2026-05-19 bash <(curl -fsSL https://raw.githubusercontent.com/cmspam/cache22/main/installer/cache22-vps-install.sh)
+sudo TAG=iso-YYYY-MM-DD bash <(curl -fsSL https://raw.githubusercontent.com/cmspam/cache22/main/installer/cache22-vps-install.sh)
 ```
 
 If kexec hangs or the VPS does not come back, check the VPS provider's web console: the NixOS kexec environment logs to the serial port.

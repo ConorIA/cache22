@@ -41,12 +41,12 @@ jobs:
       - name: Compute artifact info
         id: info
         run: |
-          TARBALL=$(ls installer/result/tarball/*.tar.* | head -1)
+          TARBALL=$(ls installer/result/*.tar.* | head -1)
           DATE=$(date -u +%Y-%m-%d)
           # Stable filename: callers (e.g. installer/cache22-vps-install.sh)
           # rely on /releases/latest/download/<name> resolving without
           # knowing the date. Versioning lives on the release tag.
-          OUTNAME="cache22-kexec-vps.tar.xz"
+          OUTNAME="cache22-kexec-vps.tar.gz"
           cp -L "$TARBALL" "$OUTNAME"
           SIZE=$(du -h "$OUTNAME" | cut -f1)
           SHA=$(sha256sum "$OUTNAME" | awk '{print $1}')
