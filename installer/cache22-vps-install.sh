@@ -60,4 +60,9 @@ fi
 echo "==> Running NixOS kexec transition"
 echo "    Your SSH session will drop. Wait 30-60 seconds, then SSH"
 echo "    back in as root and run: cache22-install"
-exec "$DEST/kexec/run"
+# Force -c (kexec_load, old syscall). VPS host kernels typically
+# reject the newer kexec_file_load with EADDRNOTAVAIL (memory-map
+# placement constraints) or 'Unsigned PE binary' (SB enforcement).
+# The -c flag is positioned after --kexec-syscall-auto in the run
+# script's kexec invocation, so it overrides.
+exec "$DEST/kexec/run" --kexec-extra-flags -c
