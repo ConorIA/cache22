@@ -10,11 +10,11 @@ When the installed cache22 system will not boot, recover from the live ISO using
 
 ## Symptoms requiring repair
 
-- sd-boot menu shows no cache22 entry.
-- sd-boot menu shows entries but firmware refuses to load any of them.
+- (UEFI) sd-boot menu shows no cache22 entry. (BIOS) GRUB menu shows no cache22 entry.
+- (UEFI) sd-boot menu shows entries but firmware refuses to load any of them.
 - Kernel boots but kernel panics in initramfs (e.g., LUKS not unlockable).
 - Both deploys fail health checks and auto-rollback cycles indefinitely.
-- Per-machine Secure Boot key on the encrypted root has been lost (e.g., key directory deleted in error).
+- (UEFI) Per-machine Secure Boot key on the encrypted root has been lost (e.g., key directory deleted in error).
 
 If the system reaches a shell at all (even an emergency one), prefer fixing in place rather than running `cache22-repair`. See [Customization → bootc usroverlay](../../customization/usroverlay/) for in-place editing.
 

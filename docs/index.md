@@ -29,9 +29,11 @@ Desktop variants (`*-kde`, `*-gnome`) additionally include Steam, Lutris, gamemo
 
 **Two fast paths for applying updates.** `cache22-reboot` selects between three reboot strategies based on what bootc reports about the staged deploy: soft-reboot (~5 sec, kernel keeps running, network connections survive), kexec (~10-30 sec faster than a full reboot when the kernel changed), or full reboot. See [Three Reboot Paths](./updates-and-reboots/three-reboot-paths/).
 
-**Per-machine Secure Boot signing.** Each install generates its own SB key locally. UKIs are signed on the user's machine. There is no central CI signing key. See [Boot Chain](./boot-and-security/boot-chain/).
+**Two install entry points.** A hybrid BIOS+UEFI USB installer ISO for bare metal, plus a NixOS-based kexec image for VPSes that can't mount custom ISOs. Both run the same `cache22-install` script. See [Installation](./getting-started/installation/).
 
-**TPM2 LUKS auto-unlock with two keyslot options.** PCR 11 signed-policy keyslot (always) survives every UKI rebuild without re-enrollment. Optional PCR 7 keyslot (opt-in) lets `cache22-reboot --kexec` auto-unlock too. See [TPM and LUKS](./boot-and-security/tpm-luks/).
+**Per-machine Secure Boot signing (UEFI only).** Each UEFI install generates its own SB key locally. UKIs are signed on the user's machine. There is no central CI signing key. BIOS installs use GRUB without Secure Boot. See [Boot Chain](./boot-and-security/boot-chain/).
+
+**TPM2 LUKS auto-unlock with two keyslot options (UEFI only).** PCR 11 signed-policy keyslot (always) survives every UKI rebuild without re-enrollment. Optional PCR 7 keyslot (opt-in) lets `cache22-reboot --kexec` auto-unlock too. See [TPM and LUKS](./boot-and-security/tpm-luks/). BIOS installs do not support LUKS encryption.
 
 **One-command rollback and auto-rollback on failure.** `sudo bootc rollback && sudo systemctl reboot` reverts to the previous deployment. Health checks 2 minutes after every boot trigger an automatic rollback after 3 consecutive failures. See [Health Checks](./system-ops/healthcheck/).
 

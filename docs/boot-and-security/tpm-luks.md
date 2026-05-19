@@ -8,6 +8,8 @@ nav_order: 3
 
 `cache22-encryption` manages TPM2 auto-unlock for LUKS volumes.
 
+**UEFI only.** TPM2 PCR-based unlock depends on PCR measurements made by UEFI firmware and sd-boot/sd-stub during boot. BIOS installs cannot use TPM2 auto-unlock, and the BIOS installer path refuses LUKS entirely (GRUB's LUKS2 support is incomplete and would require a separate unencrypted `/boot`). For encrypted installs, use UEFI hardware. See [Installation → BIOS install](../../getting-started/installation/#bios-install) for the BIOS limitations summary.
+
 ## Synopsis
 
 ```

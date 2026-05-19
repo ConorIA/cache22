@@ -34,10 +34,22 @@ For details on each variant see [Variants](https://cmspam.github.io/cache22/gett
 
 ## Quick install
 
-1. Download the latest ISO from [Releases](https://github.com/cmspam/cache22/releases/latest).
+### From USB (bare metal, BIOS or UEFI)
+
+1. Download the latest ISO from [Releases](https://github.com/cmspam/cache22/releases/latest). The ISO is a hybrid that boots on both legacy BIOS and UEFI hardware.
 2. Write to USB: `sudo dd if=cache22-installer-*.iso of=/dev/sdX bs=4M status=progress oflag=sync`.
-3. Boot the USB. Run `cache22-install`.
-4. Before the first reboot of the installed system, put firmware in setup mode (disable Secure Boot or clear the Platform Key). See [First-Boot Secure Boot Setup](https://cmspam.github.io/cache22/getting-started/secure-boot-first-boot/).
+3. Boot the USB. Run `cache22-install`. It auto-detects the firmware mode.
+4. (UEFI only) Before the first reboot of the installed system, put firmware in setup mode (disable Secure Boot or clear the Platform Key). See [First-Boot Secure Boot Setup](https://cmspam.github.io/cache22/getting-started/secure-boot-first-boot/). BIOS installs skip this step — Secure Boot, signed UKIs, and TPM2 LUKS unlock are all UEFI features.
+
+### On a VPS without ISO mount
+
+For VPS providers that don't let you mount a custom ISO, kexec into a NixOS-based installer environment from the existing OS:
+
+```
+curl -fsSL https://raw.githubusercontent.com/cmspam/cache22/main/installer/cache22-vps-install.sh | sudo bash
+```
+
+After the kexec, SSH back in as root and run `cache22-install`. Works on both BIOS and UEFI VPSes. See [Installation → VPS via kexec](https://cmspam.github.io/cache22/getting-started/installation/#alternative-install-on-a-vps-via-kexec-no-iso-mount-needed).
 
 ## Helper commands
 

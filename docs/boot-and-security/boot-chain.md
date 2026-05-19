@@ -6,7 +6,9 @@ nav_order: 1
 
 # Boot Chain
 
-cache22 boots through this chain:
+cache22 boots through one of two chains, depending on the firmware mode detected at install time.
+
+## UEFI (default)
 
 ```
 firmware (UEFI)
@@ -17,6 +19,20 @@ firmware (UEFI)
           -> ostree-prepare-root sets up /sysroot
             -> systemd in real root
 ```
+
+## Legacy BIOS
+
+```
+firmware (BIOS)
+  -> MBR boot code (GRUB stage 1)
+    -> /boot/grub/i386-pc/* (GRUB stage 2, from BIOS-boot partition)
+      -> /boot/grub/grub.cfg → blscfg reads /boot/loader/entries/
+        -> kernel + initramfs + cmdline (from ostree BLS entry)
+          -> ostree-prepare-root sets up /sysroot
+            -> systemd in real root
+```
+
+There is no signature verification on BIOS (no firmware Secure Boot mechanism), no UKI (no UEFI to load the PE-format binary), and no TPM2 LUKS unlock (depends on PCR measurements made by sd-stub during the UEFI chain). The rest of this page describes the UEFI chain only.
 
 Every PE binary loaded by firmware is signed by the per-machine cache22 SB key. The firmware enrolls cache22's keys (PK + KEK + db) plus Microsoft's DB keys on first boot when the firmware is in setup mode. After enrollment, Secure Boot enforcement engages.
 

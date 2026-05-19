@@ -8,6 +8,8 @@ nav_order: 2
 
 `cache22-secureboot` manages the per-machine Secure Boot key and firmware DB enrollment.
 
+**UEFI only.** The command refuses to run on a BIOS install (no firmware Secure Boot mechanism to interact with, no ESP, no UKI to sign). If your install is on legacy BIOS hardware, this page does not apply. See [Installation → BIOS install](../../getting-started/installation/#bios-install) for the BIOS boot chain.
+
 ## Synopsis
 
 ```

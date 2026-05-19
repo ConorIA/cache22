@@ -9,6 +9,8 @@ permalink: /boot-and-security/
 
 cache22 uses systemd-boot loading a per-machine-signed Unified Kernel Image (UKI). The signing key is generated at install time on the user's machine and lives only on the encrypted root. There is no central CI signing key.
 
+**This whole section is UEFI-only.** Secure Boot, signed UKIs, sd-boot, per-machine SB keys, and TPM2 LUKS auto-unlock all depend on UEFI firmware. cache22 also supports legacy BIOS installs (see [Installation → BIOS install](../getting-started/installation/#bios-install)), but on BIOS the boot chain is GRUB → kernel + initrd with no cryptographic verification and no LUKS support. None of the tools described in this section apply to BIOS installs.
+
 Pages in this section:
 
 1. [Boot Chain](./boot-chain/). The full sd-boot + UKI architecture.
