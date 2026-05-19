@@ -39,6 +39,16 @@ die() { echo "resign-uki: $*" >&2; exit 1; }
 
 require_root
 
+# UEFI-only. On BIOS systems there's no ESP, no UKI, no sd-boot — the
+# BIOS install path uses GRUB+BLS and ostree maintains BLS entries
+# directly, so there's nothing to rebuild here. Exit clean so the
+# systemd units that invoke us (cache22-resign-uki.{service,path} and
+# the ostree-finalize-staged drop-in) are no-ops instead of failures.
+[[ -d /sys/firmware/efi ]] || {
+    echo "resign-uki: no /sys/firmware/efi → BIOS system, nothing to do"
+    exit 0
+}
+
 [[ -d "$ESP" ]] || die "ESP not mounted (looked at /efi and /boot/efi)"
 
 # Ensure SB + TPM keys exist. Always-signs invariant.

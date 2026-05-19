@@ -8,7 +8,7 @@ nav_order: 1
 
 ## Prerequisites
 
-- An x86_64 machine with UEFI firmware. cache22 does not support legacy BIOS boot.
+- An x86_64 machine. UEFI is recommended; legacy BIOS is also supported (without Secure Boot, UKI signing, or TPM2 LUKS unlock — see [BIOS install](#bios-install) below).
 - At least 8 GB of free disk space for the OS plus space for `/var` and user data. 60 GB or more is recommended.
 - A reliable network connection during install. The image is pulled from `ghcr.io` (~8 GB compressed).
 - A USB drive (4 GB or larger) to write the live ISO to.
@@ -106,6 +106,28 @@ reboot
 Remove the USB drive when prompted by the firmware.
 
 **Important:** before the installed system boots, complete [First-Boot Secure Boot Setup](../secure-boot-first-boot/). This is a one-time step that lets cache22 enroll its keys into firmware on the first boot.
+
+## BIOS install
+
+cache22 supports legacy BIOS systems in addition to UEFI. The installer auto-detects firmware mode at runtime via `/sys/firmware/efi`:
+
+- **UEFI present:** sd-boot installed to the ESP, per-machine Secure Boot key generated, every kernel deploy assembled as a signed UKI. Standard cache22 flow.
+- **No UEFI (legacy BIOS):** GRUB installed to the disk's MBR + 1 MiB BIOS-boot partition. A static `grub.cfg` is written to `/boot/grub/` that reads ostree's BLS entries via the `blscfg` directive, so future bootc upgrades boot automatically without grub.cfg regen.
+
+The BIOS path gives you cache22's atomic bootc rolling-image story and every userland feature. What it does not give you:
+
+- Secure Boot (no firmware mechanism on BIOS).
+- Signed UKIs (no UEFI to load them).
+- TPM2 LUKS auto-unlock (depends on PCR measurements made by UEFI/sd-boot).
+- LUKS root encryption — the BIOS path refuses LUKS installs. GRUB's LUKS2 support is incomplete and `/boot` would need to be a separate unencrypted partition. Use UEFI for encrypted installs.
+
+Partition layout on BIOS:
+
+- Partition 1: 1 MiB BIOS-boot (GPT type `ef02`), holds GRUB stage 1.5, no filesystem.
+- Partition 2: root (btrfs/ext4/xfs).
+- Partition 3 (optional): scratch (reclaimed after install).
+
+`cache22-secureboot` is UEFI-only and refuses to run under BIOS with a clear message. `cache22-update`, `cache22-rebase`, the bootc-based upgrade machinery, etc. all work identically.
 
 ## Scratch modes
 

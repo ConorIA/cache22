@@ -2,11 +2,12 @@
 
 let
   installRuntimeDeps = with pkgs; [
-    bootc skopeo
+    bootc skopeo podman
     btrfs-progs cryptsetup
     parted gptfdisk dosfstools
     e2fsprogs xfsprogs
     sbctl efibootmgr efivar mokutil
+    lvm2 mdadm
     openssl jq python3
     util-linux iproute2 nettools
     curl gnutar xz gzip
@@ -43,6 +44,14 @@ let
 in {
   boot.kernelPackages = lib.mkForce pkgs.linuxPackages_latest;
   boot.supportedFilesystems = lib.mkForce [ "vfat" "ext4" "btrfs" "xfs" ];
+
+  # NixOS noninteractive doesn't ship a default policy.json; podman
+  # refuses to pull without one. Provide a permissive policy — image
+  # signing for cache22 happens at the bootc-install layer via the
+  # --target-no-signature-verification flag cache22-install passes.
+  environment.etc."containers/policy.json".text = ''
+    {"default":[{"type":"insecureAcceptAnything"}]}
+  '';
 
   environment.systemPackages = with pkgs; [
     cache22-install

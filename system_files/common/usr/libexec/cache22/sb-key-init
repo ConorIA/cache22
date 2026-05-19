@@ -25,8 +25,24 @@ install -d -m 0700 "$KEYDIR"
 
 # sbctl always reads/writes /var/lib/sbctl. Make that path resolve to
 # our per-machine root so the keys live alongside everything else
-# under /var/lib/cache22/.
-if [[ ! -e "$SBCTL_DIR" ]]; then
+# under /var/lib/cache22/. The sbctl package ships a tmpfiles entry
+# that creates /var/lib/sbctl as an empty directory (with empty
+# bundles.json + files.json) at deploy time; if we leave it alone,
+# sbctl writes keys to the real directory and they're invisible to
+# resign-uki. Replace the empty dir with our symlink. Refuse if
+# anyone has put real state in there.
+if [[ ! -L "$SBCTL_DIR" ]]; then
+    if [[ -d "$SBCTL_DIR" ]]; then
+        if [[ -z "$(find "$SBCTL_DIR" -mindepth 1 \
+                ! -name bundles.json ! -name files.json \
+                -print -quit)" ]]; then
+            rm -rf "$SBCTL_DIR"
+        else
+            echo "sb-key-init: $SBCTL_DIR has unexpected contents, refusing to wipe" >&2
+            ls -la "$SBCTL_DIR" >&2
+            exit 1
+        fi
+    fi
     ln -s cache22/sbkey "$SBCTL_DIR"
 fi
 

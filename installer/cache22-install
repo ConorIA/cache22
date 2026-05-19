@@ -682,7 +682,10 @@ needs_wizard() {
 # (openssl missing → empty password hash → passwordless account).
 # Refuse to start if anything's missing.
 require_tools() {
-    local need=(openssl podman bootc efibootmgr mkfs.fat mkfs.ext4 mkfs.btrfs btrfs sgdisk parted blkid mountpoint dmsetup pvs vgchange mdadm wipefs lsblk udevadm)
+    local need=(openssl podman bootc mkfs.ext4 mkfs.btrfs btrfs sgdisk parted blkid mountpoint dmsetup pvs vgchange mdadm wipefs lsblk udevadm)
+    if is_uefi; then
+        need+=(efibootmgr mkfs.fat)
+    fi
     local missing=()
     local t
     for t in "${need[@]}"; do
@@ -736,9 +739,26 @@ EOF
     fi
 }
 
+# UEFI vs legacy BIOS branch point. Used across partitioning, mkfs,
+# mount, fstab, and bootloader install. Cached at first call.
+is_uefi() {
+    [[ -d /sys/firmware/efi ]]
+}
+
 preflight() {
     [[ "$EUID" -eq 0 ]] || die "Must run as root."
-    [[ -d /sys/firmware/efi ]] || die "Not booted in UEFI mode (legacy BIOS not supported)."
+    if is_uefi; then
+        say "Firmware mode: UEFI (sd-boot + per-machine SB key + signed UKI)"
+    else
+        say "Firmware mode: legacy BIOS (GRUB on MBR, no Secure Boot, no UKI)"
+        # LUKS on BIOS would require an unencrypted /boot partition that
+        # GRUB can read, plus careful key-handoff to the initrd. Not yet
+        # implemented — fail clearly rather than silently produce an
+        # unbootable system.
+        if [[ "${CFG[luks]}" == "yes" ]]; then
+            die "BIOS install does not support LUKS encryption yet. Re-run on a UEFI system, or omit LUKS."
+        fi
+    fi
     require_tools
     require_x86_64_v3
     if ! ping -c 1 -W 3 ghcr.io >/dev/null 2>&1; then
@@ -962,7 +982,14 @@ partition_auto() {
     sleep 1
 
     sgdisk --zap-all "$DISK"
-    sgdisk --new="1:0:+${CFG[esp_size]}"  --typecode=1:ef00 --change-name=1:cache22-esp  "$DISK"
+    # Partition 1 is either:
+    #   UEFI: 2 GiB ESP (ef00, FAT32) holding sd-boot + per-deploy UKIs
+    #   BIOS: 1 MiB BIOS-boot partition (ef02, no fs) for GRUB stage 1.5
+    if is_uefi; then
+        sgdisk --new="1:0:+${CFG[esp_size]}" --typecode=1:ef00 --change-name=1:cache22-esp      "$DISK"
+    else
+        sgdisk --new="1:0:+1M"               --typecode=1:ef02 --change-name=1:cache22-biosboot "$DISK"
+    fi
     if [[ "${CFG[mode]}" == "auto-reserve" ]]; then
         local reserve_b reserve_mib end_offset_mib
         reserve_b=$(size_to_bytes "${CFG[reserve_size]}") \
@@ -1022,7 +1049,11 @@ partition_freespace() {
 
     # If GPT is missing, sgdisk creates one. If MBR, sgdisk converts.
     # Either way, do NOT --zap-all (would destroy existing partitions).
-    sgdisk --new="0:0:+${CFG[esp_size]}"  --typecode=0:ef00 --change-name=0:cache22-esp  "$DISK"
+    if is_uefi; then
+        sgdisk --new="0:0:+${CFG[esp_size]}" --typecode=0:ef00 --change-name=0:cache22-esp      "$DISK"
+    else
+        sgdisk --new="0:0:+1M"               --typecode=0:ef02 --change-name=0:cache22-biosboot "$DISK"
+    fi
     if (( using_tmpfs )); then
         sgdisk --largest-new=0 --typecode=0:8304 --change-name=0:cache22-root "$DISK"
     else
@@ -1041,14 +1072,20 @@ partition_freespace() {
     sleep 2
 
     # Resolve partition device paths by GPT name (numbers aren't predictable).
-    CFG[esp_part]=$(partlabel_to_dev cache22-esp)
+    # esp_part holds the ESP under UEFI, the BIOS-boot partition under BIOS.
+    # The semantics are: "the partition cache22 wants to own for boot bits".
+    if is_uefi; then
+        CFG[esp_part]=$(partlabel_to_dev cache22-esp)
+    else
+        CFG[esp_part]=$(partlabel_to_dev cache22-biosboot)
+    fi
     CFG[root_part]=$(partlabel_to_dev cache22-root)
     if (( using_tmpfs )); then
         CFG[scratch_part]="tmpfs"
     else
         CFG[scratch_part]=$(partlabel_to_dev cache22-scratch)
     fi
-    [[ -b "${CFG[esp_part]}"  ]] || die "ESP partition not created"
+    [[ -b "${CFG[esp_part]}"  ]] || die "ESP/BIOS-boot partition not created"
     [[ -b "${CFG[root_part]}" ]] || die "Root partition not created"
 }
 
@@ -1082,7 +1119,11 @@ setup_target() {
         ROOT_DEV="${CFG[root_part]}"
     fi
 
-    mkfs.fat -F32 -n EFI-SYSTEM "${CFG[esp_part]}" >/dev/null
+    # ESP is FAT32 only under UEFI. The BIOS-boot partition has no
+    # filesystem (GRUB writes raw stage 1.5 into it) so leave it alone.
+    if is_uefi; then
+        mkfs.fat -F32 -n EFI-SYSTEM "${CFG[esp_part]}" >/dev/null
+    fi
     case "${CFG[filesystem]}" in
         btrfs) mkfs.btrfs -L cache22-root -f "$ROOT_DEV" >/dev/null ;;
         xfs)   mkfs.xfs   -L cache22-root -f "$ROOT_DEV" >/dev/null ;;
@@ -1090,7 +1131,9 @@ setup_target() {
     esac
 
     ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV")
-    ESP_UUID=$(blkid -s UUID -o value "${CFG[esp_part]}")
+    if is_uefi; then
+        ESP_UUID=$(blkid -s UUID -o value "${CFG[esp_part]}")
+    fi
 
     # On btrfs, lay out the canonical bootc/Silverblue/Bazzite-style
     # subvolume split: `root` holds /sysroot/ostree/... (the bootc
@@ -1114,11 +1157,16 @@ setup_target() {
     # rshared so podman bind sees the submounts via setns.
     mount --make-rshared "$TARGET" || true
     # bootc install requires the rootfs to be empty or contain only
-    # mount points, so create only $TARGET/efi as the ESP mountpoint.
-    # /boot inside the deploy comes from the image's filesystem package.
-    mkdir -p "$TARGET/efi"
-    mount "${CFG[esp_part]}" "$TARGET/efi"
-    mount --make-rshared "$TARGET/efi" || true
+    # mount points. Under UEFI we mount the ESP at $TARGET/efi so the
+    # subsequent install_sb_and_uki can write UKIs + sd-boot there.
+    # Under BIOS, GRUB writes stage 1 to the MBR and stage 1.5 into the
+    # 1 MB BIOS-boot partition (no fs, no mount needed); the grub.cfg
+    # itself lives on / under /boot/grub/.
+    if is_uefi; then
+        mkdir -p "$TARGET/efi"
+        mount "${CFG[esp_part]}" "$TARGET/efi"
+        mount --make-rshared "$TARGET/efi" || true
+    fi
 }
 
 run_bootc_install() {
@@ -1203,18 +1251,27 @@ install_sb_and_uki() {
         umount    '$DEPLOY_ROOT/sysroot' 2>/dev/null || true
     " RETURN
 
-    chroot "$DEPLOY_ROOT" /usr/libexec/cache22/sb-key-init
+    # Force a sane PATH inside the chroot. The live env (Fedora ISO
+    # or NixOS kexec env) has its own PATH that doesn't include the
+    # deploy's /usr/bin etc., so bare-command lookups inside the
+    # chroot would fail with "No such file or directory" for sh,
+    # bootctl, sbctl, etc.
+    local CHROOT_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+    chroot "$DEPLOY_ROOT" /usr/bin/env PATH="$CHROOT_PATH" \
+        /usr/libexec/cache22/sb-key-init
 
     # sbctl --export auth writes to cwd; the chroot's / is the deploy
     # root which is chattr +i. Stage them at the well-known ESP path
     # /loader/keys/auto/ where sd-boot's secure-boot-enroll auto-
     # discovers them.
     install -d -m 0700 "$ESP/loader/keys/auto"
-    chroot "$DEPLOY_ROOT" sh -c \
+    chroot "$DEPLOY_ROOT" /usr/bin/env PATH="$CHROOT_PATH" sh -c \
         'cd /efi/loader/keys/auto && sbctl enroll-keys --microsoft --export auth' || \
         say "  WARN: sbctl enroll-keys --export auth failed; sd-boot auto-enroll won't work — user can run cache22-secureboot enable later"
 
-    chroot "$DEPLOY_ROOT" bootctl install --esp-path=/efi || \
+    chroot "$DEPLOY_ROOT" /usr/bin/env PATH="$CHROOT_PATH" \
+        bootctl install --esp-path=/efi || \
         die "bootctl install failed"
 
     install -d "$ESP/loader"
@@ -1226,8 +1283,113 @@ editor       no
 secure-boot-enroll force
 EOF
 
-    chroot "$DEPLOY_ROOT" /usr/libexec/cache22/resign-uki || \
+    chroot "$DEPLOY_ROOT" /usr/bin/env PATH="$CHROOT_PATH" \
+        /usr/libexec/cache22/resign-uki || \
         die "first UKI build failed"
+}
+
+# BIOS counterpart to install_sb_and_uki. No SB key, no UKI, no ESP.
+# GRUB writes stage 1 to the MBR, stage 1.5 to the 1 MiB BIOS-boot
+# partition, and we drop a static grub.cfg at /boot/grub/grub.cfg that
+# reads ostree's BLS entries dynamically via the blscfg directive. No
+# regen-on-deploy hook is needed: each bootc upgrade adds a new
+# /boot/loader/entries/ostree-*.conf and grub picks it up at next boot.
+install_grub_bios() {
+    say "Installing GRUB (BIOS) to ${CFG[disk]}"
+    local DEPLOY_ETC; DEPLOY_ETC=$(deploy_etc)
+    local DEPLOY_ROOT; DEPLOY_ROOT=$(dirname "$DEPLOY_ETC")
+
+    local DEPLOY_VAR
+    if [[ -d "$TARGET/ostree/deploy/default/var" ]]; then
+        DEPLOY_VAR="$TARGET/ostree/deploy/default/var"
+    elif [[ -d "$(dirname "$DEPLOY_ROOT")/var" ]]; then
+        DEPLOY_VAR="$(dirname "$DEPLOY_ROOT")/var"
+    else
+        die "Could not locate per-stateroot /var for chroot bind-mount"
+    fi
+
+    mount --bind  "$TARGET"     "$DEPLOY_ROOT/sysroot"
+    mount --bind  "$DEPLOY_VAR" "$DEPLOY_ROOT/var"
+    mount --bind  /dev          "$DEPLOY_ROOT/dev"
+    mount -t proc proc          "$DEPLOY_ROOT/proc"
+    mount --rbind /sys          "$DEPLOY_ROOT/sys"
+
+    trap "
+        umount -R '$DEPLOY_ROOT/sys'     2>/dev/null || true
+        umount    '$DEPLOY_ROOT/proc'    2>/dev/null || true
+        umount    '$DEPLOY_ROOT/dev'     2>/dev/null || true
+        umount    '$DEPLOY_ROOT/var'     2>/dev/null || true
+        umount    '$DEPLOY_ROOT/sysroot' 2>/dev/null || true
+    " RETURN
+
+    # Force a sane PATH inside the chroot. The live env's PATH does
+    # not pass through to commands chroot picks via execvp, so grub-
+    # install needs to either be invoked by absolute path or via env
+    # with an explicit PATH so its own shell-outs (probe scripts,
+    # etc.) can find their helpers.
+    local CHROOT_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    # --boot-directory points GRUB at the partition's /boot tree
+    # (accessible from inside the chroot via /sysroot/boot since we
+    # bind-mounted $TARGET at /sysroot above). GRUB writes /sysroot/boot
+    # /grub/{i386-pc,fonts,locale,...} there and embeds stage 1 in the
+    # MBR + stage 1.5 in the BIOS-boot partition.
+    chroot "$DEPLOY_ROOT" /usr/bin/env PATH="$CHROOT_PATH" \
+        grub-install \
+        --target=i386-pc \
+        --recheck \
+        --boot-directory=/sysroot/boot \
+        "${CFG[disk]}" \
+        || die "grub-install failed"
+
+    # bootc install --skip-finalize doesn't create /boot/loader as a
+    # symlink to the active loader.N dir, but grub's blscfg directive
+    # expects /boot/loader/entries/. Make it point at whichever
+    # loader.N dir actually has entries (ostree writes only one at
+    # first install; both at later upgrades).
+    if [[ ! -L "$TARGET/boot/loader" ]]; then
+        local active_loader
+        for d in "$TARGET/boot/loader.0" "$TARGET/boot/loader.1"; do
+            [[ -d "$d/entries" ]] && active_loader="$(basename "$d")" && break
+        done
+        if [[ -n "${active_loader:-}" ]]; then
+            ln -sfn "$active_loader" "$TARGET/boot/loader"
+            say "  /boot/loader → $active_loader"
+        else
+            say "  WARN: no loader.N dir found at $TARGET/boot/"
+        fi
+    fi
+
+    # Static grub.cfg using the blscfg directive. ostree writes one
+    # BLS entry per deploy under /boot/loader/entries/ostree-<n>.conf;
+    # blscfg picks the highest-N as default. cmdline, kernel path, and
+    # initrd path all come from the BLS entry — no regen needed when
+    # bootc deploys a new commit. The btrfs_subvol setting is harmless
+    # on ext4/xfs (variable assignment that nothing reads) and required
+    # on btrfs (where /boot lives inside the 'root' subvol cache22
+    # creates).
+    local GRUB_DIR="$TARGET/boot/grub"
+    install -d -m 0755 "$GRUB_DIR"
+    # Arch's GRUB ships the BLS implementation in /usr/lib/grub/i386-pc
+    # /blsuki.mod (handles both BLS entries and UKIs) — module-name
+    # differs from Fedora's blscfg.mod, but the GRUB *command* it
+    # registers is the same: `blscfg`. We load blsuki and then invoke
+    # blscfg to enumerate BLS entries from /boot/loader/entries/.
+    cat > "$GRUB_DIR/grub.cfg" <<EOF
+set timeout=3
+set default=0
+set fallback=1
+set btrfs_subvol=root
+insmod all_video
+insmod blsuki
+insmod btrfs
+insmod ext2
+insmod xfs
+insmod part_gpt
+insmod part_msdos
+search --no-floppy --fs-uuid --set=root ${ROOT_UUID}
+blscfg
+EOF
+    say "  wrote $GRUB_DIR/grub.cfg (blscfg via blsuki.mod → ostree /boot/loader/entries/)"
 }
 
 # Find the writable per-deploy /etc under either backend layout.
@@ -1260,8 +1422,13 @@ configure_deploy() {
         sed -i "s|^#\(${CFG[locale]} .*\)|\1|" "$DEPLOY_ETC/locale.gen"
     fi
 
-    if ! grep -q "UUID=$ESP_UUID"  "$DEPLOY_ETC/fstab" 2>/dev/null; then
-        echo "UUID=$ESP_UUID   /efi  vfat  umask=0077,shortname=winnt  0 2" >> "$DEPLOY_ETC/fstab"
+    # Only UEFI installs mount an ESP. BIOS installs have a 1 MiB
+    # BIOS-boot partition with no filesystem (raw GRUB stage 1.5),
+    # nothing to mount.
+    if is_uefi; then
+        if ! grep -q "UUID=$ESP_UUID"  "$DEPLOY_ETC/fstab" 2>/dev/null; then
+            echo "UUID=$ESP_UUID   /efi  vfat  umask=0077,shortname=winnt  0 2" >> "$DEPLOY_ETC/fstab"
+        fi
     fi
     # btrfs: /var/home lives in its own subvol so the repair tool can
     # wipe everything else without touching user data. / is handled by
@@ -1636,7 +1803,11 @@ main() {
     setup_target
     run_bootc_install
     configure_deploy
-    install_sb_and_uki
+    if is_uefi; then
+        install_sb_and_uki
+    else
+        install_grub_bios
+    fi
     reclaim_scratch
 
     cat <<DONE

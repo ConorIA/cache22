@@ -15,6 +15,18 @@
 
 set -euo pipefail
 
+# UEFI-only. On a BIOS install there is no Secure Boot mechanism in the
+# firmware to interact with, no ESP for sd-boot, and no UKI to re-sign.
+if [[ ! -d /sys/firmware/efi ]]; then
+    cat >&2 <<'EOF'
+cache22-secureboot is a UEFI-only command. This system was booted in
+legacy BIOS mode (no /sys/firmware/efi). Secure Boot, the per-machine
+SB key, sd-boot auto-enrollment, and UKI signing are all UEFI-specific
+features that have no analog under BIOS.
+EOF
+    exit 1
+fi
+
 KEYDIR=/var/lib/cache22/sbkey
 SBCRT="$KEYDIR/keys/db/db.pem"
 ESP=/efi
