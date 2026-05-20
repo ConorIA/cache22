@@ -114,10 +114,12 @@ mount -o remount,bind,ro "$NEXTROOT/usr"
 #    The new userspace's ostree commands need this to find deploys.
 mount --bind /sysroot "$NEXTROOT/sysroot"
 
-# 5. /boot — only when ostree manages it (loader symlink present). On
-#    cache22 /boot lives on the same partition as /sysroot.
-if [[ -L /sysroot/boot/loader ]] && [[ -d "$NEXTROOT/boot" ]]; then
-    mount --bind /sysroot/boot "$NEXTROOT/boot"
+# 5. /boot — only when ostree manages it (loader symlink present).
+#    Bind from the running /boot mount, which works both for UEFI
+#    (where /boot is a subdirectory of /sysroot) and for BIOS (where
+#    /boot is its own ext4 partition mounted at /boot via fstab).
+if [[ -L /boot/loader ]] && [[ -d "$NEXTROOT/boot" ]]; then
+    mount --bind /boot "$NEXTROOT/boot"
 fi
 
 # 6. /efi — ESP. cache22 mounts ESP at /efi; needed by resign-uki and

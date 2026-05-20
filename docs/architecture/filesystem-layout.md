@@ -19,8 +19,8 @@ After boot, the visible mounts include:
 | `/etc` | Bind-on-self of `<deploy>/etc` (read-write). | Per-machine configuration. |
 | `/var` | Per-stateroot `/sysroot/ostree/deploy/<state>/var` (read-write). | Persistent runtime state. |
 | `/home` | btrfs subvolume `/home` (read-write). | User home directories. |
-| `/boot` | Same partition as `/` but mounted separately. | BLS entries and kernel/initramfs files. |
-| `/efi` | The ESP (FAT32). | sd-boot, UKIs, EFI variables. |
+| `/boot` | UEFI: same partition as `/`, mounted separately. BIOS: dedicated `cache22-boot` ext4 partition. | BLS entries and kernel/initramfs files (GRUB modules + `grub.cfg` on BIOS). |
+| `/efi` | The ESP (FAT32). UEFI only. | sd-boot, UKIs, EFI variables. |
 
 The root mount is read-only by design. Writes to `/usr` are blocked unless `bootc usroverlay` is active (see [usroverlay](../../customization/usroverlay/)).
 

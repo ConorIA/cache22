@@ -85,7 +85,7 @@ The installer walks through the following prompts:
 
 After confirming the choices, the installer:
 
-1. Partitions the disk (ESP at `/efi`, root, and a temporary scratch partition or RAM-backed scratch).
+1. Partitions the disk. UEFI: ESP at `/efi`, root, optional scratch. BIOS: 1 MiB BIOS-boot, `/boot` ext4, root, optional scratch.
 2. Pulls the OCI image from `ghcr.io` (~8 GB compressed, depending on variant).
 3. Lays down the deployment with `bootc install to-filesystem --bootloader=none`.
 4. Generates the per-machine Secure Boot key with `sbctl create-keys`.
@@ -112,20 +112,21 @@ Remove the USB drive when prompted by the firmware.
 cache22 supports legacy BIOS systems in addition to UEFI. The installer auto-detects firmware mode at runtime via `/sys/firmware/efi`:
 
 - **UEFI present:** sd-boot installed to the ESP, per-machine Secure Boot key generated, every kernel deploy assembled as a signed UKI. Standard cache22 flow.
-- **No UEFI (legacy BIOS):** GRUB installed to the disk's MBR + 1 MiB BIOS-boot partition. A static `grub.cfg` is written to `/boot/grub/` that reads ostree's BLS entries via the `blscfg` directive, so future bootc upgrades boot automatically without grub.cfg regen.
+- **No UEFI (legacy BIOS):** GRUB installed to the disk's MBR + 1 MiB BIOS-boot partition. A dedicated ext4 `/boot` partition holds GRUB, kernels, and the BLS entries. A static `grub.cfg` on `/boot` reads ostree's BLS entries via the `blscfg` directive, so future bootc upgrades boot automatically without grub.cfg regen.
 
 The BIOS path gives you cache22's atomic bootc rolling-image story and every userland feature. What it does not give you:
 
 - Secure Boot (no firmware mechanism on BIOS).
 - Signed UKIs (no UEFI to load them).
 - TPM2 LUKS auto-unlock (depends on PCR measurements made by UEFI/sd-boot).
-- LUKS root encryption — the BIOS path refuses LUKS installs. GRUB's LUKS2 support is incomplete and `/boot` would need to be a separate unencrypted partition. Use UEFI for encrypted installs.
+- LUKS root encryption — the BIOS path refuses LUKS installs today. The dedicated `/boot` partition makes a passphrase-based GRUB+LUKS layout possible in principle, but the installer does not yet wire it up. Use UEFI for encrypted installs.
 
 Partition layout on BIOS:
 
 - Partition 1: 1 MiB BIOS-boot (GPT type `ef02`), holds GRUB stage 1.5, no filesystem.
-- Partition 2: root (btrfs/ext4/xfs).
-- Partition 3 (optional): scratch (reclaimed after install).
+- Partition 2: `/boot` (ext4, default 2 GiB, GPT name `cache22-boot`). Holds GRUB modules, `grub.cfg`, kernels, initramfses, and the BLS entries. Sized to match the UEFI ESP so multiple deployments' boot artifacts always fit.
+- Partition 3: root (btrfs/ext4/xfs).
+- Partition 4 (optional): scratch (reclaimed after install).
 
 `cache22-secureboot` is UEFI-only and refuses to run under BIOS with a clear message. `cache22-update`, `cache22-rebase`, the bootc-based upgrade machinery, etc. all work identically.
 

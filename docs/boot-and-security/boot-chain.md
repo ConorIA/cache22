@@ -25,12 +25,16 @@ firmware (UEFI)
 ```
 firmware (BIOS)
   -> MBR boot code (GRUB stage 1)
-    -> /boot/grub/i386-pc/* (GRUB stage 2, from BIOS-boot partition)
-      -> /boot/grub/grub.cfg → blscfg reads /boot/loader/entries/
-        -> kernel + initramfs + cmdline (from ostree BLS entry)
-          -> ostree-prepare-root sets up /sysroot
-            -> systemd in real root
+    -> BIOS-boot partition (GPT type ef02): GRUB stage 1.5
+      -> dedicated /boot ext4 partition (cache22-boot)
+        -> /grub/grub.cfg sets $root to the /boot partition UUID
+        -> blscfg reads /loader/entries/
+          -> kernel + initramfs + cmdline (from ostree BLS entry)
+            -> ostree-prepare-root sets up /sysroot
+              -> systemd in real root
 ```
+
+`/boot` lives on its own ext4 partition so GRUB never has to traverse btrfs subvolumes (or any filesystem-specific quirks) to find `grub.cfg` and the BLS entries. The 1 MiB BIOS-boot partition holds raw GRUB stage 1.5 only; everything else (modules, `grub.cfg`, kernels, initramfses, BLS entries) lives on the `/boot` partition.
 
 There is no signature verification on BIOS (no firmware Secure Boot mechanism), no UKI (no UEFI to load the PE-format binary), and no TPM2 LUKS unlock (depends on PCR measurements made by sd-stub during the UEFI chain). The rest of this page describes the UEFI chain only.
 

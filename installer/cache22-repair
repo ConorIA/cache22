@@ -26,6 +26,7 @@ LOG=/var/log/cache22-repair.log
 declare -A CFG=(
     [disk]=""
     [esp_part]=""
+    [boot_part]=""
     [root_part]=""
     [scratch_part]=""
     [luks]="no"
@@ -136,12 +137,22 @@ detect_install() {
         local lbl
         lbl=$(blkid -s LABEL -o value "$p" 2>/dev/null || echo "")
         case "$lbl" in
-            EFI-SYSTEM)      CFG[esp_part]="$p" ;;
-            cache22-scratch) CFG[scratch_part]="$p" ;;
+            EFI-SYSTEM)        CFG[esp_part]="$p"     ;;
+            cache22-biosboot)  CFG[esp_part]="$p"     ;;
+            cache22-boot)      CFG[boot_part]="$p"    ;;
+            cache22-scratch)   CFG[scratch_part]="$p" ;;
         esac
     done
 
-    [[ -n "${CFG[esp_part]}"  ]] || die "ESP partition (label EFI-SYSTEM) not found on ${CFG[disk]}"
+    # ESP partition is "EFI-SYSTEM" under UEFI and "cache22-biosboot"
+    # under BIOS; either has to be present. BIOS additionally needs
+    # the dedicated /boot ext4 partition.
+    [[ -n "${CFG[esp_part]}"  ]] || die "ESP / BIOS-boot partition not found on ${CFG[disk]}"
+    FW_MODE="uefi"
+    if [[ "$(blkid -s LABEL -o value "${CFG[esp_part]}" 2>/dev/null)" == "cache22-biosboot" ]]; then
+        FW_MODE="bios"
+        [[ -n "${CFG[boot_part]}" ]] || die "BIOS install detected but cache22-boot partition not found on ${CFG[disk]}"
+    fi
 
     # Detect the inner filesystem (after LUKS unlock if applicable).
     FS_KIND=$(blkid -s TYPE -o value "$ROOT_DEV" 2>/dev/null || echo "")
@@ -172,7 +183,13 @@ detect_install() {
     fi
 
     say "  Disk:      ${CFG[disk]}"
-    say "  ESP:       ${CFG[esp_part]}"
+    say "  Firmware:  $FW_MODE"
+    if [[ "$FW_MODE" == "uefi" ]]; then
+        say "  ESP:       ${CFG[esp_part]}"
+    else
+        say "  BIOS-boot: ${CFG[esp_part]}"
+        say "  /boot:     ${CFG[boot_part]}"
+    fi
     say "  Root:      ${CFG[root_part]}  ($([[ "${CFG[luks]}" == "yes" ]] && echo "LUKS-encrypted, " || echo "")$FS_KIND$([[ "$HAS_SUBVOLS" -eq 1 ]] && echo " + root/home subvols"))"
     say "  Scratch:   ${CFG[scratch_part]:-<none, will use tmpfs>}"
 }
@@ -278,8 +295,13 @@ wipe_image_content() {
     umount "$probe"
     rmdir "$probe"
 
-    say "  Wiping ESP"
-    mkfs.fat -F32 -n EFI-SYSTEM "${CFG[esp_part]}" >/dev/null
+    if [[ "$FW_MODE" == "uefi" ]]; then
+        say "  Wiping ESP"
+        mkfs.fat -F32 -n EFI-SYSTEM "${CFG[esp_part]}" >/dev/null
+    else
+        say "  Wiping /boot partition"
+        mkfs.ext4 -F -q -L cache22-boot "${CFG[boot_part]}"
+    fi
 }
 
 # ─── Mount fresh + re-run bootc install ────────────────────────────────
@@ -294,9 +316,15 @@ setup_mounts() {
         mount "$ROOT_DEV" "$TARGET"
     fi
     mount --make-rshared "$TARGET" || true
-    mkdir -p "$TARGET/efi"
-    mount "${CFG[esp_part]}" "$TARGET/efi"
-    mount --make-rshared "$TARGET/efi" || true
+    if [[ "$FW_MODE" == "uefi" ]]; then
+        mkdir -p "$TARGET/efi"
+        mount "${CFG[esp_part]}" "$TARGET/efi"
+        mount --make-rshared "$TARGET/efi" || true
+    else
+        mkdir -p "$TARGET/boot"
+        mount "${CFG[boot_part]}" "$TARGET/boot"
+        mount --make-rshared "$TARGET/boot" || true
+    fi
 }
 
 setup_scratch() {
@@ -322,6 +350,23 @@ run_bootc() {
     local ROOT_UUID
     ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV")
 
+    # Match cache22-install: bake per-machine kargs into the BLS entry
+    # on BIOS (no UKI to inject them via). UEFI gets them via
+    # resign-uki + extra-cmdline as before.
+    local KARGS=()
+    if [[ "$FW_MODE" == "bios" ]]; then
+        if [[ "$FS_KIND" == "btrfs" && "$HAS_SUBVOLS" -eq 1 ]]; then
+            KARGS+=(--karg "rootflags=subvol=root,$BTRFS_OPTS")
+        fi
+        if [[ "${CFG[luks]}" == "yes" ]]; then
+            local LUKS_PART_UUID
+            LUKS_PART_UUID=$(blkid -s UUID -o value "${CFG[root_part]}")
+            KARGS+=(--karg "rd.luks.uuid=$LUKS_PART_UUID")
+            KARGS+=(--karg "rd.luks.name=$LUKS_PART_UUID=cache22-root")
+            KARGS+=(--karg "rd.luks.options=$LUKS_PART_UUID=discard,tpm2-device=auto")
+        fi
+    fi
+
     podman run --rm --privileged --pid=host \
         --mount "type=bind,src=$TARGET,dst=/target,bind-propagation=rshared" \
         -v /dev:/dev \
@@ -336,6 +381,7 @@ run_bootc() {
             --stateroot default \
             --bootloader=none \
             --root-mount-spec="UUID=$ROOT_UUID" \
+            "${KARGS[@]}" \
             --skip-finalize \
             /target \
         || die "bootc install failed"
@@ -364,13 +410,20 @@ restore_etc_state() {
     say "  Overlaying $ETC_SNAPSHOT onto $DEPLOY_ETC (full /etc preserved)"
     cp -a "$ETC_SNAPSHOT"/. "$DEPLOY_ETC/"
 
-    local ROOT_UUID ESP_UUID
+    local ROOT_UUID
     ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV")
-    ESP_UUID=$(blkid -s UUID -o value "${CFG[esp_part]}")
 
     say "  Regenerating /etc/fstab from current install state"
     {
-        echo "UUID=$ESP_UUID   /efi  vfat  umask=0077,shortname=winnt  0 2"
+        if [[ "$FW_MODE" == "uefi" ]]; then
+            local ESP_UUID
+            ESP_UUID=$(blkid -s UUID -o value "${CFG[esp_part]}")
+            echo "UUID=$ESP_UUID   /efi  vfat  umask=0077,shortname=winnt  0 2"
+        else
+            local BOOT_UUID
+            BOOT_UUID=$(blkid -s UUID -o value "${CFG[boot_part]}")
+            echo "UUID=$BOOT_UUID  /boot  ext4  defaults  0 2"
+        fi
         if [[ "$FS_KIND" == "btrfs" && "$HAS_SUBVOLS" -eq 1 ]]; then
             echo "UUID=$ROOT_UUID  /var/home  btrfs  subvol=home,$BTRFS_OPTS  0 0"
         fi
@@ -469,6 +522,78 @@ EOF
         die "first UKI build failed"
 }
 
+# BIOS counterpart to install_sb_and_uki. Mirrors the install_grub_bios
+# in cache22-install: chroot the deploy, run grub-install against the
+# disk, write a static grub.cfg on the /boot partition that lets blscfg
+# enumerate ostree's BLS entries.
+install_grub_bios() {
+    banner "Reinstalling GRUB (BIOS)"
+    local DEPLOY_ETC; DEPLOY_ETC=$(deploy_etc)
+    local DEPLOY_ROOT; DEPLOY_ROOT=$(dirname "$DEPLOY_ETC")
+
+    local DEPLOY_VAR
+    if [[ -d "$TARGET/ostree/deploy/default/var" ]]; then
+        DEPLOY_VAR="$TARGET/ostree/deploy/default/var"
+    elif [[ -d "$(dirname "$DEPLOY_ROOT")/var" ]]; then
+        DEPLOY_VAR="$(dirname "$DEPLOY_ROOT")/var"
+    else
+        die "Could not locate per-stateroot /var for chroot bind-mount"
+    fi
+
+    # --rbind so the /boot partition mounted at $TARGET/boot carries
+    # into the chroot. See cache22-install install_grub_bios for why.
+    mount --rbind "$TARGET"     "$DEPLOY_ROOT/sysroot"
+    mount --bind  "$DEPLOY_VAR" "$DEPLOY_ROOT/var"
+    mount --bind  /dev          "$DEPLOY_ROOT/dev"
+    mount -t proc proc          "$DEPLOY_ROOT/proc"
+    mount --rbind /sys          "$DEPLOY_ROOT/sys"
+
+    trap "
+        umount -R '$DEPLOY_ROOT/sys'     2>/dev/null || true
+        umount    '$DEPLOY_ROOT/proc'    2>/dev/null || true
+        umount    '$DEPLOY_ROOT/dev'     2>/dev/null || true
+        umount    '$DEPLOY_ROOT/var'     2>/dev/null || true
+        umount -R '$DEPLOY_ROOT/sysroot' 2>/dev/null || true
+    " RETURN
+
+    local CHROOT_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    chroot "$DEPLOY_ROOT" /usr/bin/env PATH="$CHROOT_PATH" \
+        grub-install \
+        --target=i386-pc \
+        --recheck \
+        --boot-directory=/sysroot/boot \
+        "${CFG[disk]}" \
+        || die "grub-install failed"
+
+    if [[ ! -L "$TARGET/boot/loader" ]]; then
+        local active_loader d
+        for d in "$TARGET/boot/loader.0" "$TARGET/boot/loader.1"; do
+            [[ -d "$d/entries" ]] && active_loader="$(basename "$d")" && break
+        done
+        if [[ -n "${active_loader:-}" ]]; then
+            ln -sfn "$active_loader" "$TARGET/boot/loader"
+        fi
+    fi
+
+    local BOOT_UUID
+    BOOT_UUID=$(blkid -s UUID -o value "${CFG[boot_part]}")
+    local GRUB_DIR="$TARGET/boot/grub"
+    install -d -m 0755 "$GRUB_DIR"
+    cat > "$GRUB_DIR/grub.cfg" <<EOF
+set timeout=3
+set default=0
+set fallback=1
+insmod all_video
+insmod blsuki
+insmod ext2
+insmod part_gpt
+insmod part_msdos
+search --no-floppy --fs-uuid --set=root ${BOOT_UUID}
+blscfg
+EOF
+    say "  wrote $GRUB_DIR/grub.cfg (blscfg → /loader/entries/ on /boot)"
+}
+
 cleanup_mounts() {
     umount -R "$TARGET" 2>/dev/null || true
     umount /var/lib/containers 2>/dev/null || true
@@ -531,12 +656,18 @@ main() {
     say ""
     say "Plan:"
     say "  WIPE (image content):"
-    say "    ${CFG[esp_part]}  (ESP — sd-boot + UKIs)"
+    if [[ "$FW_MODE" == "uefi" ]]; then
+        say "    ${CFG[esp_part]}  (ESP — sd-boot + UKIs)"
+    else
+        say "    ${CFG[boot_part]}  (/boot — GRUB + kernels + BLS entries)"
+    fi
     say "    /sysroot/ostree/repo + per-deploy commits on ${CFG[root_part]}"
     say "  KEEP (user state):"
     say "    /sysroot/ostree/deploy/<sr>/var (→ /home, /var/*, /root, /usr/local)"
     say "    full /etc (user accounts, hostname, NM, SSH host keys, …)"
-    say "    /var/lib/cache22/sbkey (per-machine SB key)"
+    if [[ "$FW_MODE" == "uefi" ]]; then
+        say "    /var/lib/cache22/sbkey (per-machine SB key)"
+    fi
     say "    NOTE: /etc/fstab + /etc/crypttab + extra-cmdline regenerated"
     say "  REDEPLOY: ${CFG[image]}"
     say ""
@@ -549,7 +680,11 @@ main() {
     setup_scratch
     run_bootc
     restore_etc_state
-    install_sb_and_uki
+    if [[ "$FW_MODE" == "uefi" ]]; then
+        install_sb_and_uki
+    else
+        install_grub_bios
+    fi
 
     banner "Repair complete"
     say "Reboot to enter the new deployment."

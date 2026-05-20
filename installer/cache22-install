@@ -11,6 +11,7 @@ DEFAULT_TZ="Asia/Tokyo"
 DEFAULT_LOCALE="en_US.UTF-8"
 # ESP holds sd-boot + per-deploy UKIs (one ~150 MiB UKI per kept deploy).
 DEFAULT_ESP_SIZE="2G"
+DEFAULT_BOOT_SIZE="2G"
 DEFAULT_SCRATCH_SIZE="30G"
 TARGET=/var/mnt/target
 LOG=/var/log/cache22-install.log
@@ -43,10 +44,12 @@ declare -A CFG=(
     [mode]=""
     [disk]=""
     [esp_part]=""
+    [boot_part]=""
     [root_part]=""
     [scratch_part]=""
     [filesystem]="$DEFAULT_FS"
     [esp_size]="$DEFAULT_ESP_SIZE"
+    [boot_size]="$DEFAULT_BOOT_SIZE"
     [scratch_size]="$DEFAULT_SCRATCH_SIZE"
     [reserve_size]=""
     [luks]="no"
@@ -196,7 +199,8 @@ Common flags:
                        compress=zstd:1, noatime, space_cache=v2,
                        discard=async; /var/home preserved across
                        cache22-repair. xfs/ext4 are single-volume.
-  --esp-size SIZE      ESP size in auto mode (default: $DEFAULT_ESP_SIZE)
+  --esp-size SIZE      ESP size in auto mode (UEFI; default: $DEFAULT_ESP_SIZE)
+  --boot-size SIZE     /boot size in auto mode (BIOS; default: $DEFAULT_BOOT_SIZE)
   --scratch-size SIZE  scratch size in auto mode (default: $DEFAULT_SCRATCH_SIZE)
   --reserve-size SIZE  free space to leave at end of disk (auto-reserve;
                        e.g. 100G, 200GiB)
@@ -637,6 +641,7 @@ parse_args() {
                 shift 2 ;;
             --filesystem)   CFG[filesystem]="$2"; shift 2 ;;
             --esp-size)     CFG[esp_size]="$2"; shift 2 ;;
+            --boot-size)    CFG[boot_size]="$2"; shift 2 ;;
             --scratch-size) CFG[scratch_size]="$2"; shift 2 ;;
             --reserve-size) CFG[reserve_size]="$2"; CFG[mode]="${CFG[mode]:-auto-reserve}"; shift 2 ;;
             --luks)         CFG[luks]="yes"; shift ;;
@@ -751,10 +756,11 @@ preflight() {
         say "Firmware mode: UEFI (sd-boot + per-machine SB key + signed UKI)"
     else
         say "Firmware mode: legacy BIOS (GRUB on MBR, no Secure Boot, no UKI)"
-        # LUKS on BIOS would require an unencrypted /boot partition that
-        # GRUB can read, plus careful key-handoff to the initrd. Not yet
-        # implemented — fail clearly rather than silently produce an
-        # unbootable system.
+        # BIOS gets a dedicated unencrypted /boot ext4 partition, which
+        # makes a passphrase-based GRUB+LUKS root layout architecturally
+        # possible. Wiring that up (GRUB cryptodisk module, initrd
+        # key-handoff via clevis or askpass) is not yet implemented —
+        # fail clearly rather than silently produce an unbootable system.
         if [[ "${CFG[luks]}" == "yes" ]]; then
             die "BIOS install does not support LUKS encryption yet. Re-run on a UEFI system, or omit LUKS."
         fi
@@ -955,14 +961,29 @@ partition_auto() {
         /dev/nvme*|/dev/mmcblk*|/dev/loop*) PSEP="p" ;;
         *)                                  PSEP=""  ;;
     esac
+    # Layout
+    #   UEFI: p1=ESP (FAT32),                p2=root,           [p3=scratch]
+    #   BIOS: p1=BIOS-boot (ef02, no fs),    p2=/boot (ext4),   p3=root, [p4=scratch]
+    # BIOS gets its own /boot partition so GRUB doesn't have to traverse
+    # btrfs subvolumes (or any FS-specific quirks) to find grub.cfg + BLS
+    # entries. /boot on ext4 also makes LUKS-on-root with a non-encrypted
+    # /boot feasible later.
+    local ROOT_PN SCRATCH_PN
     CFG[esp_part]="${DISK}${PSEP}1"
-    CFG[root_part]="${DISK}${PSEP}2"
+    if is_uefi; then
+        CFG[root_part]="${DISK}${PSEP}2"
+        ROOT_PN=2; SCRATCH_PN=3
+    else
+        CFG[boot_part]="${DISK}${PSEP}2"
+        CFG[root_part]="${DISK}${PSEP}3"
+        ROOT_PN=3; SCRATCH_PN=4
+    fi
 
     local using_tmpfs=0
     if [[ "${CFG[scratch_part]}" == "tmpfs" ]]; then
         using_tmpfs=1
     else
-        CFG[scratch_part]="${DISK}${PSEP}3"
+        CFG[scratch_part]="${DISK}${PSEP}${SCRATCH_PN}"
     fi
 
     umount -R "$TARGET" 2>/dev/null || true
@@ -982,13 +1003,11 @@ partition_auto() {
     sleep 1
 
     sgdisk --zap-all "$DISK"
-    # Partition 1 is either:
-    #   UEFI: 2 GiB ESP (ef00, FAT32) holding sd-boot + per-deploy UKIs
-    #   BIOS: 1 MiB BIOS-boot partition (ef02, no fs) for GRUB stage 1.5
     if is_uefi; then
         sgdisk --new="1:0:+${CFG[esp_size]}" --typecode=1:ef00 --change-name=1:cache22-esp      "$DISK"
     else
-        sgdisk --new="1:0:+1M"               --typecode=1:ef02 --change-name=1:cache22-biosboot "$DISK"
+        sgdisk --new="1:0:+1M"                --typecode=1:ef02 --change-name=1:cache22-biosboot "$DISK"
+        sgdisk --new="2:0:+${CFG[boot_size]}" --typecode=2:8300 --change-name=2:cache22-boot     "$DISK"
     fi
     if [[ "${CFG[mode]}" == "auto-reserve" ]]; then
         local reserve_b reserve_mib end_offset_mib
@@ -996,20 +1015,20 @@ partition_auto() {
             || die "Bad reserve size: ${CFG[reserve_size]}"
         reserve_mib=$(( reserve_b / 1024 / 1024 ))
         if (( using_tmpfs )); then
-            sgdisk --new="2:0:-${reserve_mib}M" --typecode=2:8304 --change-name=2:cache22-root "$DISK"
+            sgdisk --new="${ROOT_PN}:0:-${reserve_mib}M" --typecode=${ROOT_PN}:8304 --change-name=${ROOT_PN}:cache22-root "$DISK"
         else
             local scratch_b scratch_mib
             scratch_b=$(size_to_bytes "${CFG[scratch_size]}")
             scratch_mib=$(( scratch_b / 1024 / 1024 ))
             end_offset_mib=$(( reserve_mib + scratch_mib ))
-            sgdisk --new="2:0:-${end_offset_mib}M" --typecode=2:8304 --change-name=2:cache22-root "$DISK"
-            sgdisk --new="3:0:+${scratch_mib}M"    --typecode=3:8300 --change-name=3:cache22-scratch "$DISK"
+            sgdisk --new="${ROOT_PN}:0:-${end_offset_mib}M" --typecode=${ROOT_PN}:8304    --change-name=${ROOT_PN}:cache22-root    "$DISK"
+            sgdisk --new="${SCRATCH_PN}:0:+${scratch_mib}M" --typecode=${SCRATCH_PN}:8300 --change-name=${SCRATCH_PN}:cache22-scratch "$DISK"
         fi
     elif (( using_tmpfs )); then
-        sgdisk --new="2:0:0"                      --typecode=2:8304 --change-name=2:cache22-root    "$DISK"
+        sgdisk --new="${ROOT_PN}:0:0"                       --typecode=${ROOT_PN}:8304    --change-name=${ROOT_PN}:cache22-root    "$DISK"
     else
-        sgdisk --new="2:0:-${CFG[scratch_size]}"  --typecode=2:8304 --change-name=2:cache22-root    "$DISK"
-        sgdisk --new="3:0:0"                      --typecode=3:8300 --change-name=3:cache22-scratch "$DISK"
+        sgdisk --new="${ROOT_PN}:0:-${CFG[scratch_size]}"   --typecode=${ROOT_PN}:8304    --change-name=${ROOT_PN}:cache22-root    "$DISK"
+        sgdisk --new="${SCRATCH_PN}:0:0"                    --typecode=${SCRATCH_PN}:8300 --change-name=${SCRATCH_PN}:cache22-scratch "$DISK"
     fi
     partprobe "$DISK" || true
     udevadm settle || true
@@ -1029,8 +1048,15 @@ partition_freespace() {
     local largest_b
     largest_b=$(parted -s "$DISK" unit B print free 2>/dev/null \
         | awk '/Free Space/{gsub(/B/,"",$3); if ($3+0 > max){max=$3+0}} END{print max+0}')
+    local fixed_b
+    if is_uefi; then
+        fixed_b=$(size_to_bytes "${CFG[esp_size]}")
+    else
+        # 1 MiB BIOS-boot + the chosen /boot size
+        fixed_b=$(( 1024 * 1024 + $(size_to_bytes "${CFG[boot_size]}") ))
+    fi
     local needed_b
-    needed_b=$(( $(size_to_bytes "${CFG[esp_size]}") \
+    needed_b=$(( fixed_b \
               + $(size_to_bytes "${CFG[scratch_size]}") \
               + 4 * 1024 * 1024 * 1024 ))   # min 4G headroom for root
     if (( largest_b < needed_b )); then
@@ -1050,17 +1076,22 @@ partition_freespace() {
     # If GPT is missing, sgdisk creates one. If MBR, sgdisk converts.
     # Either way, do NOT --zap-all (would destroy existing partitions).
     if is_uefi; then
-        sgdisk --new="0:0:+${CFG[esp_size]}" --typecode=0:ef00 --change-name=0:cache22-esp      "$DISK"
+        sgdisk --new="0:0:+${CFG[esp_size]}"  --typecode=0:ef00 --change-name=0:cache22-esp      "$DISK"
     else
-        sgdisk --new="0:0:+1M"               --typecode=0:ef02 --change-name=0:cache22-biosboot "$DISK"
+        sgdisk --new="0:0:+1M"                --typecode=0:ef02 --change-name=0:cache22-biosboot "$DISK"
+        sgdisk --new="0:0:+${CFG[boot_size]}" --typecode=0:8300 --change-name=0:cache22-boot     "$DISK"
     fi
     if (( using_tmpfs )); then
         sgdisk --largest-new=0 --typecode=0:8304 --change-name=0:cache22-root "$DISK"
     else
-        local esp_b scratch_b root_b root_mib scratch_mib
-        esp_b=$(size_to_bytes "${CFG[esp_size]}")
+        local fixed_b scratch_b root_b root_mib scratch_mib
+        if is_uefi; then
+            fixed_b=$(size_to_bytes "${CFG[esp_size]}")
+        else
+            fixed_b=$(( 1024 * 1024 + $(size_to_bytes "${CFG[boot_size]}") ))
+        fi
         scratch_b=$(size_to_bytes "${CFG[scratch_size]}")
-        root_b=$(( largest_b - esp_b - scratch_b ))
+        root_b=$(( largest_b - fixed_b - scratch_b ))
         (( root_b > 4 * 1024**3 )) || die "Computed root size too small: $((root_b/1024/1024/1024)) GiB"
         root_mib=$(( root_b / 1024 / 1024 ))
         scratch_mib=$(( scratch_b / 1024 / 1024 ))
@@ -1073,11 +1104,12 @@ partition_freespace() {
 
     # Resolve partition device paths by GPT name (numbers aren't predictable).
     # esp_part holds the ESP under UEFI, the BIOS-boot partition under BIOS.
-    # The semantics are: "the partition cache22 wants to own for boot bits".
+    # boot_part holds the dedicated /boot partition (BIOS only).
     if is_uefi; then
         CFG[esp_part]=$(partlabel_to_dev cache22-esp)
     else
         CFG[esp_part]=$(partlabel_to_dev cache22-biosboot)
+        CFG[boot_part]=$(partlabel_to_dev cache22-boot)
     fi
     CFG[root_part]=$(partlabel_to_dev cache22-root)
     if (( using_tmpfs )); then
@@ -1086,11 +1118,17 @@ partition_freespace() {
         CFG[scratch_part]=$(partlabel_to_dev cache22-scratch)
     fi
     [[ -b "${CFG[esp_part]}"  ]] || die "ESP/BIOS-boot partition not created"
+    if ! is_uefi; then
+        [[ -b "${CFG[boot_part]}" ]] || die "BIOS /boot partition not created"
+    fi
     [[ -b "${CFG[root_part]}" ]] || die "Root partition not created"
 }
 
 partition_custom_check() {
     [[ -b "${CFG[esp_part]}"  ]] || die "ESP partition ${CFG[esp_part]} not found"
+    if ! is_uefi; then
+        [[ -b "${CFG[boot_part]}" ]] || die "BIOS /boot partition ${CFG[boot_part]} not found"
+    fi
     [[ -b "${CFG[root_part]}" ]] || die "Root partition ${CFG[root_part]} not found"
     [[ "${CFG[scratch_part]}" == "tmpfs" || -b "${CFG[scratch_part]}" ]] || die "Scratch ${CFG[scratch_part]} not found"
 }
@@ -1121,8 +1159,13 @@ setup_target() {
 
     # ESP is FAT32 only under UEFI. The BIOS-boot partition has no
     # filesystem (GRUB writes raw stage 1.5 into it) so leave it alone.
+    # BIOS uses a dedicated /boot on ext4 (always — independent of the
+    # root FS choice) so GRUB stays on a filesystem it can read without
+    # any subvolume gymnastics.
     if is_uefi; then
         mkfs.fat -F32 -n EFI-SYSTEM "${CFG[esp_part]}" >/dev/null
+    else
+        mkfs.ext4 -F -q -L cache22-boot "${CFG[boot_part]}"
     fi
     case "${CFG[filesystem]}" in
         btrfs) mkfs.btrfs -L cache22-root -f "$ROOT_DEV" >/dev/null ;;
@@ -1133,6 +1176,8 @@ setup_target() {
     ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV")
     if is_uefi; then
         ESP_UUID=$(blkid -s UUID -o value "${CFG[esp_part]}")
+    else
+        BOOT_UUID=$(blkid -s UUID -o value "${CFG[boot_part]}")
     fi
 
     # On btrfs, lay out the canonical bootc/Silverblue/Bazzite-style
@@ -1157,15 +1202,20 @@ setup_target() {
     # rshared so podman bind sees the submounts via setns.
     mount --make-rshared "$TARGET" || true
     # bootc install requires the rootfs to be empty or contain only
-    # mount points. Under UEFI we mount the ESP at $TARGET/efi so the
-    # subsequent install_sb_and_uki can write UKIs + sd-boot there.
-    # Under BIOS, GRUB writes stage 1 to the MBR and stage 1.5 into the
-    # 1 MB BIOS-boot partition (no fs, no mount needed); the grub.cfg
-    # itself lives on / under /boot/grub/.
+    # mount points. Under UEFI the ESP is mounted at $TARGET/efi so
+    # install_sb_and_uki can write UKIs + sd-boot there. Under BIOS the
+    # dedicated /boot partition is mounted at $TARGET/boot so bootc
+    # install + grub-install land the kernel, BLS entries, and GRUB
+    # modules on a real ext4 partition (no btrfs subvol traversal in
+    # GRUB).
     if is_uefi; then
         mkdir -p "$TARGET/efi"
         mount "${CFG[esp_part]}" "$TARGET/efi"
         mount --make-rshared "$TARGET/efi" || true
+    else
+        mkdir -p "$TARGET/boot"
+        mount "${CFG[boot_part]}" "$TARGET/boot"
+        mount --make-rshared "$TARGET/boot" || true
     fi
 }
 
@@ -1173,6 +1223,25 @@ run_bootc_install() {
     say "Pulling ${CFG[image]} (large download — multi-GB)"
     podman pull "${CFG[image]}"
     df -h /var/lib/containers
+
+    # BIOS: bake per-machine kargs straight into the BLS entry via
+    # bootc's --karg. UEFI doesn't need this — the UKI's .cmdline gets
+    # the same content via extra-cmdline + resign-uki on every rebuild.
+    # ostree carries --karg values across upgrades, so this is a
+    # one-shot at install for both rootflags and (future) LUKS args.
+    local KARGS=()
+    if ! is_uefi; then
+        if [[ "${CFG[filesystem]}" == "btrfs" ]]; then
+            KARGS+=(--karg "rootflags=subvol=root,$BTRFS_OPTS")
+        fi
+        if [[ "${CFG[luks]}" == "yes" ]]; then
+            local LUKS_PART_UUID
+            LUKS_PART_UUID=$(blkid -s UUID -o value "${CFG[root_part]}")
+            KARGS+=(--karg "rd.luks.uuid=$LUKS_PART_UUID")
+            KARGS+=(--karg "rd.luks.name=$LUKS_PART_UUID=cache22-root")
+            KARGS+=(--karg "rd.luks.options=$LUKS_PART_UUID=discard,tpm2-device=auto")
+        fi
+    fi
 
     # --bootloader=none: cache22 owns the bootloader install. After
     # bootc places the deploy, install_sb_and_uki generates the per-
@@ -1194,6 +1263,7 @@ run_bootc_install() {
             --stateroot default \
             --bootloader=none \
             --root-mount-spec="UUID=$ROOT_UUID" \
+            "${KARGS[@]}" \
             --skip-finalize \
             /target
     local rc=$?
@@ -1290,10 +1360,12 @@ EOF
 
 # BIOS counterpart to install_sb_and_uki. No SB key, no UKI, no ESP.
 # GRUB writes stage 1 to the MBR, stage 1.5 to the 1 MiB BIOS-boot
-# partition, and we drop a static grub.cfg at /boot/grub/grub.cfg that
-# reads ostree's BLS entries dynamically via the blscfg directive. No
-# regen-on-deploy hook is needed: each bootc upgrade adds a new
-# /boot/loader/entries/ostree-*.conf and grub picks it up at next boot.
+# partition, and we drop a static grub.cfg at /boot/grub/grub.cfg on
+# the dedicated /boot ext4 partition. The grub.cfg points search at
+# the /boot partition UUID and lets blscfg enumerate ostree's BLS
+# entries from /loader/entries/. No regen-on-deploy hook is needed:
+# each bootc upgrade writes a new /boot/loader/entries/ostree-*.conf
+# and grub picks it up at next boot.
 install_grub_bios() {
     say "Installing GRUB (BIOS) to ${CFG[disk]}"
     local DEPLOY_ETC; DEPLOY_ETC=$(deploy_etc)
@@ -1308,7 +1380,13 @@ install_grub_bios() {
         die "Could not locate per-stateroot /var for chroot bind-mount"
     fi
 
-    mount --bind  "$TARGET"     "$DEPLOY_ROOT/sysroot"
+    # --rbind for /sysroot so the /boot submount (the dedicated /boot
+    # ext4 partition mounted at $TARGET/boot in setup_target) comes
+    # along into the chroot. Plain --bind leaves /sysroot/boot as an
+    # empty directory on the root subvol, and grub-install would write
+    # i386-pc/grub.cfg/etc into the root subvol instead of the /boot
+    # partition where GRUB stage 1.5 expects to find them.
+    mount --rbind "$TARGET"     "$DEPLOY_ROOT/sysroot"
     mount --bind  "$DEPLOY_VAR" "$DEPLOY_ROOT/var"
     mount --bind  /dev          "$DEPLOY_ROOT/dev"
     mount -t proc proc          "$DEPLOY_ROOT/proc"
@@ -1319,7 +1397,7 @@ install_grub_bios() {
         umount    '$DEPLOY_ROOT/proc'    2>/dev/null || true
         umount    '$DEPLOY_ROOT/dev'     2>/dev/null || true
         umount    '$DEPLOY_ROOT/var'     2>/dev/null || true
-        umount    '$DEPLOY_ROOT/sysroot' 2>/dev/null || true
+        umount -R '$DEPLOY_ROOT/sysroot' 2>/dev/null || true
     " RETURN
 
     # Force a sane PATH inside the chroot. The live env's PATH does
@@ -1328,11 +1406,14 @@ install_grub_bios() {
     # with an explicit PATH so its own shell-outs (probe scripts,
     # etc.) can find their helpers.
     local CHROOT_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-    # --boot-directory points GRUB at the partition's /boot tree
-    # (accessible from inside the chroot via /sysroot/boot since we
-    # bind-mounted $TARGET at /sysroot above). GRUB writes /sysroot/boot
-    # /grub/{i386-pc,fonts,locale,...} there and embeds stage 1 in the
-    # MBR + stage 1.5 in the BIOS-boot partition.
+    # --boot-directory points GRUB at the dedicated /boot ext4
+    # partition (accessible from inside the chroot via /sysroot/boot
+    # since we bind-mounted $TARGET at /sysroot and setup_target
+    # mounted the /boot partition at $TARGET/boot). GRUB writes
+    # /sysroot/boot/grub/{i386-pc,fonts,locale,...} there and embeds
+    # stage 1 in the MBR + stage 1.5 in the BIOS-boot partition. The
+    # prefix baked into core.img resolves to (hdX,gptN)/grub on the
+    # ext4 /boot partition — no btrfs subvolume traversal involved.
     chroot "$DEPLOY_ROOT" /usr/bin/env PATH="$CHROOT_PATH" \
         grub-install \
         --target=i386-pc \
@@ -1360,36 +1441,31 @@ install_grub_bios() {
     fi
 
     # Static grub.cfg using the blscfg directive. ostree writes one
-    # BLS entry per deploy under /boot/loader/entries/ostree-<n>.conf;
-    # blscfg picks the highest-N as default. cmdline, kernel path, and
-    # initrd path all come from the BLS entry — no regen needed when
-    # bootc deploys a new commit. The btrfs_subvol setting is harmless
-    # on ext4/xfs (variable assignment that nothing reads) and required
-    # on btrfs (where /boot lives inside the 'root' subvol cache22
-    # creates).
+    # BLS entry per deploy under /boot/loader/entries/ostree-<n>.conf
+    # (on the dedicated /boot ext4 partition); blscfg picks the
+    # highest-N as default. cmdline, kernel path, and initrd path all
+    # come from the BLS entry — no regen needed when bootc deploys.
     local GRUB_DIR="$TARGET/boot/grub"
     install -d -m 0755 "$GRUB_DIR"
-    # Arch's GRUB ships the BLS implementation in /usr/lib/grub/i386-pc
-    # /blsuki.mod (handles both BLS entries and UKIs) — module-name
-    # differs from Fedora's blscfg.mod, but the GRUB *command* it
-    # registers is the same: `blscfg`. We load blsuki and then invoke
-    # blscfg to enumerate BLS entries from /boot/loader/entries/.
+    # Arch's GRUB ships the BLS implementation in
+    # /usr/lib/grub/i386-pc/blsuki.mod. The module registers two
+    # commands (`blsuki` and the legacy alias `blscfg`); we use
+    # blscfg. search sets $root to the /boot partition's FS UUID so
+    # blscfg's default scan path of /loader/entries/ resolves there.
+    # ext2 module covers ext4 (same on-disk format from grub's POV).
     cat > "$GRUB_DIR/grub.cfg" <<EOF
 set timeout=3
 set default=0
 set fallback=1
-set btrfs_subvol=root
 insmod all_video
 insmod blsuki
-insmod btrfs
 insmod ext2
-insmod xfs
 insmod part_gpt
 insmod part_msdos
-search --no-floppy --fs-uuid --set=root ${ROOT_UUID}
+search --no-floppy --fs-uuid --set=root ${BOOT_UUID}
 blscfg
 EOF
-    say "  wrote $GRUB_DIR/grub.cfg (blscfg via blsuki.mod → ostree /boot/loader/entries/)"
+    say "  wrote $GRUB_DIR/grub.cfg (blscfg via blsuki.mod → /loader/entries/ on /boot partition)"
 }
 
 # Find the writable per-deploy /etc under either backend layout.
@@ -1422,12 +1498,16 @@ configure_deploy() {
         sed -i "s|^#\(${CFG[locale]} .*\)|\1|" "$DEPLOY_ETC/locale.gen"
     fi
 
-    # Only UEFI installs mount an ESP. BIOS installs have a 1 MiB
-    # BIOS-boot partition with no filesystem (raw GRUB stage 1.5),
-    # nothing to mount.
+    # UEFI installs mount the ESP at /efi. BIOS installs mount the
+    # dedicated /boot ext4 partition. The 1 MiB BIOS-boot partition
+    # has no filesystem (raw GRUB stage 1.5), so it's not in fstab.
     if is_uefi; then
         if ! grep -q "UUID=$ESP_UUID"  "$DEPLOY_ETC/fstab" 2>/dev/null; then
             echo "UUID=$ESP_UUID   /efi  vfat  umask=0077,shortname=winnt  0 2" >> "$DEPLOY_ETC/fstab"
+        fi
+    else
+        if ! grep -q "UUID=$BOOT_UUID" "$DEPLOY_ETC/fstab" 2>/dev/null; then
+            echo "UUID=$BOOT_UUID  /boot  ext4  defaults  0 2" >> "$DEPLOY_ETC/fstab"
         fi
     fi
     # btrfs: /var/home lives in its own subvol so the repair tool can
