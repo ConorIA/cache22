@@ -90,7 +90,7 @@ jobs:
       - name: Compute image tags
         id: tags
         run: |
-          IMG="${REGISTRY}/${IMAGE_REPO}-${{ matrix.variant }}"
+          IMG="${REGISTRY}/${IMAGE_REPO,,}-${{ matrix.variant }}"
           DATE_TAG=$(date -u +%Y-%m-%d)
           SHA_TAG=sha-${GITHUB_SHA::7}
           echo "image=${IMG}"               >> "$GITHUB_OUTPUT"
