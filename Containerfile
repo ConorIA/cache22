@@ -111,21 +111,26 @@ RUN install -d /usr/local/bin \
  && printf '#!/bin/sh\nexec echo cache22-build\n' > /usr/local/bin/hostname \
  && chmod +x /usr/local/bin/hostname
 
-# Expand the manifest into a deduplicated package list, then install
-# in one transaction. Retry up to 5x for transient mirror 404s.
+# Expand the manifest into a deduplicated package list, then upgrade the
+# base and install the list in one transaction. -u (full upgrade) is
+# required: the base image ships packages (e.g. systemd-sysvcompat) with
+# exact versioned deps, and installing the list pulls newer versions of
+# their dependencies. A bare -S would leave the preinstalled packages
+# behind and break on the version mismatch (partial-upgrade hazard).
+# Retry up to 5x for transient mirror 404s or mid-sync DB inconsistency.
 RUN pkglist=$(/tmp/cache22-build/scripts/expand-manifest.sh \
         --family "${VARIANT_FAMILY}" \
         --manifest "/tmp/cache22-build/packages/manifests/${VARIANT}.manifest" \
         --layers-dir "/tmp/cache22-build/packages/layers/${VARIANT_FAMILY}") \
  && for attempt in 1 2 3 4 5; do \
-        echo "==> pacman -S attempt $attempt"; \
+        echo "==> pacman -Syu attempt $attempt"; \
         pacman -Syy --noconfirm; \
-        if pacman -S --noconfirm --needed --disable-download-timeout $pkglist; then \
-            echo "==> pacman -S succeeded on attempt $attempt"; \
+        if pacman -Su --noconfirm --needed --disable-download-timeout $pkglist; then \
+            echo "==> pacman -Syu succeeded on attempt $attempt"; \
             break; \
         fi; \
         if [ "$attempt" = "5" ]; then \
-            echo "==> pacman -S failed after 5 attempts"; \
+            echo "==> pacman -Syu failed after 5 attempts"; \
             exit 1; \
         fi; \
         echo "==> retrying in 60s"; \
