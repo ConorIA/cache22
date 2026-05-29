@@ -111,26 +111,43 @@ RUN install -d /usr/local/bin \
  && printf '#!/bin/sh\nexec echo cache22-build\n' > /usr/local/bin/hostname \
  && chmod +x /usr/local/bin/hostname
 
-# Expand the manifest into a deduplicated package list, then install
-# in one transaction. Retry up to 5x for transient mirror 404s.
+# Expand the manifest into a deduplicated package list, then upgrade the
+# base and install the list in one transaction. -u (full upgrade) is
+# required: the base image ships packages (e.g. systemd-sysvcompat) with
+# exact versioned deps, and installing the list pulls newer versions of
+# their dependencies. A bare -S would leave the preinstalled packages
+# behind and break on the version mismatch (partial-upgrade hazard).
+# Retry up to 5x for transient mirror 404s or mid-sync DB inconsistency.
 RUN pkglist=$(/tmp/cache22-build/scripts/expand-manifest.sh \
         --family "${VARIANT_FAMILY}" \
         --manifest "/tmp/cache22-build/packages/manifests/${VARIANT}.manifest" \
         --layers-dir "/tmp/cache22-build/packages/layers/${VARIANT_FAMILY}") \
  && for attempt in 1 2 3 4 5; do \
-        echo "==> pacman -S attempt $attempt"; \
+        echo "==> pacman -Syu attempt $attempt"; \
         pacman -Syy --noconfirm; \
-        if pacman -S --noconfirm --needed --disable-download-timeout $pkglist; then \
-            echo "==> pacman -S succeeded on attempt $attempt"; \
+        if pacman -Su --noconfirm --needed --disable-download-timeout $pkglist; then \
+            echo "==> pacman -Syu succeeded on attempt $attempt"; \
             break; \
         fi; \
         if [ "$attempt" = "5" ]; then \
-            echo "==> pacman -S failed after 5 attempts"; \
+            echo "==> pacman -Syu failed after 5 attempts"; \
             exit 1; \
         fi; \
         echo "==> retrying in 60s"; \
         sleep 60; \
     done
+
+# systemd-sysusers run inside a container stamps shadow sp_lstchg=0
+# ("password must be changed now") on accounts it creates. For the Plasma
+# login-manager session user that makes PAM reject user@<uid>.service, which
+# blocks the logind seat and DRM handoff so the Wayland session never comes
+# up on first boot. Lock the account and set a fixed non-zero last-changed
+# date (kept constant for reproducible rebuilds) with age/inactivity expiry
+# disabled. No-op on variants where the user does not exist.
+RUN if id plasmalogin >/dev/null 2>&1; then \
+        passwd -l plasmalogin || true; \
+        chage -d 1 -M -1 -I -1 plasmalogin; \
+    fi
 
 # Re-apply layered overlay so post-install package files (e.g. ostree's
 # prepare-root.conf) don't clobber our config.
