@@ -197,6 +197,8 @@ pkgfile
 rebuild-detector
 reflector
 pv
+fish
+starship
 
 # ─── Ops / admin / monitoring ─────────────────────────────
 tmux
