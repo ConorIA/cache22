@@ -94,6 +94,7 @@ chwd
 networkmanager
 networkmanager-openvpn
 networkmanager-strongswan
+networkmanager-openconnect
 modemmanager
 iwd
 wpa_supplicant
