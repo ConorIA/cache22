@@ -93,6 +93,7 @@ wireless-regdb
 ufw
 wireguard-tools
 strongswan
+openconnect
 
 # ─── Bluetooth ────────────────────────────────────────────
 bluez
