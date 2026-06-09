@@ -159,6 +159,15 @@ RUN /tmp/cache22-build/scripts/apply-system-files.sh \
         --root /
 
 RUN /tmp/cache22-build/scripts/patch-ostree-dracut.sh
+
+# Hack in HyperHDR here
+RUN HYPERHDR_URL=$(curl -fsSL https://api.github.com/repos/awawa-dev/HyperHDR/releases/latest \
+      | grep -o 'https://[^"]*x86_64\.pkg\.tar\.zst' | head -1) \
+    && echo "==> Installing HyperHDR from ${HYPERHDR_URL}" \
+    && curl -fsSL "${HYPERHDR_URL}" -o /tmp/hyperhdr.pkg.tar.zst \
+    && pacman -U --noconfirm /tmp/hyperhdr.pkg.tar.zst \
+    && rm /tmp/hyperhdr.pkg.tar.zst
+
 RUN /tmp/cache22-build/scripts/generate-initramfs.sh
 
 # No SB signing or bootloader binaries shipped — sd-boot + UKI are
