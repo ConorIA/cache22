@@ -61,10 +61,8 @@ webp-pixbuf-loader
 # ─── Connectivity ─────────────────────────────────────────
 sshfs
 
-# ─── Hybrid GPU control daemon (laptop dGPU/iGPU; AUR-built) ─
-supergfxctl
-
 # ─── Misc desktop QoL ─────────────────────────────────────
 usbmuxd
 drm-info
 plocate
+appimagelauncher
