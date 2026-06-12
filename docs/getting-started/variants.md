@@ -47,7 +47,7 @@ The base layer (always installed) includes:
 
 - **GPU drivers.** Mesa (AMD, Intel, virtio) + NVIDIA proprietary (`nvidia-open-dkms` on arch, `linux-cachyos-nvidia-open` on cachy).
 - **Filesystems.** ext4, xfs, btrfs, f2fs, exFAT, FAT32, NFS, SMB. ZFS on `cachy-*` only.
-- **Network.** NetworkManager, OpenVPN, WireGuard, modemmanager, `r8125` (PCIe), `r8152` (USB).
+- **Network.** NetworkManager, OpenVPN, WireGuard, command-line DHCP clients (`dhcpcd`, `dhclient`, not auto-enabled), modemmanager, `r8125` (PCIe), `r8152` (USB).
 - **Bluetooth.** bluez stack.
 - **Audio.** PipeWire (with PulseAudio, JACK, ALSA shims).
 - **Containers.** podman, podman-compose, docker, docker-compose, distrobox, incus, lxc.

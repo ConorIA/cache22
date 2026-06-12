@@ -100,6 +100,8 @@ iwd
 wpa_supplicant
 dnsmasq
 bind
+dhcpcd
+dhclient
 ethtool
 r8152-dkms
 nss-mdns

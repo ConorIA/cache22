@@ -88,6 +88,8 @@ iwd
 wpa_supplicant
 dnsmasq
 bind
+dhcpcd
+dhclient
 ethtool
 nss-mdns
 usb_modeswitch
