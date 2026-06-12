@@ -101,6 +101,7 @@ wpa_supplicant
 dnsmasq
 bind
 ethtool
+r8152-dkms
 nss-mdns
 usb_modeswitch
 wireless-regdb
