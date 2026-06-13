@@ -65,4 +65,5 @@ sshfs
 usbmuxd
 drm-info
 plocate
+tinyxxd
 appimagelauncher
