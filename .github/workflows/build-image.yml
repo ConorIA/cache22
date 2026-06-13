@@ -35,14 +35,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # cachy family (CachyOS bore-lto kernel + repos)
-          - { variant: cachy-server, family: cachy, base_image: docker.io/cachyos/cachyos-v3 }
-          - { variant: cachy-kde,    family: cachy, base_image: docker.io/cachyos/cachyos-v3 }
-          - { variant: cachy-gnome,  family: cachy, base_image: docker.io/cachyos/cachyos-v3 }
           # arch family (vanilla Arch + mainline linux)
-          - { variant: arch-server,  family: arch,  base_image: docker.io/archlinux }
-          - { variant: arch-kde,     family: arch,  base_image: docker.io/archlinux }
-          - { variant: arch-gnome,   family: arch,  base_image: docker.io/archlinux }
+          - { variant: arch-bigscreen, family: arch,  base_image: docker.io/archlinux }
 
     steps:
       - name: Checkout

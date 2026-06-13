@@ -1,0 +1,11 @@
+# cache22 manifest: arch-kde
+# family: arch
+# Full KDE Plasma desktop: gaming stack (Steam, gamescope, mangohud,
+# lutris, sunshine) + NVIDIA proprietary driver + SteamOS-style
+# switchable gamescope session (via the kde-gaming intersection layer).
+base
+desktop
+gaming
+kde-gaming
+kde
+bigscreen
