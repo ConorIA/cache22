@@ -139,69 +139,13 @@ EOF
 #    days-since-epoch of last change, set to 0 = expired).
 sed -i -E 's/^(cache:[^:]*):[0-9]+:/\1:0:/' "$DEPLOY_ETC/shadow"
 
-# 2b. Auto-enable password SSH once the default password is changed. The
-#     public 'cache' password is never reachable over the network, so a
-#     change can only happen on the console or via a keyed sudo session;
-#     that change is therefore proof the new password is locally chosen
-#     and safe to expose. A path unit watches /etc/shadow; the service
-#     also runs once per boot to reconcile. This gives plain-flash users
-#     SSH access without hand-editing sshd_config.
-install -d -m 0755 "$DEPLOY_ETC/cache22" \
-    "$DEPLOY_ETC/systemd/system/multi-user.target.wants"
-cat > "$DEPLOY_ETC/cache22/ssh-unlock.sh" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-# Field 3 of /etc/shadow is the days-since-epoch of the last password
-# change. The DD image bakes it as 0 (expired). A non-zero value means
-# the default 'cache' password has been replaced.
-lastchange="$(getent shadow cache | cut -d: -f3)"
-[[ -n "$lastchange" && "$lastchange" != "0" ]] || exit 0
-cat > /etc/ssh/sshd_config.d/10-cache22-dd.conf <<'CONF'
-# Default password has been changed; password SSH is now enabled.
-# Root may log in by key only (never password); use the 'cache' user.
-PasswordAuthentication yes
-PermitRootLogin prohibit-password
-CONF
-systemctl reload sshd 2>/dev/null || systemctl restart sshd 2>/dev/null || true
-systemctl disable cache22-ssh-unlock.path 2>/dev/null || true
-systemctl stop cache22-ssh-unlock.path 2>/dev/null || true
-EOF
-chmod 0755 "$DEPLOY_ETC/cache22/ssh-unlock.sh"
-
-cat > "$DEPLOY_ETC/systemd/system/cache22-ssh-unlock.service" <<'EOF'
-[Unit]
-Description=Enable password SSH once the default cache22 password is changed
-After=local-fs.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/bash /etc/cache22/ssh-unlock.sh
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-cat > "$DEPLOY_ETC/systemd/system/cache22-ssh-unlock.path" <<'EOF'
-[Unit]
-Description=Watch for a cache22 default-password change to enable password SSH
-
-# Watch both the file (in-place edits) and the directory: passwd replaces
-# /etc/shadow via rename, which a file-level watch misses but a directory
-# watch catches. The service is idempotent and no-ops until the password
-# is actually changed, so extra early-boot triggers are harmless.
-[Path]
-PathModified=/etc/shadow
-PathModified=/etc
-Unit=cache22-ssh-unlock.service
-
-[Install]
-WantedBy=paths.target
-EOF
-ln -sfn ../cache22-ssh-unlock.service \
-    "$DEPLOY_ETC/systemd/system/multi-user.target.wants/cache22-ssh-unlock.service"
-install -d -m 0755 "$DEPLOY_ETC/systemd/system/paths.target.wants"
-ln -sfn ../cache22-ssh-unlock.path \
-    "$DEPLOY_ETC/systemd/system/paths.target.wants/cache22-ssh-unlock.path"
+# 2b. Passwordless sudo for wheel. The cache password is a public default,
+#     so requiring it for sudo is no real barrier; the access boundary is
+#     the SSH key (or provider console). DD-image only -- regular ISO/kexec
+#     installs keep password sudo (those users set a private password).
+install -d -m 0750 "$DEPLOY_ETC/sudoers.d"
+echo '%wheel ALL=(ALL:ALL) NOPASSWD: ALL' > "$DEPLOY_ETC/sudoers.d/20-cache22-dd-nopasswd"
+chmod 0440 "$DEPLOY_ETC/sudoers.d/20-cache22-dd-nopasswd"
 
 # 3. First-boot grow: the image is shrunk to minimal, so on first boot it
 #    must extend the (last) root partition to fill the flashed disk and

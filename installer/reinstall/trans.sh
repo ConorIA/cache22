@@ -4265,9 +4265,20 @@ cache22_inject_ssh_key() {
             c22_days=$(( $(date +%s) / 86400 ))
             sed -i "s/^\(cache:[^:]*\):0:/\1:${c22_days}:/" "$c22_etc/shadow"
         fi
+        # Also key root: /root is a symlink to /var/roothome, which lives in
+        # the stateroot var. PermitRootLogin=prohibit-password lets root in
+        # by key only.
+        c22_rh=$(ls -d /c22root/ostree/deploy/*/var/roothome 2>/dev/null | head -1)
+        [ -n "$c22_rh" ] || { c22_var=$(ls -d /c22root/ostree/deploy/*/var 2>/dev/null | head -1); c22_rh="$c22_var/roothome"; }
+        if [ -n "$c22_rh" ]; then
+            install -d -m 0700 "$c22_rh/.ssh"
+            cat /configs/ssh_keys >>"$c22_rh/.ssh/authorized_keys"
+            chmod 0600 "$c22_rh/.ssh/authorized_keys"
+            chown -R 0:0 "$c22_rh/.ssh"
+        fi
         umount /c22root
     fi
-    info "cache22: SSH key injected for user 'cache'"
+    info "cache22: SSH key injected for users 'cache' and 'root'"
 }
 
 modify_os_on_disk() {

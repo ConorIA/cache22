@@ -116,6 +116,18 @@ if [[ -n "$SSH_KEY" ]]; then
     chown -R 1000:1000 "$HOME_MNT/${USER_NAME}/.ssh"
     umount "$HOME_MNT"; rmdir "$HOME_MNT"
     echo "==> SSH key added for $USER_NAME"
+
+    # Key root too (/root -> /var/roothome in the stateroot var). Root
+    # login is key-only (PermitRootLogin prohibit-password).
+    rh="$(ls -d "$MNT"/ostree/deploy/*/var/roothome 2>/dev/null | head -1)"
+    [[ -n "$rh" ]] || rh="$(ls -d "$MNT"/ostree/deploy/*/var 2>/dev/null | head -1)/roothome"
+    if [[ -n "$rh" ]]; then
+        install -d -m 0700 "$rh/.ssh"
+        printf '%s\n' "$SSH_KEY" >> "$rh/.ssh/authorized_keys"
+        chmod 0600 "$rh/.ssh/authorized_keys"
+        chown -R 0:0 "$rh/.ssh"
+        echo "==> SSH key added for root"
+    fi
 fi
 
 sync

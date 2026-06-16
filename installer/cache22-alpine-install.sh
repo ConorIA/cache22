@@ -80,6 +80,20 @@ printf '%s\n' "$SSH_KEY" >> "$homemnt/${USER_NAME}/.ssh/authorized_keys"
 chmod 0600 "$homemnt/${USER_NAME}/.ssh/authorized_keys"
 chown -R 1000:1000 "$homemnt/${USER_NAME}/.ssh"
 umount "$homemnt"
+
+# Key root too (/root -> /var/roothome in the stateroot var); root login
+# is key-only (PermitRootLogin prohibit-password).
+RH="$(ls -d "$mnt"/ostree/deploy/*/var/roothome 2>/dev/null | head -1)"
+[ -n "$RH" ] || RH="$(ls -d "$mnt"/ostree/deploy/*/var 2>/dev/null | head -1)/roothome"
+if [ -n "$RH" ]; then
+    install -d -m 0700 "$RH/.ssh"
+    printf '%s\n' "$SSH_KEY" >> "$RH/.ssh/authorized_keys"
+    chmod 0600 "$RH/.ssh/authorized_keys"
+    chown -R 0:0 "$RH/.ssh"
+fi
+# Un-expire cache so key login is not interrupted by a forced change.
+days=$(( $(date +%s) / 86400 ))
+sed -i "s/^\(${USER_NAME}:[^:]*\):0:/\1:${days}:/" "$DEPLOY_ETC/shadow"
 umount "$mnt"
 sync
 
