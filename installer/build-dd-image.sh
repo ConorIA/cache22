@@ -53,6 +53,14 @@ case "$VARIANT" in
     *) echo "build-dd-image only supports server variants (got '$VARIANT')." >&2; exit 1 ;;
 esac
 
+# cache22-install's grub chroot does `mount --rbind /sys` then a recursive
+# umount. With /sys shared (the usual default) that umount propagates to
+# peers and can tear down the host's own /sys/fs/cgroup, breaking the
+# container runtime for the rest of the session. Mark /sys rslave so the
+# chroot's umount cannot reach the host. Harmless in a disposable CI
+# runner; important when building on a real machine.
+mount --make-rslave /sys 2>/dev/null || true
+
 IMAGE="ghcr.io/cmspam/cache22-${VARIANT}:rolling"
 RAW="$(readlink -f "$OUTDIR")/cache22-${VARIANT}-bios.raw"
 
