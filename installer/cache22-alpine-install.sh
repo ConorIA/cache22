@@ -55,8 +55,8 @@ MANIFEST="$(curl -fsSL -H "Authorization: Bearer ${TOKEN}" \
 DIGEST="$(echo "$MANIFEST" | jq -r '.layers[] | select(.mediaType|test("octet-stream|zstd")) | .digest' | head -1)"
 [ -n "$DIGEST" ] || DIGEST="$(echo "$MANIFEST" | jq -r '.layers[0].digest')"
 echo "==> Streaming ${DIGEST} -> ${DISK}"
-curl -fsSL -H "Authorization: Bearer ${TOKEN}" \
-    "https://ghcr.io/v2/${REPO}/blobs/${DIGEST}" | zstd -d | dd of="$DISK" bs=4M
+curl -fL --progress-bar -H "Authorization: Bearer ${TOKEN}" \
+    "https://ghcr.io/v2/${REPO}/blobs/${DIGEST}" | zstd -d | dd of="$DISK" bs=4M status=progress
 sync
 # Re-read the partition table written by dd.
 partprobe "$DISK" 2>/dev/null || blockdev --rereadpt "$DISK" 2>/dev/null || true

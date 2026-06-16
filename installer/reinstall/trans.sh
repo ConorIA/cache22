@@ -2797,10 +2797,15 @@ dd_raw_with_extract() {
             -H "Accept: application/vnd.oci.image.manifest.v1+json" \
             "https://ghcr.io/v2/${c22_repo}/manifests/${c22_tag}" \
             | jq -r '.layers[] | select(.mediaType|test("octet-stream|zstd")) | .digest' | head -1)
-        info "cache22: streaming ${c22_repo}@${c22_dig}"
-        curl -fsSL -H "Authorization: Bearer ${c22_tok}" \
+        info "cache22: streaming ${c22_repo} to /dev/$xda (progress = download, throttled by disk write)"
+        # -fL --progress-bar (not -s): show a progress bar on the blob
+        # fetch. The pipe back-pressures curl to the disk write speed, so
+        # the bar reflects real end-to-end progress.
+        curl -fL --progress-bar -H "Authorization: Bearer ${c22_tok}" \
             "https://ghcr.io/v2/${c22_repo}/blobs/${c22_dig}" \
             | pipe_extract >/dev/$xda || error_and_exit "cache22: ghcr stream failed"
+        sync
+        info "cache22: image written to /dev/$xda"
         return
         ;;
     esac
