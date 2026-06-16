@@ -1581,7 +1581,7 @@ The current machine is $basearch, but it seems the ISO is for $iso_arch. Continu
         case "$img" in
         ghcr://*)
             eval "${step}_img='$img'"
-            eval "${step}_img_type='raw.zstd'"
+            eval "${step}_img_type='raw'"
             eval "${step}_img_type_warp='zstd'"
             return
             ;;
