@@ -60,8 +60,15 @@ RAW="$(readlink -f "$OUTDIR")/cache22-${VARIANT}-bios.raw"
 NO_PROMPT=1
 # shellcheck source=cache22-install
 source "$HERE/cache22-install"
-# cache22-install sets `set -uo pipefail` (no errexit); restore ours.
-set -euo pipefail
+# cache22-install's functions are written WITHOUT errexit: they return
+# nonzero in normal operation (empty greps, idempotent unmounts) and call
+# die() for real failures. Match that contract; our own steps below guard
+# themselves explicitly with run().
+set +e
+
+# Abort the build if a critical step fails (installer functions die() on
+# their own; this covers our own commands).
+run() { "$@" || die "build step failed: $*"; }
 
 # Force the legacy-BIOS path regardless of the build host's firmware: CI
 # runners are UEFI VMs, but the flashed image must be BIOS-bootable and
@@ -89,8 +96,9 @@ trap cleanup EXIT
 echo "==> Building DD image for $VARIANT from $IMAGE"
 mkdir -p "$(dirname "$RAW")"
 rm -f "$RAW" "$RAW.zst"
-truncate -s "$INIT_SIZE" "$RAW"
-LOOP="$(losetup --find --show --partscan "$RAW")"
+run truncate -s "$INIT_SIZE" "$RAW"
+LOOP="$(losetup --find --show --partscan "$RAW")" || die "losetup failed"
+[[ -b "$LOOP" ]] || die "no loop device"
 CFG[disk]="$LOOP"
 echo "==> Working image $RAW on $LOOP"
 
@@ -148,6 +156,7 @@ PermitRootLogin no
 CONF
 systemctl reload sshd 2>/dev/null || systemctl restart sshd 2>/dev/null || true
 systemctl disable cache22-ssh-unlock.path 2>/dev/null || true
+systemctl stop cache22-ssh-unlock.path 2>/dev/null || true
 EOF
 chmod 0755 "$DEPLOY_ETC/cache22/ssh-unlock.sh"
 
@@ -168,8 +177,13 @@ cat > "$DEPLOY_ETC/systemd/system/cache22-ssh-unlock.path" <<'EOF'
 [Unit]
 Description=Watch for a cache22 default-password change to enable password SSH
 
+# Watch both the file (in-place edits) and the directory: passwd replaces
+# /etc/shadow via rename, which a file-level watch misses but a directory
+# watch catches. The service is idempotent and no-ops until the password
+# is actually changed, so extra early-boot triggers are harmless.
 [Path]
 PathModified=/etc/shadow
+PathModified=/etc
 Unit=cache22-ssh-unlock.service
 
 [Install]
@@ -230,12 +244,13 @@ teardown_target
 ROOT_PART="${CFG[root_part]}"
 echo "==> Shrinking $ROOT_PART to fit"
 mkdir -p "$TARGET"
-mount -o "subvol=root,$BTRFS_OPTS" "$ROOT_PART" "$TARGET"
+run mount -o "subvol=root,$BTRFS_OPTS" "$ROOT_PART" "$TARGET"
 used_kib="$(df -k --output=used "$TARGET" | tail -1 | tr -d ' ')"
+[[ "$used_kib" =~ ^[0-9]+$ ]] || die "could not read used space"
 target_mib=$(( (used_kib + 1023) / 1024 + MARGIN_MIB ))
 echo "    used=$(( used_kib / 1024 ))MiB  +margin=${MARGIN_MIB}MiB  → fs target=${target_mib}MiB"
-btrfs filesystem resize "${target_mib}M" "$TARGET"
-umount "$TARGET"
+run btrfs filesystem resize "${target_mib}M" "$TARGET"
+run umount "$TARGET"
 
 # Resize the root GPT partition (last partition) to the new fs size plus a
 # small slack, preserving its start sector, label and type. sgdisk has no
@@ -245,9 +260,10 @@ part_mib=$(( target_mib + 8 ))
 # device path that partition_auto resolved (e.g. /dev/loop0p3 -> 3).
 root_pn="${ROOT_PART##*p}"
 start_sector="$(sgdisk -i "$root_pn" "$LOOP" | awk -F': ' '/First sector/{print $2}' | awk '{print $1}')"
+[[ "$start_sector" =~ ^[0-9]+$ ]] || die "could not read root start sector"
 echo "==> Recreating root partition p${root_pn} at sector ${start_sector}, size ${part_mib}MiB"
-sgdisk -d "$root_pn" "$LOOP"
-sgdisk -n "${root_pn}:${start_sector}:+${part_mib}M" -t "${root_pn}:8304" \
+run sgdisk -d "$root_pn" "$LOOP"
+run sgdisk -n "${root_pn}:${start_sector}:+${part_mib}M" -t "${root_pn}:8304" \
     -c "${root_pn}:cache22-root" "$LOOP"
 partprobe "$LOOP" || true
 udevadm settle || true
@@ -255,14 +271,16 @@ udevadm settle || true
 # Truncate the file just past the root partition's end, then relocate the
 # backup GPT to the new disk end.
 end_sector="$(sgdisk -i "$root_pn" "$LOOP" | awk -F': ' '/Last sector/{print $2}' | awk '{print $1}')"
+[[ "$end_sector" =~ ^[0-9]+$ ]] || die "could not read root end sector"
 losetup -d "$LOOP"; LOOP=""
 final_bytes=$(( (end_sector + 34) * 512 ))
-truncate -s "$final_bytes" "$RAW"
-LOOP="$(losetup --find --show --partscan "$RAW")"
+run truncate -s "$final_bytes" "$RAW"
+LOOP="$(losetup --find --show --partscan "$RAW")" || die "re-losetup failed"
 sgdisk -e "$LOOP" >/dev/null 2>&1 || true
 sgdisk -v "$LOOP" || true
 losetup -d "$LOOP"; LOOP=""
 
-echo "==> Compressing $RAW ($(du -h "$RAW" | cut -f1)) → ${RAW}.zst"
-zstd -19 -T0 --rm -f "$RAW" -o "${RAW}.zst"
+ZSTD_LEVEL="${ZSTD_LEVEL:-19}"
+echo "==> Compressing $RAW ($(du -h "$RAW" | cut -f1)) → ${RAW}.zst (zstd -${ZSTD_LEVEL})"
+zstd "-${ZSTD_LEVEL}" -T0 --rm -f "$RAW" -o "${RAW}.zst"
 echo "==> Done: ${RAW}.zst ($(du -h "${RAW}.zst" | cut -f1))"
