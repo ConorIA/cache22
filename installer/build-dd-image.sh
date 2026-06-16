@@ -260,7 +260,10 @@ sgdisk -e "$LOOP" >/dev/null 2>&1 || true
 sgdisk -v "$LOOP" || true
 losetup -d "$LOOP"; LOOP=""
 
-ZSTD_LEVEL="${ZSTD_LEVEL:-19}"
+# -12 is the ratio/speed sweet spot here: it captures most of what -19 gets
+# but is far faster (-12->-19 costs ~18x the time for a few % more). Override
+# with ZSTD_LEVEL=3 for quick local iteration.
+ZSTD_LEVEL="${ZSTD_LEVEL:-12}"
 echo "==> Compressing $RAW ($(du -h "$RAW" | cut -f1)) → ${RAW}.zst (zstd -${ZSTD_LEVEL})"
 zstd "-${ZSTD_LEVEL}" -T0 --rm -f "$RAW" -o "${RAW}.zst"
 echo "==> Done: ${RAW}.zst ($(du -h "${RAW}.zst" | cut -f1))"
