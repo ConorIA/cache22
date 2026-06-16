@@ -10,12 +10,12 @@
 #
 # Server variants only; BIOS/GRUB image (no Secure Boot, no LUKS).
 #
-#   curl -fsSL https://raw.githubusercontent.com/cmspam/cache22/dd-image-installer/installer/cache22-vps-dd.sh \
+#   curl -fsSL https://raw.githubusercontent.com/cmspam/cache22/main/installer/cache22-vps-dd.sh \
 #     | sudo bash -s -- --variant cachy-server --ssh-key gh:cmspam
 
 set -euo pipefail
 
-BRANCH="dd-image-installer"
+BRANCH="main"
 NAMESPACE="cmspam"
 VARIANT="cachy-server"
 TAG="rolling"

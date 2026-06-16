@@ -7,8 +7,8 @@
 
 set -eE
 # cache22 fork: serve the patched trans.sh + conf files from this repo.
-confhome=https://raw.githubusercontent.com/cmspam/cache22/dd-image-installer/installer/reinstall
-confhome_cn=https://raw.githubusercontent.com/cmspam/cache22/dd-image-installer/installer/reinstall
+confhome=https://raw.githubusercontent.com/cmspam/cache22/main/installer/reinstall
+confhome_cn=https://raw.githubusercontent.com/cmspam/cache22/main/installer/reinstall
 # confhome_cn=https://www.ghproxy.cc/https://raw.githubusercontent.com/bin456789/reinstall/main
 
 #  reinstall.sh  trans.sh 

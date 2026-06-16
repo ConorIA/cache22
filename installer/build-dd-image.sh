@@ -24,6 +24,7 @@ VARIANT="arch-server"
 OUTDIR="."
 INIT_SIZE="20G"      # generous sparse working size; shrunk at the end
 MARGIN_MIB=1024      # free space left in the fs above current usage
+IMAGE=""            # OCI image to lay down (default derived from --variant)
 
 usage() {
     cat <<EOF
@@ -33,6 +34,7 @@ Usage: $0 [--variant <id>] [--out <dir>] [--init-size <size>] [--margin-mib <n>]
   --out         output directory for the .raw.zst (default: $OUTDIR)
   --init-size   sparse working image size before shrink (default: $INIT_SIZE)
   --margin-mib  free space (MiB) kept above current usage (default: $MARGIN_MIB)
+  --image       OCI image ref to lay down (default: ghcr.io/cmspam/cache22-<variant>:rolling)
 EOF
 }
 
@@ -42,6 +44,7 @@ while [[ $# -gt 0 ]]; do
         --out)        OUTDIR="$2"; shift 2 ;;
         --init-size)  INIT_SIZE="$2"; shift 2 ;;
         --margin-mib) MARGIN_MIB="$2"; shift 2 ;;
+        --image)      IMAGE="$2"; shift 2 ;;
         -h|--help)    usage; exit 0 ;;
         *)            echo "Unknown argument: $1" >&2; usage; exit 1 ;;
     esac
@@ -61,7 +64,7 @@ esac
 # runner; important when building on a real machine.
 mount --make-rslave /sys 2>/dev/null || true
 
-IMAGE="ghcr.io/cmspam/cache22-${VARIANT}:rolling"
+IMAGE="${IMAGE:-ghcr.io/cmspam/cache22-${VARIANT}:rolling}"
 RAW="$(readlink -f "$OUTDIR")/cache22-${VARIANT}-bios.raw"
 
 # Reuse the installer's functions without running its interactive main().
