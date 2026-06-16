@@ -1947,4 +1947,9 @@ EOF
     fi
 }
 
-main "$@"
+# When sourced (e.g. by build-dd-image.sh to reuse the partition/install/
+# deploy functions against a loopback file), expose the functions without
+# running the interactive installer.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

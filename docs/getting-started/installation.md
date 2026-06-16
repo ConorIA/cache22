@@ -67,6 +67,35 @@ sudo TAG=iso-YYYY-MM-DD bash <(curl -fsSL https://raw.githubusercontent.com/cmsp
 
 If kexec hangs or the VPS does not come back, check the VPS provider's web console: the NixOS kexec environment logs to the serial port.
 
+### Alternative: Install on a low-RAM VPS by flashing a prebuilt image
+
+The kexec install above pulls and unpacks the full OCI image, which needs several GB of scratch (RAM or disk). On a small VPS that scratch is the constraint. The prebuilt-image path avoids it: a ready-made cache22 disk image is streamed straight onto the disk with the [reinstall](https://github.com/bin456789/reinstall) tool's dd mode, which runs in roughly 256 to 512 MB of RAM.
+
+This path is server variants only (`arch-server`, `cachy-server`) and produces a legacy-BIOS GRUB system with no Secure Boot, no UKI signing, and no LUKS. The image carries a hardened default account `cache` (password `cache`, expired on first use) with network SSH password authentication disabled, and grows itself to fill the disk on first boot.
+
+From the VPS's existing OS, run as root:
+
+```
+curl -fsSL https://raw.githubusercontent.com/cmspam/cache22/main/installer/cache22-vps-dd.sh \
+    | sudo bash -s -- --variant arch-server --ssh-key gh:yourname
+```
+
+The script downloads `reinstall`, flashes the prebuilt image, and pauses in an in-RAM environment that stays reachable on the original IP. Reconnect over SSH and set your credentials on the written disk before the first boot:
+
+```
+curl -fsSL https://raw.githubusercontent.com/cmspam/cache22/main/installer/cache22-inject.sh \
+    | sudo bash -s -- --ssh-key gh:yourname --hostname myhost
+reboot
+```
+
+`reinstall`'s own `--ssh-key` and `--password` options do not work here: cache22's ostree layout keeps the active `/etc` and the user's home inside the deployment, so `cache22-inject.sh` writes there instead. If you skip the injection step, log in once on the provider console as `cache` / `cache`, set a new password, add your user and key, then optionally remove the `cache` account.
+
+#### Flashing the image directly (without reinstall)
+
+The same image can be flashed by any means: download `cache22-<variant>-bios.raw.zst` from the [releases page](https://github.com/cmspam/cache22/releases/latest), decompress, and write it to the disk (`zstd -dc cache22-arch-server-bios.raw.zst | sudo dd of=/dev/sdX bs=4M status=progress`), or upload it as a custom image where the provider supports it. On first boot the image grows its filesystem to fill the disk.
+
+Network SSH password authentication ships disabled, so the public `cache` / `cache` default is never reachable remotely. It works only on the provider console. When you log in there and change the password, cache22 detects the change and enables password SSH automatically. From then on you can SSH in as `cache` with your new password; no `sshd_config` editing is needed. Adding an SSH key (on the console, or with `cache22-inject.sh` before first boot) lets you SSH in by key regardless.
+
 ## Step 4. Run the installer
 
 At the live shell, run:

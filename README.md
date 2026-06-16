@@ -51,6 +51,16 @@ curl -fsSL https://raw.githubusercontent.com/cmspam/cache22/main/installer/cache
 
 After the kexec, SSH back in as root and run `cache22-install`. Works on both BIOS and UEFI VPSes. See [Installation → VPS via kexec](https://cmspam.github.io/cache22/getting-started/installation/#alternative-install-on-a-vps-via-kexec-no-iso-mount-needed).
 
+### On a low-RAM VPS (flash a prebuilt image)
+
+For server variants a prebuilt disk image is published to `ghcr.io` and streamed straight onto the disk from the existing OS. It runs in roughly 256–512 MB of RAM (no multi-GB scratch), so it works where the kexec installer can't. One command, headless:
+
+```
+curl -fsSL https://raw.githubusercontent.com/cmspam/cache22/main/installer/cache22-vps-dd.sh | sudo bash -s -- --variant cachy-server --ssh-key gh:USER
+```
+
+It kexecs into a small in-RAM Alpine, streams the image to disk, injects your SSH key for both `cache` and `root`, and reboots. The system grows to fill the disk on first boot; log in by key as `cache` (passwordless sudo) or `root`. The image is BIOS/GRUB, server variants only (`arch-server`, `cachy-server`), key-only SSH — for Secure Boot, LUKS, or desktop variants use the ISO or kexec path above. To flash a local disk yourself, use [`cache22-flash.sh`](https://raw.githubusercontent.com/cmspam/cache22/main/installer/cache22-flash.sh).
+
 ## Helper commands
 
 | Command | Purpose |
@@ -78,4 +88,4 @@ Apache 2.0 for build scripts and tooling. Packaged software keeps its own licens
 
 ## Acknowledgements
 
-[CachyOS](https://cachyos.org/) for the base distro and v3-optimized packages. [bootc](https://github.com/bootc-dev/bootc) and the broader ostree/composefs ecosystem. [bootcrew/mono](https://github.com/bootcrew/mono) for path-finding bootc-on-Arch ideas. [Universal Blue](https://universal-blue.org/) and [Bazzite](https://bazzite.gg/) for the multi-variant Containerfile pattern.
+[CachyOS](https://cachyos.org/) for the base distro and v3-optimized packages. [bootc](https://github.com/bootc-dev/bootc) and the broader ostree/composefs ecosystem. [bootcrew/mono](https://github.com/bootcrew/mono) for path-finding bootc-on-Arch ideas. [Universal Blue](https://universal-blue.org/) and [Bazzite](https://bazzite.gg/) for the multi-variant Containerfile pattern. [reinstall](https://github.com/bin456789/reinstall) (MIT) for the kexec-to-Alpine transport that the prebuilt-image VPS installer builds on (vendored under `installer/reinstall/`).
