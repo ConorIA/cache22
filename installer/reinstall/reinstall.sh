@@ -5143,6 +5143,12 @@ elif [ "$distro" = dd ]; then
     if [ -n "$cloud_data" ]; then
         echo "Cloud Data: $cloud_data"
         echo "Cloud Data Files: $cloud_data_files"
+    elif [ "${img#ghcr://}" != "$img" ]; then
+        # cache22 DD image: credentials are known.
+        echo "Users: cache (wheel, NOPASSWD sudo) and root - both key-only"
+        echo "Public Key: ${ssh_keys:-[none injected]}"
+        echo "Password: none over SSH (key-only); console rescue: cache / cache"
+        echo "SSH Port: 22"
     else
         echo "Username: [Depends on image]"
         echo "Public Key: [Depends on image]"
@@ -5195,9 +5201,6 @@ elif [ "$distro" = alpine ] && [ "$hold" = 1 ]; then
     echo "Or run \"$reinstall_____ reset\" now to clear this boot entry."
     echo
 else
-    warn false ''
-    echo ''
-    echo " \"$reinstall_____ reset\" "
     echo
     warn false 'Warning: Reinstalling will erase all data on the main disk, including all partitions!'
     echo 'Reboot to start the reinstallation.'
