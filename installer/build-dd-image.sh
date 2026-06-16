@@ -131,7 +131,7 @@ cat > "$DEPLOY_ETC/ssh/sshd_config.d/10-cache22-dd.conf" <<'EOF'
 # never be usable over the network. Add your own user + key, then relax
 # these if you really want password SSH.
 PasswordAuthentication no
-PermitRootLogin no
+PermitRootLogin prohibit-password
 KbdInteractiveAuthentication no
 EOF
 
@@ -158,9 +158,9 @@ lastchange="$(getent shadow cache | cut -d: -f3)"
 [[ -n "$lastchange" && "$lastchange" != "0" ]] || exit 0
 cat > /etc/ssh/sshd_config.d/10-cache22-dd.conf <<'CONF'
 # Default password has been changed; password SSH is now enabled.
-# Root login stays disabled; use the 'cache' user (wheel/sudo).
+# Root may log in by key only (never password); use the 'cache' user.
 PasswordAuthentication yes
-PermitRootLogin no
+PermitRootLogin prohibit-password
 CONF
 systemctl reload sshd 2>/dev/null || systemctl restart sshd 2>/dev/null || true
 systemctl disable cache22-ssh-unlock.path 2>/dev/null || true
