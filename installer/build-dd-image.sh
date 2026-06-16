@@ -200,11 +200,36 @@ ROOT_PART="${CFG[root_part]}"
 echo "==> Shrinking $ROOT_PART to fit"
 mkdir -p "$TARGET"
 run mount -o "subvol=root,$BTRFS_OPTS" "$ROOT_PART" "$TARGET"
-used_kib="$(df -k --output=used "$TARGET" | tail -1 | tr -d ' ')"
-[[ "$used_kib" =~ ^[0-9]+$ ]] || die "could not read used space"
-target_mib=$(( (used_kib + 1023) / 1024 + MARGIN_MIB ))
-echo "    used=$(( used_kib / 1024 ))MiB  +margin=${MARGIN_MIB}MiB  → fs target=${target_mib}MiB"
-run btrfs filesystem resize "${target_mib}M" "$TARGET"
+
+# btrfs allocates space in chunks scattered across the (18 GiB) device; to
+# shrink, every chunk above the target must be relocated below it. A naive
+# "used + margin" target leaves too little room to repack and fails with
+# ENOSPC (deterministically on some variants). So: balance first to compact
+# partially-used chunks, then start the target from btrfs's own chunk-aware
+# minimum (min-dev-size) + margin, and bump it if a resize still ENOSPCs.
+btrfs balance start -dusage=90 -musage=90 "$TARGET" >/dev/null 2>&1 || true
+
+min_bytes="$(btrfs inspect-internal min-dev-size "$TARGET" 2>/dev/null | grep -oE '^[0-9]+' | head -1)"
+if [[ "$min_bytes" =~ ^[0-9]+$ ]] && (( min_bytes > 0 )); then
+    base_mib=$(( min_bytes / 1024 / 1024 ))
+else
+    used_kib="$(df -k --output=used "$TARGET" | tail -1 | tr -d ' ')"
+    [[ "$used_kib" =~ ^[0-9]+$ ]] || die "could not determine btrfs size floor"
+    base_mib=$(( (used_kib + 1023) / 1024 ))
+fi
+
+target_mib=""
+for bump in 0 512 1024 2048 4096 8192; do
+    t=$(( base_mib + MARGIN_MIB + bump ))
+    echo "    trying fs resize to ${t}MiB (floor=${base_mib}MiB +margin=${MARGIN_MIB} +bump=${bump})"
+    if btrfs filesystem resize "${t}M" "$TARGET" 2>/tmp/c22resize; then
+        target_mib=$t; break
+    fi
+    # Keep bumping only for the chunk-relocation ENOSPC; bail on anything else.
+    grep -qi 'no space' /tmp/c22resize || { cat /tmp/c22resize >&2; die "btrfs resize failed (non-ENOSPC)"; }
+done
+[[ -n "$target_mib" ]] || die "btrfs shrink failed even after bumping the target"
+echo "    fs shrunk to ${target_mib}MiB"
 run umount "$TARGET"
 
 # Resize the root GPT partition (last partition) to the new fs size plus a

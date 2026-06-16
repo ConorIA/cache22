@@ -13,6 +13,8 @@ on:
       - 'packages/**'
       - 'system_files/**'
       - 'scripts/**'
+      - 'installer/build-dd-image.sh'
+      - 'installer/cache22-install'
       - '.github/workflows/build-image.yml'
 
 env:
