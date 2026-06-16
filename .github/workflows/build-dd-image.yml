@@ -12,8 +12,8 @@ on:
       - '.github/workflows/build-dd-image.yml'
 
 permissions:
-  contents: write
-  packages: read
+  contents: read
+  packages: write
 
 jobs:
   build-dd:
@@ -52,42 +52,25 @@ jobs:
               --variant "${{ matrix.variant }}" \
               --out "$PWD"
 
-      - name: Compute artifact info
-        id: info
-        run: |
-          IMG="cache22-${{ matrix.variant }}-bios.raw.zst"
-          DATE=$(date -u +%Y-%m-%d)
-          SIZE=$(du -h "$IMG" | cut -f1)
-          SHA=$(sha256sum "$IMG" | awk '{print $1}')
-          echo "img=$IMG"   >> "$GITHUB_OUTPUT"
-          echo "size=$SIZE" >> "$GITHUB_OUTPUT"
-          echo "sha=$SHA"   >> "$GITHUB_OUTPUT"
-          echo "tag=iso-$DATE" >> "$GITHUB_OUTPUT"
+      - name: Install oras
+        uses: oras-project/setup-oras@v1
 
-      - name: Upload as workflow artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ steps.info.outputs.img }}
-          path: ${{ steps.info.outputs.img }}
-          retention-days: 14
-
-      - name: Upload to GitHub Release
+      - name: Push disk image to ghcr.io
         if: github.event_name != 'pull_request'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          IMG: ${{ steps.info.outputs.img }}
-          TAG: ${{ steps.info.outputs.tag }}
-          SIZE: ${{ steps.info.outputs.size }}
-          SHA: ${{ steps.info.outputs.sha }}
+          ORAS_USER: ${{ github.actor }}
+          ORAS_PASS: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # The ISO / kexec workflows own release creation; only create a
-          # stub if neither has run yet for today's tag.
-          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-              gh release create "$TAG" \
-                  --repo "$GITHUB_REPOSITORY" \
-                  --title "cache22 installer release ($TAG)" \
-                  --notes "Release auto-created by build-dd-image."
-          fi
-          gh release upload "$TAG" "$IMG" \
-              --repo "$GITHUB_REPOSITORY" --clobber
-          echo "Uploaded $IMG ($SIZE, sha256 $SHA) to release $TAG"
+          IMG="cache22-${{ matrix.variant }}-bios.raw.zst"
+          REPO="ghcr.io/${{ github.repository_owner }}/cache22-${{ matrix.variant }}-dd"
+          DATE=$(date -u +%Y-%m-%d)
+          echo "$ORAS_PASS" | oras login ghcr.io -u "$ORAS_USER" --password-stdin
+          # Single-layer OCI artifact: the layer IS the disk image, so a
+          # client can stream the one blob straight to disk.
+          oras push "${REPO}:rolling" \
+              --artifact-type application/vnd.cache22.diskimage.v1 \
+              --annotation "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+              "${IMG}:application/octet-stream"
+          oras tag "${REPO}:rolling" "iso-${DATE}"
+          echo "Pushed ${REPO}:rolling (and :iso-${DATE})"
+          echo "  sha256: $(sha256sum "$IMG" | awk '{print $1}')"
