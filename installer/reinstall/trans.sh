@@ -2797,13 +2797,34 @@ dd_raw_with_extract() {
             -H "Accept: application/vnd.oci.image.manifest.v1+json" \
             "https://ghcr.io/v2/${c22_repo}/manifests/${c22_tag}" \
             | jq -r '.layers[] | select(.mediaType|test("octet-stream|zstd")) | .digest' | head -1)
-        info "cache22: streaming ${c22_repo} to /dev/$xda (progress = download, throttled by disk write)"
-        # -fL --progress-bar (not -s): show a progress bar on the blob
-        # fetch. The pipe back-pressures curl to the disk write speed, so
-        # the bar reflects real end-to-end progress.
-        curl -fL --progress-bar -H "Authorization: Bearer ${c22_tok}" \
-            "https://ghcr.io/v2/${c22_repo}/blobs/${c22_dig}" \
-            | pipe_extract >/dev/$xda || error_and_exit "cache22: ghcr stream failed"
+        # Stream the blob to disk with retries: flaky links (and registry
+        # CDN / token-window resets) can drop a multi-GB transfer partway.
+        # dd overwrites from offset 0 each attempt, so a full restart is
+        # safe. Refresh the token every attempt in case it expired; curl
+        # also retries connection-level errors within an attempt and aborts
+        # a stalled transfer (<1 KB/s for 30s) so the retry kicks in.
+        c22_ok=
+        c22_try=0
+        while [ "$c22_try" -lt 5 ]; do
+            c22_try=$((c22_try + 1))
+            info "cache22: streaming ${c22_repo} -> /dev/$xda (attempt ${c22_try}/5; bar = download, throttled by disk write)"
+            # No curl --retry here: it would re-stream from byte 0 into the
+            # same pipe. The outer loop does the retrying (each attempt
+            # overwrites the device from offset 0). --speed-limit/--speed-time
+            # aborts a stalled transfer fast so the loop kicks in.
+            if curl -fL --progress-bar \
+                    --speed-limit 1024 --speed-time 30 \
+                    -H "Authorization: Bearer ${c22_tok}" \
+                    "https://ghcr.io/v2/${c22_repo}/blobs/${c22_dig}" \
+                    | pipe_extract >/dev/$xda; then
+                c22_ok=1
+                break
+            fi
+            warn "cache22: stream attempt ${c22_try} failed; refreshing token and retrying"
+            sleep 3
+            c22_tok=$(curl -fsSL "https://ghcr.io/token?service=ghcr.io&scope=repository:${c22_repo}:pull" | jq -r '.token')
+        done
+        [ -n "$c22_ok" ] || error_and_exit "cache22: ghcr stream failed after ${c22_try} attempts"
         sync
         info "cache22: image written to /dev/$xda"
         return
