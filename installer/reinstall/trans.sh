@@ -4248,6 +4248,20 @@ cache22_inject_ssh_key() {
     chmod 0600 /c22home/cache/.ssh/authorized_keys
     chown -R 1000:1000 /c22home/cache/.ssh
     umount /c22home
+
+    # The image ships the cache password expired (for the console flow's
+    # forced change). An expired password forces a change even on SSH key
+    # login via PAM, which would break headless key access. Since a key is
+    # being injected, clear the expiry so key login is clean.
+    mkdir -p /c22root
+    if mount -o subvol=root "$c22_root" /c22root; then
+        c22_etc=$(find /c22root/ostree/deploy -mindepth 3 -maxdepth 3 -type d -name '*.0' ! -path '*/backing/*' 2>/dev/null | head -1)/etc
+        if [ -f "$c22_etc/shadow" ]; then
+            c22_days=$(( $(date +%s) / 86400 ))
+            sed -i "s/^\(cache:[^:]*\):0:/\1:${c22_days}:/" "$c22_etc/shadow"
+        fi
+        umount /c22root
+    fi
     info "cache22: SSH key injected for user 'cache'"
 }
 
