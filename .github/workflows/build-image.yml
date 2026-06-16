@@ -637,6 +637,11 @@ jobs:
   build-dd:
     name: DD image (${{ matrix.variant }})
     needs: build
+    # Run as long as the workflow wasn't cancelled. `needs: build` waits for
+    # the whole build matrix, but DD only needs the server images; don't let
+    # an unrelated desktop-variant failure skip it. Each leg pulls its own
+    # server image from ghcr, so it no-ops/fails only if that one is missing.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
