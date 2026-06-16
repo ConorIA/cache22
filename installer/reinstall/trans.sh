@@ -2797,12 +2797,18 @@ dd_raw_with_extract() {
             -H "Accept: application/vnd.oci.image.manifest.v1+json" \
             "https://ghcr.io/v2/${c22_repo}/manifests/${c22_tag}" \
             | jq -r '.layers[] | select(.mediaType|test("octet-stream|zstd")) | .digest' | head -1)
-        # Stream the blob to disk with retries: flaky links (and registry
-        # CDN / token-window resets) can drop a multi-GB transfer partway.
-        # dd overwrites from offset 0 each attempt, so a full restart is
-        # safe. Refresh the token every attempt in case it expired; curl
-        # also retries connection-level errors within an attempt and aborts
-        # a stalled transfer (<1 KB/s for 30s) so the retry kicks in.
+        # Low-RAM safety (e.g. a 1 GB VPS): cap dirty page cache so writing
+        # the ~11 GB decompressed image flushes steadily. Otherwise dirty
+        # pages pile up, memory pressure stalls the write, the pipe back-
+        # pressures curl, the idle TCP connection gets reset by the CDN, and
+        # zstd reports a premature end. Steady flushing avoids the stall.
+        sysctl -w vm.dirty_bytes=67108864 vm.dirty_background_bytes=33554432 >/dev/null 2>&1 || true
+
+        # Stream the blob to disk with retries: a dropped multi-GB transfer
+        # (stall-induced reset, registry CDN / token-window expiry) no longer
+        # kills the install. Each attempt overwrites the device from offset 0
+        # (safe full restart) and refreshes the token; --speed-time aborts a
+        # stalled transfer so the retry kicks in.
         c22_ok=
         c22_try=0
         while [ "$c22_try" -lt 5 ]; do
