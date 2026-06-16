@@ -7,7 +7,7 @@
 [![Lines of Code](https://aschey.tech/tokei/github/bin456789/reinstall?category=code&label=Lines%20of%20Code&style=flat-square)](https://github.com/aschey/vercel-tokei)
 <!-- [![Lines of Code](https://tokei.rs/b1/github/bin456789/reinstall?category=code&label=Lines%20of%20Code&style=flat-square)](https://github.com/XAMPPRocky/tokei_rs) -->
 
-One-Click system reinstallation script for VPS [中文](README.md)
+One-Click system reinstallation script for VPS [](README.md)
 
 ## Introduction
 

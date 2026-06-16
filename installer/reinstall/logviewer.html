@@ -66,11 +66,11 @@
         const scrollToBottomButton = document.getElementById('scroll-to-bottom');
         let shouldScrollToBottom = true;
 
-        // 缓冲区相关
+        // 
         let messageBuffer = [];
         let flushScheduled = false;
-        const BUFFER_FLUSH_INTERVAL = 100; // 毫秒
-        const BUFFER_MAX_SIZE = 50; // 最大缓冲消息数
+        const BUFFER_FLUSH_INTERVAL = 100; // 
+        const BUFFER_MAX_SIZE = 50; // 
 
         scrollToBottomButton.addEventListener('click', () => {
             logContainer.scrollTop = logContainer.scrollHeight;
@@ -87,18 +87,18 @@
             shouldScrollToBottom = isAtBottom;
         });
 
-        // 刷新缓冲区到 DOM
+        //  DOM
         function flushBuffer() {
             if (messageBuffer.length === 0) {
                 flushScheduled = false;
                 return;
             }
 
-            // 批量更新文本内容
+            // 
             const batchText = messageBuffer.join('\n');
             logContainer.textContent += '\n' + batchText;
 
-            // 检查状态变化（优先级：error > done > start）
+            // error > done > start
             if (batchText.includes('***** ERROR *****')) {
                 document.body.className = 'error';
             } else if (batchText.includes('***** DONE *****')) {
@@ -107,17 +107,17 @@
                 document.body.className = '';
             }
 
-            // 自动滚动
+            // 
             if (shouldScrollToBottom) {
                 logContainer.scrollTop = logContainer.scrollHeight;
             }
 
-            // 清空缓冲区
+            // 
             messageBuffer = [];
             flushScheduled = false;
         }
 
-        // 调度刷新
+        // 
         function scheduleFlush() {
             if (!flushScheduled) {
                 flushScheduled = true;
@@ -127,14 +127,14 @@
             }
         }
 
-        // 添加消息到缓冲区
+        // 
         function bufferMessage(message) {
             messageBuffer.push(message);
 
-            // 如果缓冲区满了，立即刷新
+            // 
             if (messageBuffer.length >= BUFFER_MAX_SIZE) {
                 if (flushScheduled) {
-                    // 取消之前的调度，立即刷新
+                    // 
                     flushScheduled = false;
                 }
                 flushBuffer();

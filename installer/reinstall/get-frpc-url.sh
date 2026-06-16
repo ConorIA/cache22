@@ -1,8 +1,8 @@
 #!/bin/ash
 # shellcheck shell=dash
-# trans.sh/debian.cfg 共用此脚本
+# trans.sh/debian.cfg 
 
-# debian 9 不支持 set -E
+# debian 9  set -E
 set -e
 
 is_in_china() {
@@ -14,19 +14,19 @@ is_ipv6_only() {
 }
 
 get_frpc_url() {
-    # 传入 windows 或者 linux
+    #  windows  linux
     local os_type=$1
     local nt_ver=$2
     local os_bit=${3:-64}
 
     get_old_version() {
-        # 脚本不支持安装 32 位 linux 系统，因此不用管
+        #  32  linux 
         if [ "$os_type" = windows ]; then
-            # 最早支持 toml 的版本是 0.52.0
+            #  toml  0.52.0
 
-            # 最后支持 vista 的版本是 0.29.0
-            # 最后支持 32 位的版本是 0.51.3
-            # 最后支持 win7 的版本是 0.54.0
+            #  vista  0.29.0
+            #  32  0.51.3
+            #  win7  0.54.0
             case "$os_bit" in
             32)
                 case "$nt_ver" in
@@ -38,7 +38,7 @@ get_frpc_url() {
                 case "$nt_ver" in
                 6.0) echo 0.29.0 ;; # vista
                 6.1) echo 0.54.0 ;; # win7
-                # 目前最新版本 v0.66.0 依然可以在 win8 上运行
+                #  v0.66.0  win8 
                 esac
                 ;;
             esac
@@ -53,18 +53,18 @@ get_frpc_url() {
         if is_need_old_version; then
             get_old_version
         else
-            # debian 11 initrd 没有 xargs awk
-            # debian 12 initrd 没有 xargs
-            # github 不支持 ipv6
+            # debian 11 initrd  xargs awk
+            # debian 12 initrd  xargs
+            # github  ipv6
             if is_in_china || is_ipv6_only; then
                 wget -O- https://mirrors.nju.edu.cn/github-release/fatedier/frp/LatestRelease/frp_sha256_checksums.txt |
                     grep -m1 frp_ | cut -d_ -f2
             else
-                # https://api.github.com/repos/fatedier/frp/releases/latest 有请求次数限制
+                # https://api.github.com/repos/fatedier/frp/releases/latest 
 
                 # root@localhost:~# wget --spider -S https://github.com/fatedier/frp/releases/latest 2>&1 | grep Location:
                 #   Location: https://github.com/fatedier/frp/releases/tag/v0.62.0
-                # Location: https://github.com/fatedier/frp/releases/tag/v0.62.0 [following]  # 原版 wget 多了这行
+                # Location: https://github.com/fatedier/frp/releases/tag/v0.62.0 [following]  #  wget 
 
                 wget --spider -S https://github.com/fatedier/frp/releases/latest 2>&1 |
                     grep -m1 '^  Location:' | sed 's,.*/tag/v,,'
@@ -85,10 +85,10 @@ get_frpc_url() {
     )
 
     mirror=$(
-        # nju 没有 win7 用的旧版
-        # github 不支持 ipv6
-        # daocloud 加速不支持 ipv6
-        # jsdelivr 不支持 github releases 文件
+        # nju  win7 
+        # github  ipv6
+        # daocloud  ipv6
+        # jsdelivr  github releases 
         if is_ipv6_only; then
             if is_need_old_version; then
                 echo 'NOT_SUPPORT' >&2

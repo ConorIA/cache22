@@ -1,9 +1,9 @@
 #!/bin/ash
 # shellcheck shell=dash
-# alpine/debian initrd 共用此脚本
+# alpine/debian initrd 
 
-# accept_ra 接收 RA + 自动配置网关
-# autoconf  自动配置地址，依赖 accept_ra
+# accept_ra  RA + 
+# autoconf   accept_ra
 
 mac_addr=$1
 ipv4_addr=$2
@@ -17,29 +17,29 @@ DHCP_TIMEOUT=15
 DNS_FILE_TIMEOUT=5
 TEST_TIMEOUT=10
 
-# 检测是否有网络是通过检测这些 IP 的端口是否开放
-# 因为 debian initrd 没有 nslookup
-# 改成 generate_204？但检测网络时可能 resolv.conf 为空
+#  IP 
+#  debian initrd  nslookup
+#  generate_204 resolv.conf 
 # HTTP 80
 # HTTPS/DOH 443
 # DOT 853
 if $is_in_china; then
     ipv4_dns1='223.5.5.5'
-    ipv4_dns2='119.29.29.29' # 不开放 853
+    ipv4_dns2='119.29.29.29' #  853
     ipv6_dns1='2400:3200::1'
-    ipv6_dns2='2402:4e00::' # 不开放 853
+    ipv6_dns2='2402:4e00::' #  853
 else
     ipv4_dns1='1.1.1.1'
-    ipv4_dns2='8.8.8.8' # 不开放 80
+    ipv4_dns2='8.8.8.8' #  80
     ipv6_dns1='2606:4700:4700::1111'
-    ipv6_dns2='2001:4860:4860::8888' # 不开放 80
+    ipv6_dns2='2001:4860:4860::8888' #  80
 fi
 
-# 找到主网卡
-# debian 11 initrd 没有 xargs awk
-# debian 12 initrd 没有 xargs
+# 
+# debian 11 initrd  xargs awk
+# debian 12 initrd  xargs
 get_ethx() {
-    # 过滤 azure vf (带 master ethx)
+    #  azure vf ( master ethx)
     # 2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP qlen 1000\    link/ether 60:45:bd:21:8a:51 brd ff:ff:ff:ff:ff:ff
     # 3: eth1: <BROADCAST,MULTICAST,UP,LOWER_UP800> mtu 1500 qdisc mq master eth0 state UP qlen 1000\    link/ether 60:45:bd:21:8a:51 brd ff:ff:ff
     if false; then
@@ -50,20 +50,20 @@ get_ethx() {
 }
 
 get_ipv4_gateway() {
-    # debian 11 initrd 没有 xargs awk
-    # debian 12 initrd 没有 xargs
+    # debian 11 initrd  xargs awk
+    # debian 12 initrd  xargs
     ip -4 route show default dev "$ethx" | head -1 | cut -d ' ' -f3
 }
 
 get_ipv6_gateway() {
-    # debian 11 initrd 没有 xargs awk
-    # debian 12 initrd 没有 xargs
+    # debian 11 initrd  xargs awk
+    # debian 12 initrd  xargs
     ip -6 route show default dev "$ethx" | head -1 | cut -d ' ' -f3
 }
 
 get_first_ipv4_addr() {
-    # debian 11 initrd 没有 xargs awk
-    # debian 12 initrd 没有 xargs
+    # debian 11 initrd  xargs awk
+    # debian 12 initrd  xargs
     if false; then
         ip -4 -o addr show scope global dev "$ethx" | head -1 | awk '{print $4}'
     else
@@ -72,8 +72,8 @@ get_first_ipv4_addr() {
 }
 
 get_first_ipv4_gateway() {
-    # debian 11 initrd 没有 xargs awk
-    # debian 12 initrd 没有 xargs
+    # debian 11 initrd  xargs awk
+    # debian 12 initrd  xargs
     if false; then
         ip -4 route show default dev "$ethx" | head -1 | awk '{print $3}'
     else
@@ -86,8 +86,8 @@ remove_netmask() {
 }
 
 get_first_ipv6_addr() {
-    # debian 11 initrd 没有 xargs awk
-    # debian 12 initrd 没有 xargs
+    # debian 11 initrd  xargs awk
+    # debian 12 initrd  xargs
     if false; then
         ip -6 -o addr show scope global dev "$ethx" | head -1 | awk '{print $4}'
     else
@@ -96,8 +96,8 @@ get_first_ipv6_addr() {
 }
 
 get_first_ipv6_gateway() {
-    # debian 11 initrd 没有 xargs awk
-    # debian 12 initrd 没有 xargs
+    # debian 11 initrd  xargs awk
+    # debian 12 initrd  xargs
     if false; then
         ip -6 route show default dev "$ethx" | head -1 | awk '{print $3}'
     else
@@ -144,8 +144,8 @@ add_missing_ipv4_config() {
         fi
 
         if ! is_have_ipv4_gateway; then
-            # 如果 dhcp 无法设置onlink网关，那么在这里设置
-            # debian 9 ipv6 不能识别 onlink，但 ipv4 能识别 onlink
+            #  dhcp onlink
+            # debian 9 ipv6  onlink ipv4  onlink
             if true; then
                 ip -4 route add "$ipv4_gateway" dev "$ethx"
                 ip -4 route add default via "$ipv4_gateway" dev "$ethx"
@@ -163,8 +163,8 @@ add_missing_ipv6_config() {
         fi
 
         if ! is_have_ipv6_gateway; then
-            # 如果 dhcp 无法设置onlink网关，那么在这里设置
-            # debian 9 ipv6 不能识别 onlink
+            #  dhcp onlink
+            # debian 9 ipv6  onlink
             if true; then
                 ip -6 route add "$ipv6_gateway" dev "$ethx"
                 ip -6 route add default via "$ipv6_gateway" dev "$ethx"
@@ -173,7 +173,7 @@ add_missing_ipv6_config() {
             fi
         fi
 
-        # 添加额外的 IPv6 地址（逗号分隔）
+        #  IPv6 
         if [ -n "$ipv6_extra_addrs" ]; then
             printf '%s\n' "$ipv6_extra_addrs" | tr ',' '\n' | while IFS= read -r addr; do
                 if [ -n "$addr" ]; then
@@ -192,29 +192,29 @@ is_need_test_ipv6() {
     is_have_ipv6 && ! $ipv6_has_internet
 }
 
-# 测试方法：
-# ping   有的机器禁止
-# nc     测试 dot doh 端口是否开启
-# wget   测试下载
+# 
+# ping   
+# nc      dot doh 
+# wget   
 
-# initrd 里面的软件版本，是否支持指定源IP/网卡
-# 软件     nc  wget  nslookup
-# debian9  ×    √   没有此软件
+# initrd IP/
+#      nc  wget  nslookup
+# debian9  ×    √   
 # alpine   √    ×      ×
 
 test_by_wget() {
     src=$1
     dst=$2
 
-    # ipv6 需要添加 []
+    # ipv6  []
     if echo "$dst" | grep -q ':'; then
         url="https://[$dst]"
     else
         url="https://$dst"
     fi
 
-    # tcp 443 通了就算成功，不管 http 是不是 404
-    # grep -m1 快速返回
+    # tcp 443  http  404
+    # grep -m1 
     wget -T "$TEST_TIMEOUT" \
         --bind-address="$src" \
         --no-check-certificate \
@@ -228,7 +228,7 @@ test_by_nc() {
     src=$1
     dst=$2
 
-    # tcp 443 通了就算成功
+    # tcp 443 
     nc -z -v \
         -w "$TEST_TIMEOUT" \
         -s "$src" \
@@ -274,7 +274,7 @@ test_internet() {
 flush_ipv4_config() {
     ip -4 addr flush scope global dev "$ethx"
     ip -4 route flush dev "$ethx"
-    # DHCP 获取的 IP 不是重装前的 IP 时，一并删除 DHCP 获取的 DNS，以防 DNS 无效
+    # DHCP  IP  IP  DHCP  DNS DNS 
     sed -i "/\./d" /etc/resolv.conf
 }
 
@@ -291,7 +291,7 @@ flush_ipv6_config() {
     fi
     ip -6 addr flush scope global dev "$ethx"
     ip -6 route flush dev "$ethx"
-    # DHCP 获取的 IP 不是重装前的 IP 时，一并删除 DHCP 获取的 DNS，以防 DNS 无效
+    # DHCP  IP  IP  DHCP  DNS DNS 
     sed -i "/:/d" /etc/resolv.conf
 }
 
@@ -309,14 +309,14 @@ fi
 
 echo "Configuring $ethx ($mac_addr)..."
 
-# 不开启 lo 则 frp 无法连接 127.0.0.1 22
+#  lo  frp  127.0.0.1 22
 ip link set dev lo up
 
-# 开启 ethx
+#  ethx
 ip link set dev "$ethx" up
 sleep 1
 
-# 开启 dhcpv4/v6
+#  dhcpv4/v6
 # debian / kali
 if [ -f /usr/share/debconf/confmodule ]; then
     # shellcheck source=/dev/null
@@ -325,7 +325,7 @@ if [ -f /usr/share/debconf/confmodule ]; then
     db_progress STEP 1
 
     # dhcpv4
-    # 无需等待写入 dns，在 dhcpv6 等待
+    #  dns dhcpv6 
     db_progress INFO netcfg/dhcp_progress
     udhcpc -i "$ethx" -f -q -n || true
     db_progress STEP 1
@@ -345,25 +345,25 @@ id-assoc na 0 {
 };
 EOF
     dhcp6c -c /var/lib/netcfg/dhcp6c.conf "$ethx" || true
-    sleep $DHCP_TIMEOUT # 等待获取 ip 和写入 dns
+    sleep $DHCP_TIMEOUT #  ip  dns
     # kill-all-dhcp
     kill -9 "$(cat /var/run/dhcp6c.pid)" || true
     db_progress STEP 1
 
-    # 静态 + 检测网络提示
+    #  + 
     db_subst netcfg/link_detect_progress interface "$ethx"
     db_progress INFO netcfg/link_detect_progress
 else
     # alpine
-    # h3c 移动云电脑使用 udhcpc 会重复提示 sending select，因此添加 timeout 强制结束进程
-    # dhcpcd 会配置租约时间，过期会移除 IP，但我们的没有在后台运行 dhcpcd ，因此用 udhcpc
+    # h3c  udhcpc  sending select timeout 
+    # dhcpcd  IP dhcpcd  udhcpc
     method=udhcpc
 
     case "$method" in
     udhcpc)
         timeout $DHCP_TIMEOUT udhcpc -i "$ethx" -f -q -n || true
         timeout $DHCP_TIMEOUT udhcpc6 -i "$ethx" -f -q -n || true
-        sleep $DNS_FILE_TIMEOUT # 好像不用等待写入 dns，但是以防万一
+        sleep $DNS_FILE_TIMEOUT #  dns
         ;;
     dhcpcd)
         # https://gitlab.alpinelinux.org/alpine/aports/-/blob/master/main/dhcpcd/dhcpcd.pre-install
@@ -375,45 +375,45 @@ else
             -g dhcpcd \
             dhcpcd
 
-        # --noipv4ll 禁止生成 169.254.x.x
+        # --noipv4ll  169.254.x.x
         if false; then
-            # 等待 DHCP 全过程
+            #  DHCP 
             timeout $DHCP_TIMEOUT \
                 dhcpcd --persistent --noipv4ll --nobackground "$ethx"
         else
-            # 等待 DNS
-            dhcpcd --persistent --noipv4ll "$ethx" # 获取到 IP 后立即切换到后台
-            sleep $DNS_FILE_TIMEOUT                # 需要等待写入 dns
-            dhcpcd -x "$ethx"                      # 终止
+            #  DNS
+            dhcpcd --persistent --noipv4ll "$ethx" #  IP 
+            sleep $DNS_FILE_TIMEOUT                #  dns
+            dhcpcd -x "$ethx"                      # 
         fi
-        # autoconf 和 accept_ra 会被 dhcpcd 自动关闭，因此需要重新打开
-        # 如果没重新打开，重新运行 dhcpcd 命令依然可以正常生成 slaac 地址和路由
+        # autoconf  accept_ra  dhcpcd 
+        #  dhcpcd  slaac 
         sysctl -w "net.ipv6.conf.$ethx.autoconf=1"
         sysctl -w "net.ipv6.conf.$ethx.accept_ra=1"
         ;;
     esac
 fi
 
-# 等待slaac
-# 有ipv6地址就跳过，不管是slaac或者dhcpv6
-# 因为会在trans里判断
-# 这里等待5秒就够了，因为之前尝试获取dhcp6也用了一段时间
+# slaac
+# ipv6slaacdhcpv6
+# trans
+# 5dhcp6
 for i in $(seq 5 -1 0); do
     is_have_ipv6 && break
     echo "waiting slaac for ${i}s"
     sleep 1
 done
 
-# 记录是否有动态地址
-# 由于还没设置静态ip，所以有条目表示有动态地址
+# 
+# ip
 is_have_ipv4_addr && dhcpv4=true || dhcpv4=false
 is_have_ipv6_addr && dhcpv6_or_slaac=true || dhcpv6_or_slaac=false
 is_have_ipv6_gateway && ra_has_gateway=true || ra_has_gateway=false
 
-# 如果自动获取的 IP 不是重装前的，则改成静态，使用之前的 IP
-# 只比较 IP，不比较掩码/网关，因为
-# 1. 假设掩码/网关导致无法上网，后面也会检测到并改成静态
-# 2. openSUSE wicked dhcpv6 是 64 位掩码，aws lightsail 模板上的也是，而其它 dhcpv6 软件都是 128 位掩码
+#  IP  IP
+#  IP/
+# 1. /
+# 2. openSUSE wicked dhcpv6  64 aws lightsail  dhcpv6  128 
 if $dhcpv4 && [ -n "$ipv4_addr" ] && [ -n "$ipv4_gateway" ] &&
     ! [ "$(echo "$ipv4_addr" | cut -d/ -f1)" = "$(get_first_ipv4_addr | cut -d/ -f1)" ]; then
     echo "IPv4 address obtained from DHCP is different from old system."
@@ -428,18 +428,18 @@ if $dhcpv6_or_slaac && [ -n "$ipv6_addr" ] && [ -n "$ipv6_gateway" ] &&
     flush_ipv6_config
 fi
 
-# 设置静态地址，或者设置 debian 9 udhcpc 无法设置的网关
+#  debian 9 udhcpc 
 add_missing_ipv4_config
 add_missing_ipv6_config
 
-# 检查 ipv4/ipv6 是否连接联网
+#  ipv4/ipv6 
 ipv4_has_internet=false
 ipv6_has_internet=false
 test_internet
 
-# 如果无法上网，并且自动获取的 掩码/网关 不是重装前的，则改成静态
-# ip_addr 包括 IP/掩码，所以可以用来判断掩码是否不同
-# IP 不同的情况在前面已经改成静态了
+#  / 
+# ip_addr  IP/
+# IP 
 if ! $ipv4_has_internet &&
     $dhcpv4 && [ -n "$ipv4_addr" ] && [ -n "$ipv4_gateway" ] &&
     ! { [ "$ipv4_addr" = "$(get_first_ipv4_addr)" ] && [ "$ipv4_gateway" = "$(get_first_ipv4_gateway)" ]; }; then
@@ -449,7 +449,7 @@ if ! $ipv4_has_internet &&
     add_missing_ipv4_config
     test_internet
 fi
-# 有可能是静态 IPv6 但能从 RA 获取到网关，因此加上 || $ra_has_gateway
+#  IPv6  RA  || $ra_has_gateway
 if ! $ipv6_has_internet &&
     { $dhcpv6_or_slaac || $ra_has_gateway; } &&
     [ -n "$ipv6_addr" ] && [ -n "$ipv6_gateway" ] &&
@@ -462,14 +462,14 @@ if ! $ipv6_has_internet &&
     test_internet
 fi
 
-# 要删除不联网协议的ip，因为
-# 1 甲骨文云管理面板添加ipv6地址然后取消
-#   依然会分配ipv6地址，但ipv6没网络
-#   此时alpine只会用ipv6下载apk，而不用会ipv4下载
-# 2 有ipv4地址但没有ipv4网关的情况(vultr $2.5 ipv6 only)，aria2会用ipv4下载
+# ip
+# 1 ipv6
+#   ipv6ipv6
+#   alpineipv6apkipv4
+# 2 ipv4ipv4(vultr $2.5 ipv6 only)aria2ipv4
 
-# 假设 ipv4 ipv6 在不同网卡，ipv4 能上网但 ipv6 不能上网，这时也要删除 ipv6
-# 不能用 ipv4_has_internet && ! ipv6_has_internet 判断，因为它判断的是同一个网卡
+#  ipv4 ipv6 ipv4  ipv6  ipv6
+#  ipv4_has_internet && ! ipv6_has_internet 
 if ! $ipv4_has_internet; then
     if $dhcpv4; then
         should_disable_dhcpv4=true
@@ -477,8 +477,8 @@ if ! $ipv4_has_internet; then
     flush_ipv4_config
 fi
 if ! $ipv6_has_internet; then
-    # 防止删除 IPv6 后再次通过 SLAAC 获得
-    # 不用判断 || $ra_has_gateway ，因为没有 IPv6 地址但有 IPv6 网关时，不会出现下载问题
+    #  IPv6  SLAAC 
+    #  || $ra_has_gateway  IPv6  IPv6 
     if $dhcpv6_or_slaac; then
         should_disable_accept_ra=true
         should_disable_autoconf=true
@@ -486,12 +486,12 @@ if ! $ipv6_has_internet; then
     flush_ipv6_config
 fi
 
-# 如果联网了，但没获取到默认 DNS，则添加我们的 DNS
+#  DNS DNS
 
-# 有一种情况是，多网卡，且能上网的网卡先完成了这个脚本，不能上网的网卡后完成
-# 无法上网的网卡通过 flush_ipv4_config 删除了不能上网的 IP 和 dns
-# （原计划是删除无法上网的网卡 dhcp4 获取的 dns，但实际上无法区分）
-# 因此这里直接添加 dns，不判断是否联网
+# 
+#  flush_ipv4_config  IP  dns
+#  dhcp4  dns
+#  dns
 if ! is_have_ipv4_dns; then
     echo "nameserver $ipv4_dns1" >>/etc/resolv.conf
     echo "nameserver $ipv4_dns2" >>/etc/resolv.conf
@@ -501,7 +501,7 @@ if ! is_have_ipv6_dns; then
     echo "nameserver $ipv6_dns2" >>/etc/resolv.conf
 fi
 
-# 传参给 trans.start
+#  trans.start
 netconf="/dev/netconf/$ethx"
 mkdir -p "$netconf"
 $dhcpv4 && echo 1 >"$netconf/dhcpv4" || echo 0 >"$netconf/dhcpv4"

@@ -2,13 +2,13 @@
 sed -i -E '/^\.{3}$/d' /autoinstall.yaml
 echo 'storage:' >>/autoinstall.yaml
 
-# 禁用 swap
+#  swap
 cat <<EOF >>/autoinstall.yaml
   swap:
     size: 0
 EOF
 
-# 是用 size 寻找分区，number 没什么用
+#  size number 
 # https://curtin.readthedocs.io/en/latest/topics/storage.html
 size_os=$(lsblk -bn -o SIZE /dev/disk/by-label/os)
 
@@ -25,7 +25,7 @@ if parted "/dev/$xda" print | grep '^Partition Table' | grep gpt; then
       preserve: true
       type: disk
       id: disk-xda
-    # efi 分区
+    # efi 
     - device: disk-xda
       size: $size_efi
       number: 1
@@ -37,7 +37,7 @@ if parted "/dev/$xda" print | grep '^Partition Table' | grep gpt; then
       volume: partition-efi
       type: format
       id: format-efi
-    # os 分区
+    # os 
     - device: disk-xda
       size: $size_os
       number: 2
@@ -70,14 +70,14 @@ EOF
       grub_device: true
       type: disk
       id: disk-xda
-    # biosboot 分区
+    # biosboot 
     - device: disk-xda
       size: $size_biosboot
       number: 1
       preserve: true
       type: partition
       id: partition-biosboot
-    # os 分区
+    # os 
     - device: disk-xda
       size: $size_os
       number: 2
@@ -106,7 +106,7 @@ else
       grub_device: true
       type: disk
       id: disk-xda
-    # os 分区
+    # os 
     - device: disk-xda
       size: $size_os
       number: 1

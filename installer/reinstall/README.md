@@ -7,50 +7,50 @@
 [![Lines of Code](https://aschey.tech/tokei/github/bin456789/reinstall?category=code&label=Lines%20of%20Code&style=flat-square)](https://github.com/aschey/vercel-tokei)
 <!-- [![Lines of Code](https://tokei.rs/b1/github/bin456789/reinstall?category=code&label=Lines%20of%20Code&style=flat-square)](https://github.com/XAMPPRocky/tokei_rs) -->
 
-一键 VPS 系统重装脚本 [English](README.en.md)
+ VPS  [English](README.en.md)
 
-## 介绍
+## 
 
-- 一键重装到 Linux，支持 19 种常见发行版
-- 一键重装到 Windows，使用官方原版 ISO 而非自制镜像，脚本支持自动查找 ISO 链接、自动安装 `VirtIO` 等公有云驱动
-- 支持任意方向重装，即 `Linux to Linux`、`Linux to Windows`、`Windows to Windows`、`Windows to Linux`
-- 自动设置 IP，智能设置动静态，支持 `/32`、`/128`、`网关不在子网范围内`、`纯 IPv6`、`IPv4/IPv6 在不同的网卡`
-- 专门适配低配小鸡，比官方 netboot 需要更少的内存
-- 全程用分区表 ID 识别硬盘，确保不会写错硬盘
-- 支持 BIOS、EFI 引导，支持 ARM 服务器
-- 不含自制包，所有资源均实时从镜像源获得
+-  Linux 19 
+-  Windows ISO  ISO  `VirtIO` 
+-  `Linux to Linux``Linux to Windows``Windows to Windows``Windows to Linux`
+-  IP `/32``/128```` IPv6``IPv4/IPv6 `
+-  netboot 
+-  ID 
+-  BIOSEFI  ARM 
+- 
 
-请我喝奶茶：
+
 [![Donate](https://img.shields.io/badge/Donate-30363D?style=for-the-badge&logo=GitHub-Sponsors&logoColor=#EA4AAA)](https://github.com/sponsors/bin456789)
 
 [![Sponsors](https://raw.githubusercontent.com/bin456789/sponsors/refs/heads/master/sponsors.svg)](https://github.com/sponsors/bin456789)
 
-### 反馈
+### 
 
 [![GitHub Issues](https://img.shields.io/badge/GitHub-%23121011.svg?style=for-the-badge&logo=github&logoColor=white)](https://github.com/bin456789/reinstall/issues)
 [![Telegram Group](https://img.shields.io/badge/Telegram-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/reinstall_os)
 
-## 快速开始
+## 
 
-- [下载](#下载当前系统是--linux)
-- [功能 1. 一键重装到 Linux](#功能-1-安装--linux)
-- [功能 2. 一键 DD Raw 镜像到硬盘](#功能-2-dd-raw-镜像到硬盘)
-- [功能 3. 一键引导到 Alpine Live OS 内存系统](#功能-3-重启到--alpine-live-os内存系统)
-- [功能 4. 一键引导到 netboot.xyz](#功能-4-重启到--netbootxyz)
-- [功能 5. 一键重装到 Windows](#功能-5-安装--windows-iso)
-- [取消重装](#取消重装)
+- [](#--linux)
+- [ 1.  Linux](#-1---linux)
+- [ 2.  DD Raw ](#-2-dd-raw-)
+- [ 3.  Alpine Live OS ](#-3---alpine-live-os)
+- [ 4.  netboot.xyz](#-4---netbootxyz)
+- [ 5.  Windows](#-5---windows-iso)
+- [](#)
 
-## 系统要求
+## 
 
-原系统可以是表格中的任意系统
 
-目标系统的配置要求如下：
 
-| 系统                                                                                                                                                                                                                                                                                                                                                                   | 版本                                  | 内存      | 硬盘         |
+
+
+|                                                                                                                                                                                                                                                                                                                                                                    |                                   |       |          |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- | --------- | ------------ |
 | <img width="16" height="16" src="https://www.alpinelinux.org/alpine-logo.ico" /> Alpine                                                                                                                                                                                                                                                                                | 3.21, 3.22, 3.23, 3.24                | 256 MB    | 1 GB         |
 | <img width="16" height="16" src="https://www.debian.org/favicon.ico" /> Debian                                                                                                                                                                                                                                                                                         | 9, 10, 11, 12, 13                     | 256 MB    | 1 ~ 1.5 GB ^ |
-| <img width="16" height="16" src="https://github.com/bin456789/reinstall/assets/7548515/f74b3d5b-085f-4df3-bcc9-8a9bd80bb16d" /> Kali                                                                                                                                                                                                                                   | 滚动                                  | 256 MB    | 1 ~ 1.5 GB ^ |
+| <img width="16" height="16" src="https://github.com/bin456789/reinstall/assets/7548515/f74b3d5b-085f-4df3-bcc9-8a9bd80bb16d" /> Kali                                                                                                                                                                                                                                   |                                   | 256 MB    | 1 ~ 1.5 GB ^ |
 | <img width="16" height="16" src="https://documentation.ubuntu.com/server/_static/favicon.png" /> Ubuntu                                                                                                                                                                                                                                                                | 18.04 LTS - 26.04 LTS                 | 512 MB \* | 2 GB         |
 | <img width="16" height="16" src="https://img.alicdn.com/imgextra/i1/O1CN01oJnJZg1yK4RzI4Rx2_!!6000000006559-2-tps-118-118.png" /> Anolis                                                                                                                                                                                                                               | 7, 8, 23                              | 512 MB \* | 5 GB         |
 | <img width="16" height="16" src="https://www.redhat.com/favicon.ico" /> RHEL &nbsp;<img width="16" height="16" src="https://almalinux.org/fav/favicon.ico" /> AlmaLinux &nbsp;<img width="16" height="16" src="https://rockylinux.org/favicon.png" /> Rocky &nbsp;<img width="16" height="16" src="https://www.oracle.com/asset/web/favicons/favicon-32.png" /> Oracle | 8, 9, 10                              | 512 MB \* | 5 GB         |
@@ -58,102 +58,102 @@
 | <img width="16" height="16" src="https://www.centos.org/assets/icons/favicon.svg" /> CentOS Stream                                                                                                                                                                                                                                                                     | 9, 10                                 | 512 MB \* | 5 GB         |
 | <img width="16" height="16" src="https://fedoraproject.org/favicon.ico" /> Fedora                                                                                                                                                                                                                                                                                      | 43, 44                                | 512 MB \* | 5 GB         |
 | <img width="16" height="16" src="https://www.openeuler.org/favicon.ico" /> openEuler                                                                                                                                                                                                                                                                                   | 20.03 LTS - 24.03 LTS                 | 512 MB \* | 5 GB         |
-| <img width="16" height="16" src="https://static.opensuse.org/favicon.ico" /> openSUSE                                                                                                                                                                                                                                                                                  | Leap 16.0, Tumbleweed (滚动)          | 512 MB \* | 5 GB         |
+| <img width="16" height="16" src="https://static.opensuse.org/favicon.ico" /> openSUSE                                                                                                                                                                                                                                                                                  | Leap 16.0, Tumbleweed ()          | 512 MB \* | 5 GB         |
 | <img width="16" height="16" src="https://nixos.org/favicon.svg" /> NixOS                                                                                                                                                                                                                                                                                               | 26.05                                 | 512 MB    | 5 GB         |
-| <img width="16" height="16" src="https://archlinux.org/static/favicon.png" /> Arch                                                                                                                                                                                                                                                                                     | 滚动                                  | 512 MB    | 5 GB         |
-| <img width="16" height="16" src="https://www.gentoo.org/assets/img/logo/gentoo-g.png" /> Gentoo                                                                                                                                                                                                                                                                        | 滚动                                  | 512 MB    | 5 GB         |
-| <img width="16" height="16" src="https://aosc.io/distros/aosc-os.svg" /> 安同 OS                                                                                                                                                                                                                                                                                       | 滚动                                  | 512 MB    | 5 GB         |
-| <img width="16" height="16" src="https://www.fnnas.com/favicon.ico" /> 飞牛 fnOS &nbsp;<img width="16" height="16" src="https://fygonas.com/favicon.ico" /> FygoOS                                                                                                                                                                                                     | 1                                     | 512 MB    | 8 GB         |
-| <img width="16" height="16" src="https://blogs.windows.com/wp-content/uploads/prod/2022/09/cropped-Windows11IconTransparent512-32x32.png" /> Windows (DD)                                                                                                                                                                                                              | 任何                                  | 512 MB    | 取决于镜像   |
+| <img width="16" height="16" src="https://archlinux.org/static/favicon.png" /> Arch                                                                                                                                                                                                                                                                                     |                                   | 512 MB    | 5 GB         |
+| <img width="16" height="16" src="https://www.gentoo.org/assets/img/logo/gentoo-g.png" /> Gentoo                                                                                                                                                                                                                                                                        |                                   | 512 MB    | 5 GB         |
+| <img width="16" height="16" src="https://aosc.io/distros/aosc-os.svg" />  OS                                                                                                                                                                                                                                                                                       |                                   | 512 MB    | 5 GB         |
+| <img width="16" height="16" src="https://www.fnnas.com/favicon.ico" />  fnOS &nbsp;<img width="16" height="16" src="https://fygonas.com/favicon.ico" /> FygoOS                                                                                                                                                                                                     | 1                                     | 512 MB    | 8 GB         |
+| <img width="16" height="16" src="https://blogs.windows.com/wp-content/uploads/prod/2022/09/cropped-Windows11IconTransparent512-32x32.png" /> Windows (DD)                                                                                                                                                                                                              |                                   | 512 MB    |    |
 | <img width="16" height="16" src="https://blogs.windows.com/wp-content/uploads/prod/2022/09/cropped-Windows11IconTransparent512-32x32.png" /> Windows (ISO)                                                                                                                                                                                                             | Vista, 7, 8.x (Server 2008 - 2012 R2) | 512 MB    | 25 GB        |
 | <img width="16" height="16" src="https://blogs.windows.com/wp-content/uploads/prod/2022/09/cropped-Windows11IconTransparent512-32x32.png" /> Windows (ISO)                                                                                                                                                                                                             | 10, 11 (Server 2016 - 2025)           | 1 GB      | 25 GB        |
 
-\* 表示使用云镜像安装，非传统网络安装
+\* 
 
-^ 表示需要 256 MB 内存 + 1.5 GB 硬盘，或 512 MB 内存 + 1 GB 硬盘
-
-> [!WARNING]
->
-> 本脚本理论上支持独服和 PC
->
-> 但如果能使用 IPMI 或 U 盘，则不建议使用本脚本
+^  256 MB  + 1.5 GB  512 MB  + 1 GB 
 
 > [!WARNING]
 >
-> ❌ 本脚本不支持 OpenVZ、LXC 虚拟机
+>  PC
 >
-> 请改用 <https://github.com/LloydAsp/OsMutation>
+>  IPMI  U 
 
-## 下载（当前系统是 <img width="20" height="20" src="https://www.kernel.org/theme/images/logos/favicon.png" /> Linux）
+> [!WARNING]
+>
+> ❌  OpenVZLXC 
+>
+>  <https://github.com/LloydAsp/OsMutation>
 
-国外服务器：
+##  <img width="20" height="20" src="https://www.kernel.org/theme/images/logos/favicon.png" /> Linux
+
+
 
 ```bash
 curl -O https://raw.githubusercontent.com/bin456789/reinstall/main/reinstall.sh || wget -O ${_##*/} $_
 ```
 
-国内服务器：
+
 
 ```bash
 curl -O https://cnb.cool/bin456789/reinstall/-/git/raw/main/reinstall.sh || wget -O ${_##*/} $_
 ```
 
-## 下载（当前系统是 <img width="20" height="20" src="https://blogs.windows.com/wp-content/uploads/prod/2022/09/cropped-Windows11IconTransparent512-32x32.png" /> Windows）
+##  <img width="20" height="20" src="https://blogs.windows.com/wp-content/uploads/prod/2022/09/cropped-Windows11IconTransparent512-32x32.png" /> Windows
 
 > [!IMPORTANT]
-> 请先关闭 `Windows Defender` 的 `实时保护` 功能。该功能会阻止 `certutil` 下载任何文件。
+>  `Windows Defender`  ``  `certutil` 
 
 <details>
 
-<summary>解决 Windows 7 下无法下载脚本</summary>
+<summary> Windows 7 </summary>
 
-由于不支持 TLS 1.2、SHA-256、根证书没有更新等原因，Vista，7 和 Server 2008 (R2) 可能无法自动下载脚本，因此需要手动下载，具体操作如下：
+ TLS 1.2SHA-256Vista7  Server 2008 (R2) 
 
-用 IE 下载 (先在 IE 高级设置里启用 TLS 1.2)，或者通过远程桌面，将这两个文件保存到同一个目录
+ IE  ( IE  TLS 1.2)
 
 - <https://raw.githubusercontent.com/bin456789/reinstall/main/reinstall.bat>
 
 - <https://www.cygwin.com/setup-x86.exe>
 
-使用时运行下载的 `reinstall.bat`
+ `reinstall.bat`
 
 </details>
 
-国外服务器：
+
 
 ```batch
 certutil -urlcache -f -split https://raw.githubusercontent.com/bin456789/reinstall/main/reinstall.bat
 ```
 
-国内服务器：
+
 
 ```batch
 certutil -urlcache -f -split https://cnb.cool/bin456789/reinstall/-/git/raw/main/reinstall.bat
 ```
 
-## 使用
+## 
 
-**所有功能** 都可在 Linux / Windows 下运行
+****  Linux / Windows 
 
-- Linux 下运行 `bash reinstall.sh ...`
-- Windows 下先运行 `cmd`，再运行 `reinstall.bat ...`
-  - 如果参数中的链接包含特殊字符，要用 `""` 将链接包裹起来，不能用 `''`
+- Linux  `bash reinstall.sh ...`
+- Windows  `cmd` `reinstall.bat ...`
+  -  `""`  `''`
 
-### 功能 1: 安装 <img width="16" height="16" src="https://www.kernel.org/theme/images/logos/favicon.png" /> Linux
+###  1:  <img width="16" height="16" src="https://www.kernel.org/theme/images/logos/favicon.png" /> Linux
 
 > [!CAUTION]
 >
-> 此功能会清除当前系统**整个硬盘**的全部数据（包含其它分区）！
+> ****
 >
-> 如果不小心运行了脚本，可以在重启前运行 `bash reinstall.sh reset` 取消重装
+>  `bash reinstall.sh reset` 
 
-- 脚本会提示输入用户名和密码，不输入则使用 `root` 和随机密码
-- 不输入版本号则安装最新版
-- 最大化利用磁盘空间：不含 boot 和 swap 分区
-- 自动根据机器类型和商家安装优化内核
-- 安装 Red Hat 时需填写 <https://access.redhat.com/downloads/content/rhel> 得到的 `qcow2` 镜像链接，也可以安装其它类 RHEL 系统的 `qcow2`，例如 `Alibaba Cloud Linux` 和 `TencentOS Server`
-- 重装后如需修改 SSH 端口或者改成密钥登录，注意还要修改 `/etc/ssh/sshd_config.d/` 里面的文件
-- 为了快速安装，重装时不会对新系统进行更新，请在重装后自行更新
+-  `root` 
+- 
+-  boot  swap 
+- 
+-  Red Hat  <https://access.redhat.com/downloads/content/rhel>  `qcow2`  RHEL  `qcow2` `Alibaba Cloud Linux`  `TencentOS Server`
+-  SSH  `/etc/ssh/sshd_config.d/` 
+- 
 
 ```bash
 bash reinstall.sh anolis      7|8|23
@@ -178,50 +178,50 @@ bash reinstall.sh anolis      7|8|23
                   redhat      --img="http://access.cdn.redhat.com/xxx.qcow2"
 ```
 
-#### 可选参数
+#### 
 
-- `--username USERNAME` 设置用户名
-- `--password PASSWORD` 设置密码
-- `--ssh-key KEY` 设置 SSH 登录公钥，[格式如下](#--ssh-key)。当使用公钥时，密码为空
-- `--ssh-port PORT` 修改 SSH 端口
-- `--web-port PORT` 修改 Web 端口（安装期间观察日志用）
-- `--frpc-config PATH` 添加 frpc 内网穿透，参数填配置文件的本地路径或 HTTP 链接
-- `--hold 1` 仅重启到安装环境，不运行安装，用于 SSH 登录验证网络连通性
-- `--hold 2` 安装结束后不重启，用于 SSH 登录修改系统内容，Debian/Kali 会挂载在 `/target`，其它系统会挂载在 `/os`
+- `--username USERNAME` 
+- `--password PASSWORD` 
+- `--ssh-key KEY`  SSH [](#--ssh-key)
+- `--ssh-port PORT`  SSH 
+- `--web-port PORT`  Web 
+- `--frpc-config PATH`  frpc  HTTP 
+- `--hold 1`  SSH 
+- `--hold 2`  SSH Debian/Kali  `/target` `/os`
 
 > [!TIP]
 >
-> 可通过多种方式（SSH、HTTP 80 端口、商家后台 VNC、串行控制台）查看安装进度。
+> SSHHTTP 80  VNC
 >
-> 即使安装过程出错，也能连接 SSH 手动救砖。
+>  SSH 
 >
-> 目标系统非 Debian/Kali 时，可以运行 `/trans.sh alpine` 自动救砖成 Alpine 系统。
+>  Debian/Kali  `/trans.sh alpine`  Alpine 
 
 <details>
 
-<summary>实验性功能</summary>
+<summary></summary>
 
-云镜像安装 Debian
+ Debian
 
-- 适合于 CPU 较慢的机器
+-  CPU 
 
 ```bash
 bash reinstall.sh debian --ci
 ```
 
-ISO 安装 CentOS, AlmaLinux, Rocky, Fedora
+ISO  CentOS, AlmaLinux, Rocky, Fedora
 
-- 仅支持内存大于 2G 且为动态 IP 的机器
-- 密码 `123@@@`，SSH 端口 `22`，不支持用参数修改
+-  2G  IP 
+-  `123@@@`SSH  `22`
 
 ```bash
 bash reinstall.sh centos --installer
 ```
 
-ISO 安装 Ubuntu
+ISO  Ubuntu
 
-- 仅支持内存大于 1G 且为动态 IP 的机器
-- 密码 `123@@@`，SSH 端口 `22`，不支持用参数修改
+-  1G  IP 
+-  `123@@@`SSH  `22`
 
 ```bash
 bash reinstall.sh ubuntu --installer
@@ -229,95 +229,95 @@ bash reinstall.sh ubuntu --installer
 
 </details>
 
-### 功能 2: DD RAW 镜像到硬盘
+###  2: DD RAW 
 
 > [!CAUTION]
 >
-> 此功能会清除当前系统**整个硬盘**的全部数据（包含其它分区）！
+> ****
 >
-> 如果不小心运行了脚本，可以在重启前运行 `bash reinstall.sh reset` 取消重装
+>  `bash reinstall.sh reset` 
 
-- 支持 `raw` 和固定大小的 `vhd` 镜像。未压缩或者压缩成 `.gz` `.xz` `.zst` `.tar` `.tar.gz` `.tar.xz` `.tar.zst`
-- DD Windows 镜像时，会自动扩展系统盘，静态 IP 的机器会配置好 IP，可能首次开机几分钟后才生效
-- DD Linux 镜像时，**不会**修改镜像的任何内容
-- 脚本会提示输入用户名和密码，用于安装时 SSH 登录观察日志，不输入则使用 `root` 和随机密码
+-  `raw`  `vhd`  `.gz` `.xz` `.zst` `.tar` `.tar.gz` `.tar.xz` `.tar.zst`
+- DD Windows  IP  IP
+- DD Linux ****
+-  SSH  `root` 
 
 ```bash
 bash reinstall.sh dd --img "https://example.com/xxx.xz"
 ```
 
-#### 可选参数
+#### 
 
-- `--username USERNAME` 设置用户名（安装期间观察日志用）
-- `--password PASSWORD` 设置密码（安装期间观察日志用）
-- `--ssh-key KEY` 设置 SSH 登录公钥（安装期间观察日志用），[格式如下](#--ssh-key)。当使用公钥时，密码为空
-- `--ssh-port PORT` 修改 SSH 端口（安装期间观察日志用）
-- `--rdp-port PORT` 修改 RDP 端口（仅限 DD Windows）
-- `--web-port PORT` 修改 Web 端口（安装期间观察日志用）
-- `--allow-ping` 设置 Windows 防火墙允许被 Ping（仅限 DD Windows）
-- `--frpc-config PATH` 添加 frpc 内网穿透（仅限 DD Windows），参数填配置文件的本地路径或 HTTP 链接
-- `--cloud-data PATH_OR_URL` 为 DD Linux 镜像注入 cloud-init NoCloud 配置（仅限 DD Linux）
-- `--hold 1` 仅重启到安装环境，不运行安装，用于 SSH 登录验证网络连通性
-- `--hold 2` DD 结束后不重启，用于 SSH 登录修改系统内容，Windows 系统会挂载在 `/os`，Linux 系统**不会**自动挂载
+- `--username USERNAME` 
+- `--password PASSWORD` 
+- `--ssh-key KEY`  SSH [](#--ssh-key)
+- `--ssh-port PORT`  SSH 
+- `--rdp-port PORT`  RDP  DD Windows
+- `--web-port PORT`  Web 
+- `--allow-ping`  Windows  Ping DD Windows
+- `--frpc-config PATH`  frpc  DD Windows HTTP 
+- `--cloud-data PATH_OR_URL`  DD Linux  cloud-init NoCloud  DD Linux
+- `--hold 1`  SSH 
+- `--hold 2` DD  SSH Windows  `/os`Linux ****
 
 > [!TIP]
 >
-> `--cloud-data` 参数为本地目录或 HTTP 基础 URL，目录须包含 `user-data` 文件，`meta-data`、`network-config` 可选：
+> `--cloud-data`  HTTP  URL `user-data` `meta-data``network-config` 
 >
 > ```bash
 > seed/
-> ├── user-data      # 必须
-> ├── meta-data      # 可选
-> └── network-config # 可选
+> ├── user-data      # 
+> ├── meta-data      # 
+> └── network-config # 
 > ```
 >
 > ```bash
-> # 使用本地目录
+> # 
 > bash reinstall.sh dd --img "https://example.com/xxx.xz" --cloud-data /path/to/seed/
-> # 使用 HTTP 目录
+> #  HTTP 
 > bash reinstall.sh dd --img "https://example.com/xxx.xz" --cloud-data "https://example.com/seed/"
 > ```
 
 > [!TIP]
 >
-> 可通过多种方式（SSH、HTTP 80 端口、商家后台 VNC、串行控制台）查看安装进度。
+> SSHHTTP 80  VNC
 >
-> 即使安装过程出错，也能连接 SSH 手动救砖
+>  SSH 
 >
-> 也可以运行 `/trans.sh alpine` 自动救砖成 Alpine 系统。
+>  `/trans.sh alpine`  Alpine 
 
-### 功能 3: 重启到 <img width="16" height="16" src="https://www.alpinelinux.org/alpine-logo.ico" /> Alpine Live OS（内存系统）
+###  3:  <img width="16" height="16" src="https://www.alpinelinux.org/alpine-logo.ico" /> Alpine Live OS
 
-- 可用 ssh 连接，进行备份/恢复硬盘、手动 DD、修改分区、手动安装 Alpine 等操作
-- 脚本会提示输入用户名和密码，不输入则使用 `root` 和随机密码
+-  ssh / DD Alpine 
+-  `root` 
 
 > [!TIP]
 >
-> 虽然运行的脚本叫 `reinstall`，但是此功能**不会**删除任何数据和进行自动重装，而是要用户手动操作
+>  `reinstall`****
 >
-> 如果用户手动操作没有破坏原系统，再次重启将回到原系统
+> 
 
 ```bash
 bash reinstall.sh alpine --hold 1
 ```
 
-#### 可选参数
+#### 
 
-- `--username USERNAME` 设置用户名
-- `--password PASSWORD` 设置密码
-- `--ssh-key KEY` 设置 SSH 登录公钥，[格式如下](#--ssh-key)。当使用公钥时，密码为空
-- `--ssh-port PORT` 修改 SSH 端口
-- `--frpc-config PATH` 添加 frpc 内网穿透，参数填配置文件的本地路径或 HTTP 链接
+- `--username USERNAME` 
+- `--password PASSWORD` 
+- `--ssh-key KEY`  SSH [](#--ssh-key)
+- `--ssh-port PORT`  SSH 
+- `--frpc-config PATH`  frpc  HTTP 
 
-### 功能 4: 重启到 <img width="16" height="16" src="https://netboot.xyz/img/favicon.ico" /> netboot.xyz
+###  4:  <img width="16" height="16" src="https://netboot.xyz/img/favicon.ico" /> netboot.xyz
 
-- 可使用商家后台 VNC 手动安装 [更多系统](https://github.com/netbootxyz/netboot.xyz?tab=readme-ov-file#what-operating-systems-are-currently-available-on-netbootxyz)
+-  VNC  [](https://github.com/netbootxyz/netboot.xyz?tab=readme-ov-file#what-operating-systems-are-currently-available-on-netbootxyz)
 
 > [!TIP]
 >
-> 虽然运行的脚本叫 `reinstall`，但是此功能**不会**删除任何数据和进行自动重装，而是要用户手动操作
+>  `reinstall`****
 >
-> 如果用户手动操作没有破坏原系统，再次重启将回到原系统
+> 
 
 ```bash
 bash reinstall.sh netboot.xyz
@@ -325,24 +325,24 @@ bash reinstall.sh netboot.xyz
 
 ![netboot.xyz](https://netboot.xyz/images/netboot.xyz.gif)
 
-### 功能 5: 安装 <img width="16" height="16" src="https://blogs.windows.com/wp-content/uploads/prod/2022/09/cropped-Windows11IconTransparent512-32x32.png" /> Windows ISO
+###  5:  <img width="16" height="16" src="https://blogs.windows.com/wp-content/uploads/prod/2022/09/cropped-Windows11IconTransparent512-32x32.png" /> Windows ISO
 
-![Windows 安装界面](https://github.com/bin456789/reinstall/assets/7548515/07c1aea2-1ce3-4967-904f-aaf9d6eec3f7)
+![Windows ](https://github.com/bin456789/reinstall/assets/7548515/07c1aea2-1ce3-4967-904f-aaf9d6eec3f7)
 
 > [!CAUTION]
 >
-> 此功能会清除当前系统**整个硬盘**的全部数据（包含其它分区）！
+> ****
 >
-> 如果不小心运行了脚本，可以在重启前运行 `bash reinstall.sh reset` 取消重装
+>  `bash reinstall.sh reset` 
 
-- 脚本会提示输入用户名和密码，不输入则使用 `administrator` 和随机密码
-- 如果远程登录失败，请尝试在用户名前添加 `.\`，例如 `.\administrator`
-- 少数语言的系统管理员账号不是 `administrator` [详情](https://learn.microsoft.com/archive/technet-wiki/13813.localized-names-for-administrator-account-in-windows#list-of-languages-that-localize-the-administrator-account-name)
-- 静态机器会自动配置好 IP，可能首次开机几分钟后才生效
-- 支持任意语言的 ISO
-- 自动绕过 Windows 11 硬件限制
+-  `administrator` 
+-  `.\` `.\administrator`
+-  `administrator` [](https://learn.microsoft.com/archive/technet-wiki/13813.localized-names-for-administrator-account-in-windows#list-of-languages-that-localize-the-administrator-account-name)
+-  IP
+-  ISO
+-  Windows 11 
 
-#### 支持的系统
+#### 
 
 - Windows (Vista ~ 11)
 - Windows Server (2008 ~ 2025)
@@ -351,10 +351,10 @@ bash reinstall.sh netboot.xyz
   - Hyper-V Server
   - Azure Local (Azure Stack HCI)
 
-#### 方法 1: 让脚本自动查找 ISO
+####  1:  ISO
 
-- 脚本会从 <https://massgrave.dev/genuine-installation-media> 查找 ISO，该网站专门提供官方 ISO 下载
-- 只支持查找 Windows 10, 11, Server 2019, 2022, 2025 的 ISO
+-  <https://massgrave.dev/genuine-installation-media>  ISO ISO 
+-  Windows 10, 11, Server 2019, 2022, 2025  ISO
 
 ```bash
 bash reinstall.sh windows \
@@ -363,7 +363,7 @@ bash reinstall.sh windows \
 ```
 
 <details>
-<summary>支持的语言</summary>
+<summary></summary>
 
 ```text
 ar-sa
@@ -409,9 +409,9 @@ zh-tw
 
 </details>
 
-#### 方法 2: 自行指定 ISO 连接
+####  2:  ISO 
 
-- 如果不知道 `--image-name`，可以随便填，在重启后连接 SSH，根据错误提示重新输入正确的值
+-  `--image-name` SSH
 
 ```bash
 bash reinstall.sh windows \
@@ -419,7 +419,7 @@ bash reinstall.sh windows \
      --iso "https://go.microsoft.com/fwlink/?linkid=2289029"
 ```
 
-或者磁力链接
+
 
 ```bash
 bash reinstall.sh windows \
@@ -429,17 +429,17 @@ bash reinstall.sh windows \
 
 <details>
 
-<summary>以下网站可找到 ISO 链接</summary>
+<summary> ISO </summary>
 
-- 正式版
+- 
   - <https://msdl.gravesoft.dev>
   - <https://massgrave.dev/genuine-installation-media>
   - <https://next.itellyou.cn>
   - <https://www.xitongku.com>
-  - <https://www.microsoft.com/software-download/windows10> (需用非 Windows User-Agent 打开)
+  - <https://www.microsoft.com/software-download/windows10> ( Windows User-Agent )
   - <https://www.microsoft.com/software-download/windows11>
   - <https://www.microsoft.com/software-download/windows11arm64>
-- 评估版
+- 
   - <https://www.microsoft.com/evalcenter/download-windows-11-enterprise>
   - <https://www.microsoft.com/evalcenter/download-windows-11-iot-enterprise-ltsc-eval>
   - <https://www.microsoft.com/evalcenter/download-windows-server-2012-r2>
@@ -447,35 +447,35 @@ bash reinstall.sh windows \
   - <https://www.microsoft.com/evalcenter/download-windows-server-2019>
   - <https://www.microsoft.com/evalcenter/download-windows-server-2022>
   - <https://www.microsoft.com/evalcenter/download-windows-server-2025>
-- Insider 预览版
+- Insider 
   - <https://www.microsoft.com/en-us/software-download/windowsinsiderpreviewiso>
   - <https://www.microsoft.com/en-us/software-download/windowsinsiderpreviewserver>
 
 </details>
 
-#### 可选参数
+#### 
 
-- `--username USERNAME` 设置用户名
-- `--password PASSWORD` 设置密码
-- `--rdp-port PORT` 修改 RDP 端口
-- `--ssh-port PORT` 修改 SSH 端口（安装期间观察日志用）
-- `--web-port PORT` 修改 Web 端口（安装期间观察日志用）
-- `--allow-ping` 设置 Windows 防火墙允许被 Ping
-- `--add-driver INF_OR_DIR` 添加额外驱动，填写 .inf 路径，或者 .inf 所在的文件夹
-  - 需先下载驱动到当前系统
-  - 可多次设置该参数以添加不同的驱动
-- `--frpc-config PATH` 添加 frpc 内网穿透，参数填配置文件的本地路径或 HTTP 链接
-- `--hold 1` 仅重启到安装环境，不运行安装，用于 SSH 登录验证网络连通性
-- `--hold 2` 用于在进入 Windows 官方安装程序之前，SSH 登录修改 `boot.wim`、`install.wim` 或者其它内容，硬盘挂载在 `/os`
+- `--username USERNAME` 
+- `--password PASSWORD` 
+- `--rdp-port PORT`  RDP 
+- `--ssh-port PORT`  SSH 
+- `--web-port PORT`  Web 
+- `--allow-ping`  Windows  Ping
+- `--add-driver INF_OR_DIR`  .inf  .inf 
+  - 
+  - 
+- `--frpc-config PATH`  frpc  HTTP 
+- `--hold 1`  SSH 
+- `--hold 2`  Windows SSH  `boot.wim``install.wim`  `/os`
 
-#### 以下驱动会自动按需下载安装，无需手动添加
+#### 
 
-- VirtIO ([社区版][virtio-virtio], [阿里云][virtio-aliyun], [腾讯云][virtio-qcloud], [GCP][virtio-gcp])
-- XEN ([~~社区版~~][xen-xen] (未签名), [Citrix][xen-citrix], [AWS][xen-aws])
-- AWS ([ENA 网卡][aws-ena], [NVME 存储控制器][aws-nvme])
-- GCP ([gVNIC 网卡][gcp-gvnic], [GGA 显卡][gcp-gga])
-- Azure ([MANA 网卡][azure-mana])
-- Intel (VMD 存储控制器: [11代酷睿][intel-vmd-gen11], [12-15代酷睿][intel-vmd-gen12-to-gen15], [酷睿 Ultra 3][intel-vmd-ultra3], 网卡: [7][intel-nic-7], [8.x][intel-nic-8.1], [10][intel-nic-10], [11][intel-nic-11], [2008 R2][intel-nic-7], [2012][intel-nic-2012], [2012 R2][intel-nic-2012-r2], [2016][intel-nic-2016], [2019][intel-nic-2019], [2022][intel-nic-2022], [2025][intel-nic-2025])
+- VirtIO ([][virtio-virtio], [][virtio-aliyun], [][virtio-qcloud], [GCP][virtio-gcp])
+- XEN ([~~~~][xen-xen] (), [Citrix][xen-citrix], [AWS][xen-aws])
+- AWS ([ENA ][aws-ena], [NVME ][aws-nvme])
+- GCP ([gVNIC ][gcp-gvnic], [GGA ][gcp-gga])
+- Azure ([MANA ][azure-mana])
+- Intel (VMD : [11][intel-vmd-gen11], [12-15][intel-vmd-gen12-to-gen15], [ Ultra 3][intel-vmd-ultra3], : [7][intel-nic-7], [8.x][intel-nic-8.1], [10][intel-nic-10], [11][intel-nic-11], [2008 R2][intel-nic-7], [2012][intel-nic-2012], [2012 R2][intel-nic-2012-r2], [2016][intel-nic-2016], [2019][intel-nic-2019], [2022][intel-nic-2022], [2025][intel-nic-2025])
 
 [virtio-virtio]: https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/
 [virtio-aliyun]: https://www.alibabacloud.com/help/ecs/user-guide/install-the-virtio-driver-1
@@ -503,13 +503,13 @@ bash reinstall.sh windows \
 [intel-nic-2022]: https://www.intel.com/content/www/us/en/download/706171/intel-network-adapter-driver-for-windows-server-2022.html
 [intel-nic-2025]: https://www.intel.com/content/www/us/en/download/838943/intel-network-adapter-driver-for-windows-server-2025.html
 
-#### 如何填写映像名称 `--image-name`
+####  `--image-name`
 
-一个 ISO 通常包含多个系统版本，例如家庭版、专业版。因此需要用 `--image-name` 指定要安装的系统版本（映像名称），不区分大小写
+ ISO  `--image-name` 
 
-可以用 DISM、DISM++、Wimlib 等工具查询 ISO 包含的映像名称
+ DISMDISM++Wimlib  ISO 
 
-常用的映像名称有：
+
 
 ```text
 Windows 7 Ultimate
@@ -518,65 +518,65 @@ Windows 11 Enterprise LTSC 2024
 Windows Server 2025 SERVERDATACENTER
 ```
 
-#### 如何用 [DISM++](https://github.com/Chuyu-Team/Dism-Multi-language/releases) 查询 ISO 包含的映像名称
+####  [DISM++](https://github.com/Chuyu-Team/Dism-Multi-language/releases)  ISO 
 
-打开文件菜单 > 打开映像文件，选择要安装的 iso，即可得到映像名称，所有映像名称都可以安装
+ >  iso
 
 ![image-name](https://github.com/bin456789/reinstall/assets/7548515/5aae0a9b-61e2-4f66-bb98-d470a6beaac2)
 
 > [!WARNING]
-> Vista (Server 2008) 和 32 位系统可能会缺少驱动
+> Vista (Server 2008)  32 
 
 > [!WARNING]
 >
-> 安装 Windows 7 (Server 2008 R2) 时
+>  Windows 7 (Server 2008 R2) 
 >
-> 1. EFI 引导的机器要开启 CSM
+> 1. EFI  CSM
 >
-> 2. Hyper-V (Azure) 需选择第 1 代虚拟机 <https://learn.microsoft.com/windows-server/virtualization/hyper-v/plan/should-i-create-a-generation-1-or-2-virtual-machine-in-hyper-v>
+> 2. Hyper-V (Azure)  1  <https://learn.microsoft.com/windows-server/virtualization/hyper-v/plan/should-i-create-a-generation-1-or-2-virtual-machine-in-hyper-v>
 
 > [!WARNING]
 >
-> Windows 10 LTSC 2021 中文版镜像 `zh-cn_windows_10_enterprise_ltsc_2021_x64_dvd_033b7312.iso` 的 `wsappx` 进程会长期占用 CPU
+> Windows 10 LTSC 2021  `zh-cn_windows_10_enterprise_ltsc_2021_x64_dvd_033b7312.iso`  `wsappx`  CPU
 >
-> 解决方法是更新系统补丁，或者手动安装 `VCLibs` 库 <https://www.google.com/search?q=ltsc+wsappx>
+>  `VCLibs`  <https://www.google.com/search?q=ltsc+wsappx>
 
 > [!WARNING]
 >
-> 在 GCP 上安装 `2022年5月` 和之后发布的 Windows ISO，在引导 Windows 安装界面 (PE) 时会不断反复重启。解决方法如下，二选一
+>  GCP  `20225`  Windows ISO Windows  (PE) 
 >
-> 1. 添加 `--force-boot-mode bios` 参数，脚本将以 `BIOS 引导 + MBR 分区表` 方式安装 Windows
+> 1.  `--force-boot-mode bios`  `BIOS  + MBR `  Windows
 >
->    (可选) 安装完成后用 `MBR2GPT /convert /allowFullOS` 命令转为 `EFI 引导 + GPT 分区表`
+>    ()  `MBR2GPT /convert /allowFullOS`  `EFI  + GPT `
 >
-> 2. 自制 RAW 镜像并通过 DD 安装
+> 2.  RAW  DD 
 
-#### ARM 安装 Windows 的注意事项
+#### ARM  Windows 
 
-大部分 ARM 机器都支持安装最新版 Windows 11
+ ARM  Windows 11
 
-安装过程可能会黑屏，串行控制台可能会显示 `ConvertPages: failed to find range`，均不影响正常安装
+ `ConvertPages: failed to find range`
 
-| 兼容性 | 云服务商 | 实例类型                | 问题                                       |
+|  |  |                 |                                        |
 | ------ | -------- | ----------------------- | ------------------------------------------ |
 | ✔️     | Azure    | B2pts_v2                |                                            |
 | ✔️     | AWS      | T4g                     |                                            |
 | ✔️     | Scaleway | COPARM1                 |                                            |
 | ✔️     | Gcore    |                         |                                            |
-| ❔     | 阿里云   | g6r, c6r, g8y, c8y, r8y | 有几率重启时卡开机 Logo，强制重启即可      |
-| ❔     | 甲骨文云 | A1.Flex                 | 不一定能安装成功，越新创建的实例越容易成功 |
-| ❌     | 谷歌云   | t2a                     | 缺少网卡驱动                               |
+| ❔     |    | g6r, c6r, g8y, c8y, r8y |  Logo      |
+| ❔     |  | A1.Flex                 |  |
+| ❌     |    | t2a                     |                                |
 
-### 取消重装
+### 
 
-- 如果不小心运行了脚本，可以运行以下命令取消重装
-- 需要在重启前运行
+- 
+- 
 
 ```bash
 bash reinstall.sh reset
 ```
 
-## 参数格式
+## 
 
 ### --ssh-key
 
@@ -589,15 +589,15 @@ bash reinstall.sh reset
 - `--ssh-key /path/to/public_key`
 - `--ssh-key C:\path\to\public_key`
 
-## 如何使用旧版本
+## 
 
-根据 Bug 守恒定律，修复旧 Bug 的同时会引入新的 Bug
+ Bug  Bug  Bug
 
-如果脚本出现问题，可以试下旧版本是否正常
 
-从 <https://github.com/bin456789/reinstall/commits/main> 右侧找到旧版本的 `commit_id`
 
-将下面脚本的 `xxxxxxxx` 替换成旧版本的 `commit_id` 并运行脚本
+ <https://github.com/bin456789/reinstall/commits/main>  `commit_id`
+
+ `xxxxxxxx`  `commit_id` 
 
 ```bash
 commit_id=xxxxxxxx
@@ -606,16 +606,16 @@ sed -i "/^confhome.*main$/s/main/$commit_id/" reinstall.sh
 bash reinstall.sh ...
 ```
 
-## 如何修改脚本自用
+## 
 
-1. Fork 本仓库
-2. 修改 `reinstall.sh` 和 `reinstall.bat` 开头的 `confhome` 和 `confhome_cn`
-3. 修改其它代码
-4. 下载并运行你的 `reinstall.sh` 或 `reinstall.bat`
+1. Fork 
+2.  `reinstall.sh`  `reinstall.bat`  `confhome`  `confhome_cn`
+3. 
+4.  `reinstall.sh`  `reinstall.bat`
 
-## 感谢
+## 
 
-感谢以下商家提供白嫖机器
+
 
 [![Oracle Cloud](https://github.com/bin456789/reinstall/assets/7548515/8b430ed4-8344-4f96-b4da-c2bda031cc90)](https://www.oracle.com/cloud/)
 [![DartNode](https://github.com/bin456789/reinstall/assets/7548515/435d6740-bcdd-4f3a-a196-2f60ae397f17)](https://dartnode.com/)

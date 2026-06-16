@@ -1,6 +1,6 @@
 #!/bin/sh
-# debian ubuntu redhat 安装模式共用此脚本
-# alpine 未用到此脚本
+# debian ubuntu redhat 
+# alpine 
 
 get_all_disks() {
     # shellcheck disable=SC2010
@@ -8,8 +8,8 @@ get_all_disks() {
 }
 
 get_xda() {
-    # 如果没找到 main_disk 或 xda
-    # 返回假的值，防止意外地格式化全部盘
+    #  main_disk  xda
+    # 
     eval "$(grep -o 'extra_main_disk=[^ ]*' /proc/cmdline | sed 's/^extra_//')"
 
     if [ -z "$main_disk" ]; then

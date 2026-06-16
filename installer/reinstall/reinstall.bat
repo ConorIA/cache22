@@ -9,38 +9,38 @@ rem set confhome_cn=https://www.ghproxy.cc/https://raw.githubusercontent.com/bin
 set pkgs=curl,cpio,p7zip,dos2unix,jq,xz,gzip,zstd,openssl,bind-utils,libiconv,binutils
 set cmds=curl,cpio,p7zip,dos2unix,jq,xz,gzip,zstd,openssl,nslookup,iconv,ar
 
-rem 65001 代码页会乱码
+rem 65001 
 
-rem 不要用 :: 注释
-rem 否则可能会出现 系统找不到指定的驱动器
+rem  :: 
+rem  
 
-rem Windows 7 SP1 winhttp 默认不支持 tls 1.2
+rem Windows 7 SP1 winhttp  tls 1.2
 rem https://support.microsoft.com/en-us/topic/update-to-enable-tls-1-1-and-tls-1-2-as-default-secure-protocols-in-winhttp-in-windows-c4bd73d2-31d7-761e-0178-11268bb10392
-rem 有些系统根证书没更新
-rem 所以不要用https
-rem 进入脚本目录
+rem 
+rem https
+rem 
 cd /d %~dp0
 
-rem 检查是否有管理员权限
+rem 
 fltmc >nul 2>&1
 if errorlevel 1 (
     echo Please run as administrator^^!
     exit /b
 )
 
-rem 有时 %tmp% 带会话 id，且文件夹不存在
+rem  %tmp%  id
 rem https://learn.microsoft.com/troubleshoot/windows-server/shell-experience/temp-folder-with-logon-session-id-deleted
 rem if not exist %tmp% (
 rem     md %tmp%
 rem )
 
-rem 下载 geoip
+rem  geoip
 if not exist geoip (
-    rem www.cloudflare.com/dash.cloudflare.com 国内访问的是美国服务器，而且部分地区被墙
+    rem www.cloudflare.com/dash.cloudflare.com 
     call :download http://www.qualcomm.cn/cdn-cgi/trace %~dp0geoip || goto :download_failed
 )
 
-rem 判断是否有 loc=
+rem  loc=
 findstr /c:"loc=" geoip >nul
 if errorlevel 1 (
     echo Invalid geoip file
@@ -48,10 +48,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
-rem 检查是否国内
+rem 
 findstr /c:"loc=CN" geoip >nul
 if not errorlevel 1 (
-    rem mirrors.tuna.tsinghua.edu.cn 会强制跳转 https
+    rem mirrors.tuna.tsinghua.edu.cn  https
     set mirror=http://mirror.nju.edu.cn
     if defined confhome_cn (
         set confhome=!confhome_cn!
@@ -63,22 +63,22 @@ if not errorlevel 1 (
         )
     )
 ) else (
-    rem 服务器在美国 equinix 机房，不是 cdn
+    rem  equinix  cdn
     set mirror=http://mirrors.kernel.org
 )
 
 call :check_cygwin_installed || (
-    rem win10 arm 支持运行 x86 软件
-    rem win11 arm 支持运行 x86 和 x86_64 软件
+    rem win10 arm  x86 
+    rem win11 arm  x86  x86_64 
 
-    rem windows 11 24h2 没有 wmic
-    rem wmic os get osarchitecture 显示中文，即使设置了 mode con cp select=437
-    rem wmic ComputerSystem get SystemType 显示英文
+    rem windows 11 24h2  wmic
+    rem wmic os get osarchitecture  mode con cp select=437
+    rem wmic ComputerSystem get SystemType 
     rem for /f "tokens=*" %%a in ('wmic ComputerSystem get SystemType ^| find /i "based"') do (
     rem     set "SystemType=%%a"
     rem )
 
-    rem 有的系统精简了 powershell
+    rem  powershell
     rem for /f "delims=" %%a in ('powershell -NoLogo -NoProfile -NonInteractive -Command "(Get-WmiObject win32_computersystem).SystemType"') do (
     rem     set "SystemType=%%a"
     rem )
@@ -88,10 +88,10 @@ call :check_cygwin_installed || (
         set SystemArch=%%a
     )
 
-    rem 也可以用 PROCESSOR_ARCHITEW6432 和 PROCESSOR_ARCHITECTURE 判断
+    rem  PROCESSOR_ARCHITEW6432  PROCESSOR_ARCHITECTURE 
     rem ARM64 win11  PROCESSOR_ARCHITEW6432   PROCESSOR_ARCHITECTURE
-    rem 原生cmd          未定义                      ARM64
-    rem 32位cmd          ARM64                       x86
+    rem cmd                                ARM64
+    rem 32cmd          ARM64                       x86
 
     rem if defined PROCESSOR_ARCHITEW6432 (
     rem     set "SystemArch=%PROCESSOR_ARCHITEW6432%"
@@ -120,9 +120,9 @@ call :check_cygwin_installed || (
         )
     )
 
-    rem win7/8 cygwin 已 EOL，不能用最新 cygwin 源，而要用 Cygwin Time Machine 源
-    rem 但 Cygwin Time Machine 没有国内源
-    rem 为了保证国内下载速度, cygwin EOL 统一使用 cygwin-archive x86 源
+    rem win7/8 cygwin  EOL cygwin  Cygwin Time Machine 
+    rem  Cygwin Time Machine 
+    rem , cygwin EOL  cygwin-archive x86 
     if !CygwinEOL! == 1 (
         set CygwinArch=x86
         set dir=/sourceware/cygwin-archive/20221123
@@ -131,27 +131,27 @@ call :check_cygwin_installed || (
         set dir=/sourceware/cygwin
     )
 
-    rem daocloud 加速有 90 天缓存，且不支持 IPv6
+    rem daocloud  90  IPv6
     rem https://github.com/DaoCloud/public-binary-files-mirror
-    rem 无法用查询字符串强制刷新缓存
+    rem 
     rem https://files.m.daocloud.io/www.cloudflare.com/cdn-cgi/trace?a=1
     rem https://files.m.daocloud.io/www.cloudflare.com/cdn-cgi/trace?b=2
-    rem 也就无法用 https://www.cygwin.com/setup-x86_64.exe?xxx=20250101 强制每天刷新缓存
+    rem  https://www.cygwin.com/setup-x86_64.exe?xxx=20250101 
 
-    rem 下载 Cygwin
+    rem  Cygwin
     if not exist setup-!CygwinArch!.exe (
         call :download http://www.cygwin.com/setup-!CygwinArch!.exe %~dp0setup-!CygwinArch!.exe || goto :download_failed
     )
 
-    rem 少于 1M 视为无效
-    rem 有的 IP 被官网拉黑，无法下载 exe，下载得到 html
+    rem  1M 
+    rem  IP  exe html
     for %%A in (setup-!CygwinArch!.exe) do if %%~zA LSS 1048576 (
         echo Invalid Cgywin installer
         del setup-!CygwinArch!.exe
         exit /b 1
     )
 
-    rem 安装 Cygwin
+    rem  Cygwin
     set site=!mirror!!dir!
     start /wait setup-!CygwinArch!.exe ^
         --allow-unsupported-windows ^
@@ -162,46 +162,46 @@ call :check_cygwin_installed || (
         --local-package-dir %~dp0cygwin-local-package-dir ^
         --packages %pkgs%
 
-    rem 检查 Cygwin 是否成功安装
+    rem  Cygwin 
     if errorlevel 1 goto :install_cygwin_failed
     call :check_cygwin_installed || goto :install_cygwin_failed
 )
 
-rem 在c盘根目录下执行 cygpath -ua . 会得到 /cygdrive/c，因此末尾要有 /
+rem c cygpath -ua .  /cygdrive/c /
 for /f %%a in ('%SystemDrive%\cygwin\bin\cygpath -ua ./') do set thisdir=%%a
 
-rem 下载 reinstall.sh
+rem  reinstall.sh
 if not exist reinstall.sh (
     call :download_with_curl %confhome%/reinstall.sh %thisdir%reinstall.sh || goto :download_failed
     call :chmod a+x %thisdir%reinstall.sh
 )
 
-rem %* 无法处理 --iso https://x.com/?yyy=123
-rem 为每个参数添加引号，使参数正确传递到 bash
+rem %*  --iso https://x.com/?yyy=123
+rem  bash
 rem for %%a in (%*) do (
 rem     set "param=!param! "%%~a""
 rem )
 
-rem 转成 unix 格式，避免用户用 windows 记事本编辑后换行符不对
+rem  unix  windows 
 %SystemDrive%\cygwin\bin\dos2unix -q '%thisdir%reinstall.sh'
 
-rem 用 bash 运行
-rem %SystemDrive%\cygwin\bin\bash -l %thisdir%reinstall.sh %* 运行后会清屏
-rem 因此不能用 -l
-rem 这就需要在 reinstall.sh 里运行 source /etc/profile
-rem 或者添加 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH
+rem  bash 
+rem %SystemDrive%\cygwin\bin\bash -l %thisdir%reinstall.sh %* 
+rem  -l
+rem  reinstall.sh  source /etc/profile
+rem  export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH
 %SystemDrive%\cygwin\bin\bash %thisdir%reinstall.sh %*
 exit /b
 
-rem bits 要求有 Content-Length 才能下载
-rem cloudflare 的 cdn-cgi/trace 没有 Content-Length
-rem 据说如果网络设为“按流量计费” bits 也无法下载
+rem bits  Content-Length 
+rem cloudflare  cdn-cgi/trace  Content-Length
+rem “” bits 
 rem https://learn.microsoft.com/en-us/windows/win32/bits/http-requirements-for-bits-downloads
 rem bitsadmin /transfer "%~3" /priority foreground %~1 %~2
 
 :download
-rem certutil 会被 windows Defender 报毒
-rem windows server 2019 要用第二条 certutil 命令
+rem certutil  windows Defender 
+rem windows server 2019  certutil 
 echo Downloading: %~1 %~2
 del /q "%~2" 2>nul
 if exist "%~2" (echo Cannot delete %~2 & exit /b 1)
@@ -212,12 +212,12 @@ if not errorlevel 1 if exist "%~2" exit /b 0
 certutil -urlcache -split "%~1" "%~2" >nul
 if not errorlevel 1 if exist "%~2" exit /b 0
 
-rem 下载失败时删除文件，防止下载了一部分导致下次运行时跳过了下载
+rem 
 del /q "%~2" 2>nul
 exit /b 1
 
 :download_with_curl
-rem 加 --insecure 防止以下错误
+rem  --insecure 
 rem curl: (77) error setting certificate verify locations:
 rem   CAfile: /etc/ssl/certs/ca-certificates.crt
 rem   CApath: none
