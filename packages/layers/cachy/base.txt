@@ -35,6 +35,7 @@ pciutils
 linux-cachyos
 linux-cachyos-headers
 linux-cachyos-zfs
+zfs-utils
 linux-cachyos-r8125
 
 # ─── GPU userland (headless-safe, non-NVIDIA) ─────────────
