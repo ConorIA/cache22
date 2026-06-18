@@ -109,9 +109,6 @@ Server = https://github.com/LizardByte/pacman-repo/releases/download/stable
 # ALHP x86-64-v3 rebuilds. Pacman walks top-to-bottom, so ALHP wins
 # wherever a package exists in both ALHP and stock Arch.
 
-[kde-unstable]
-Include = /etc/pacman.d/mirrorlist
-
 [core-x86-64-v3]
 Include = /etc/pacman.d/alhp-mirrorlist
 
