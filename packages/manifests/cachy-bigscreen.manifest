@@ -1,5 +1,5 @@
-# cache22 manifest: arch-bigscreen
-# family: arch
+# cache22 manifest: cachy-kde
+# family: cachy
 # Full KDE Plasma desktop: gaming stack (Steam, gamescope, mangohud,
 # lutris, sunshine) + Bigscreen + SteamOS-style
 # switchable gamescope session (via the kde-gaming intersection layer).

@@ -32,7 +32,6 @@ sane-airscan
 
 # ─── Fonts ────────────────────────────────────────────────
 noto-fonts
-noto-fonts-cjk
 noto-fonts-emoji
 noto-fonts-extra
 ttf-dejavu
@@ -42,18 +41,8 @@ ttf-bitstream-vera
 ttf-fira-code
 cantarell-fonts
 
-# ─── Asian language input methods (fcitx5) ────────────────
-fcitx5-im
-fcitx5-mozc
-fcitx5-chinese-addons
-fcitx5-hangul
-
 # ─── Tesseract OCR data ───────────────────────────────────
 tesseract-data-eng
-tesseract-data-jpn
-tesseract-data-chi_sim
-tesseract-data-chi_tra
-tesseract-data-kor
 
 # ─── GStreamer codec stack ────────────────────────────────
 gst-plugins-base
@@ -71,9 +60,6 @@ webp-pixbuf-loader
 
 # ─── Connectivity ─────────────────────────────────────────
 sshfs
-
-# ─── Hybrid GPU control daemon (laptop dGPU/iGPU) ─────────
-supergfxctl
 
 # ─── Misc desktop QoL ─────────────────────────────────────
 usbmuxd

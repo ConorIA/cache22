@@ -35,6 +35,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # cachy family (CachyOS bore-lto kernel + repos)
+          - { variant: cachy-bigscreen, family: cachy, base_image: docker.io/cachyos/cachyos-v3 }
           # arch family (vanilla Arch + mainline linux)
           - { variant: arch-bigscreen, family: arch,  base_image: docker.io/archlinux }
 
