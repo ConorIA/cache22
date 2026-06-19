@@ -135,8 +135,36 @@ fwupd
 fprintd
 broadcom-wl-dkms
 
-# ─── Virtualization (qemu-desktop) ───────────────────────────
-qemu-desktop
+# ─── Virtualization (qemu, headless modules; no GUI/x11) ──
+qemu-base
+qemu-audio-dbus
+qemu-audio-spice
+qemu-block-curl
+qemu-block-dmg
+qemu-block-nfs
+qemu-block-ssh
+qemu-chardev-spice
+qemu-hw-display-qxl
+qemu-hw-display-virtio-gpu
+qemu-hw-display-virtio-gpu-gl
+qemu-hw-display-virtio-gpu-pci
+qemu-hw-display-virtio-gpu-pci-gl
+qemu-hw-display-virtio-gpu-pci-rutabaga
+qemu-hw-display-virtio-gpu-rutabaga
+qemu-hw-display-virtio-vga
+qemu-hw-display-virtio-vga-gl
+qemu-hw-display-virtio-vga-rutabaga
+qemu-hw-uefi-vars
+qemu-hw-usb-host
+qemu-hw-usb-redirect
+qemu-hw-usb-smartcard
+qemu-ui-curses
+qemu-ui-dbus
+qemu-ui-egl-headless
+qemu-ui-opengl
+qemu-ui-spice-app
+qemu-ui-spice-core
+qemu-vhost-user-gpu
 libvirt
 virglrenderer
 swtpm
