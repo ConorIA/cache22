@@ -20,7 +20,6 @@ firefox
 bazaar
 pavucontrol
 virt-manager
-qemu-desktop
 veracrypt
 
 # ─── Printing + scanning ──────────────────────────────────

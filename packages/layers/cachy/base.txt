@@ -149,8 +149,8 @@ fwupd
 fprintd
 broadcom-wl-dkms
 
-# ─── Virtualization (qemu-base) ───────────────────────────
-qemu-base
+# ─── Virtualization (qemu-desktop) ───────────────────────────
+qemu-desktop
 libvirt
 virglrenderer
 swtpm
