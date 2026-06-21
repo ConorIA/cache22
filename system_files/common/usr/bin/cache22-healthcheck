@@ -25,7 +25,8 @@ for check in "$CHECK_DIR"/*; do
     if "$check"; then
         echo "[OK]   $(basename "$check")"
     else
-        echo "[FAIL] $(basename "$check") (exit $?)"
+        rc=$?
+        echo "[FAIL] $(basename "$check") (exit $rc)"
         fails=$((fails+1))
     fi
 done

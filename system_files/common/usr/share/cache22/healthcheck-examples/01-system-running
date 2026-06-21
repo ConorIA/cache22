@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Opt-in example: copy to /etc/cache22/healthcheck.d/required.d/ to enable.
+# Pass when systemd reports running or degraded; fail on starting/stopping/
+# maintenance. Note that a slow unit still activating at the check time reports
+# starting and will fail, so prefer the critical-services list for most needs.
+state=$(systemctl is-system-running 2>/dev/null || true)
+case "$state" in
+    running|degraded) exit 0 ;;
+esac
+echo "system-running: $state" >&2
+systemctl --no-pager --failed | head -20 >&2
+exit 1

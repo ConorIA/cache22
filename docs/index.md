@@ -35,7 +35,7 @@ Desktop variants (`*-kde`, `*-gnome`) additionally include Steam, Lutris, gamemo
 
 **TPM2 LUKS auto-unlock with two keyslot options (UEFI only).** PCR 11 signed-policy keyslot (always) survives every UKI rebuild without re-enrollment. Optional PCR 7 keyslot (opt-in) lets `cache22-reboot --kexec` auto-unlock too. See [TPM and LUKS](./boot-and-security/tpm-luks/). BIOS installs do not support LUKS encryption.
 
-**One-command rollback and auto-rollback on failure.** `sudo bootc rollback && sudo systemctl reboot` reverts to the previous deployment. Health checks 2 minutes after every boot trigger an automatic rollback after 3 consecutive failures. See [Health Checks](./system-ops/healthcheck/).
+**One-command rollback and opt-in auto-rollback on failure.** `sudo bootc rollback && sudo systemctl reboot` reverts to the previous deployment. A health check runs 2 minutes after every boot; declare your critical services and cache22 automatically rolls back if they are not running across 3 consecutive boots. See [Health Checks](./system-ops/healthcheck/).
 
 **Per-package layer rechunking for small daily upgrades.** Typical daily upgrades download only the layers whose contents actually changed (~100-300 MB), not the full multi-GB image. See [Architecture](./architecture/).
 

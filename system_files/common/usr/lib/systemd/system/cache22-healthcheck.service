@@ -1,8 +1,6 @@
 [Unit]
 Description=cache22 post-boot health check (auto-rollback after repeated failures)
 ConditionPathExists=/etc/cache22/healthcheck.d/required.d
-After=network-online.target
-Wants=network-online.target
 
 [Service]
 Type=oneshot

@@ -62,8 +62,7 @@ sudo journalctl -b -2 -u cache22-healthcheck.service     # Two boots ago.
 
 The journal shows which check failed. Common failures:
 
-- `01-system-running` failed because a service was stuck. Check `systemctl --failed` from the rolled-back deploy.
-- `02-network` failed because NetworkManager was not running. Check `systemctl status NetworkManager`.
+- `10-critical-services` failed because a service listed in `/etc/cache22/healthcheck.services` was not active. Check `systemctl --failed` and `systemctl status <unit>` from the rolled-back deploy.
 - A custom check in `/etc/cache22/healthcheck.d/required.d/` failed.
 
 To re-attempt the failed deploy after diagnosing:
