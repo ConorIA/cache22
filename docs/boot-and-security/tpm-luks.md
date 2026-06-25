@@ -53,6 +53,8 @@ PCR 7 captures Secure Boot state: which keys are enrolled in firmware DB, and wh
 
 systemd-cryptsetup tries enrolled methods in order. If the PCR 11 keyslot's policy fails (kexec, or any other case where PCR 11 does not match), it falls through to the PCR 7 keyslot. PCR 7 still matches, and LUKS unlocks.
 
+Because of this, `cache22-reboot` refuses to kexec when no PCR 7 (signed-policy-free) keyslot is enrolled, rather than booting into an often-invisible passphrase prompt. Override with `--kexec-force` or `KERNEL_CHANGE_STRATEGY=kexec-force`; see [Three Reboot Paths](../../updates-and-reboots/three-reboot-paths/).
+
 **Tradeoff:** the Type 1 BLS-entry attack defense effectively goes away. An attacker who triggers a non-sd-stub boot path will fail PCR 11 unseal but succeed at PCR 7 unseal. This is equivalent to having only a PCR 7 keyslot enrolled.
 
 **Re-enrollment needed after `cache22-secureboot rotate-keys`.** Rotation changes which db key signs UKIs. PCR 7 changes. The PCR 7 keyslot becomes useless until re-enrolled. The PCR 11 keyslot still works through rotation because the signed-policy approach uses the new TPM PCR-policy key embedded in fresh UKIs.

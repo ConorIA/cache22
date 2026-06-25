@@ -83,6 +83,8 @@ When LUKS is configured for TPM2 auto-unlock with a PCR 11 signed-policy keyslot
 
 To avoid that trap, `cache22-reboot` checks the boot LUKS before it kexecs. If no kexec-unlockable keyslot is enrolled, it aborts the kexec and falls back to a full reboot (where the passphrase prompt is visible), unless `--no-fallback` is set. A keyslot is kexec-unlockable only when it binds plain PCRs with no signed PCR 11 policy: a PCR 11 only keyslot, or a combined PCR 7 + signed PCR 11 keyslot, does not qualify.
 
+To kexec anyway and accept the passphrase prompt (for example with a serial console attached, or to blind-type the passphrase), pass `--kexec-force`, or set `KERNEL_CHANGE_STRATEGY=kexec-force` in `reboot.conf` so the automated paths (`cache22-update --reboot`, `cache22-autoreboot`) do the same.
+
 To enable kexec auto-unlock, enroll a PCR 7 fallback keyslot. PCR 7 captures Secure Boot state, which does not change between cache22 UKIs signed by the same key, and it survives kexec.
 
 ```
@@ -126,6 +128,7 @@ Override with explicit flags:
 ```
 sudo cache22-reboot --soft         # Force soft-reboot. Errors if not capable (unless --no-fallback omitted).
 sudo cache22-reboot --kexec        # Force kexec when there is a staged deploy.
+sudo cache22-reboot --kexec-force  # Force kexec even if LUKS will need a passphrase.
 sudo cache22-reboot --hard         # Force full reboot.
 sudo cache22-reboot --check        # Print the strategy that would run. Do not reboot.
 sudo cache22-reboot --no-fallback  # Abort instead of falling back to a full reboot on failure.

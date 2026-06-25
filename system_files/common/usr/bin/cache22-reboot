@@ -21,6 +21,8 @@
 #   --soft          Force soft-reboot (fail if not capable, unless
 #                   --no-fallback omitted).
 #   --kexec         Prefer kexec when the kernel changed.
+#   --kexec-force   Like --kexec, but also bypass the LUKS auto-unlock
+#                   check and kexec even if the passphrase will be needed.
 #   --hard          Force full reboot regardless.
 #   --check         Print the strategy that would run; do not execute.
 #   --no-fallback   On strategy failure, abort instead of falling back
@@ -28,7 +30,8 @@
 #   --help
 #
 # Persistent preference: /etc/cache22/reboot.conf
-#   KERNEL_CHANGE_STRATEGY=hard|kexec    (default: hard)
+#   KERNEL_CHANGE_STRATEGY=hard|kexec|kexec-force  (default: hard)
+#     (kexec-force also bypasses the LUKS auto-unlock check)
 #   SOFT_REBOOT=auto|never               (default: auto)
 # CLI flags override the config for that invocation.
 
@@ -44,15 +47,22 @@ FORCE_KEXEC=0
 FORCE_HARD=0
 CHECK=0
 FALLBACK=1
+KEXEC_FORCE=0
+
+# kexec-force is kexec plus a bypass of the locked-LUKS gate. Normalize the
+# config form to a plain kexec strategy so the decision code stays unchanged;
+# KEXEC_FORCE alone carries the gate-bypass into do_kexec.
+[[ "$KERNEL_CHANGE_STRATEGY" == kexec-force ]] && { KERNEL_CHANGE_STRATEGY=kexec; KEXEC_FORCE=1; }
 
 for arg in "$@"; do
     case "$arg" in
         --soft)         FORCE_SOFT=1 ;;
         --kexec)        FORCE_KEXEC=1 ;;
+        --kexec-force)  FORCE_KEXEC=1; KEXEC_FORCE=1 ;;
         --hard)         FORCE_HARD=1 ;;
         --check)        CHECK=1 ;;
         --no-fallback)  FALLBACK=0 ;;
-        -h|--help)      sed -n '2,33p' "$0" | sed 's/^# \?//'; exit 0 ;;
+        -h|--help)      sed -n '2,36p' "$0" | sed 's/^# \?//'; exit 0 ;;
         *)              echo "Unknown arg: $arg" >&2; exit 1 ;;
     esac
 done
@@ -229,15 +239,24 @@ do_kexec() {
             (( dev_safe )) || all_safe=0
         done < <(awk '$1 !~ /^#/ && NF >= 2 {print $2}' /etc/crypttab 2>/dev/null)
         if (( luks_seen && ! all_safe )); then
-            cat >&2 <<'EOF'
+            if (( KEXEC_FORCE )); then
+                cat >&2 <<'EOF'
+    WARNING: kexec forced past a root LUKS that will not auto-unlock. The
+    kexec'd kernel will stop at the LUKS passphrase prompt, which is often
+    invisible after GPU re-init. Type it blind, or use a serial console.
+EOF
+            else
+                cat >&2 <<'EOF'
     kexec aborted: the encrypted root has no kexec-unlockable TPM2 keyslot,
     so the kexec'd kernel would stop at the LUKS passphrase prompt (often
     invisible after GPU re-init). Enroll a PCR 7 kexec fallback first:
         sudo cache22-encryption remove <device>
         sudo cache22-encryption enroll <device>   # answer "y" to the PCR 7 prompt
+    Or force it anyway: --kexec-force (or KERNEL_CHANGE_STRATEGY=kexec-force).
 EOF
-            fallback "kexec (LUKS would require a passphrase)"
-            return
+                fallback "kexec (LUKS would require a passphrase)"
+                return
+            fi
         fi
     fi
 
