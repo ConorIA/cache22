@@ -138,10 +138,16 @@ These are managed by their respective `cache22-*` tools, but can be edited manua
 The btrfs root mount uses these options:
 
 ```
-noatime,compress=zstd:1,discard=async,space_cache=v2,subvolid=<id>,subvol=/root
+noatime,discard=async,space_cache=v2,subvolid=<id>,subvol=/root
 ```
 
-`compress=zstd:1` provides ~30% compression with negligible CPU cost. `discard=async` issues TRIM commands without blocking writes. These options are baked into `/etc/cache22/extra-cmdline` as `rootflags=...`.
+`discard=async` issues TRIM commands without blocking writes. These options are baked into `/etc/cache22/extra-cmdline` as `rootflags=...`.
+
+## Compression
+
+Compression is not a mount option. It is set as a btrfs property (`compression=zstd:1`) on the `root` and `home` subvolumes, which gives ~30% compression on the OS and user data with negligible CPU cost.
+
+Applying it as a property instead of a mount option keeps `compress` out of the filesystem's mountinfo. Some tools (for example Incus and podman) read mountinfo to decide whether a storage path is compressed, and skip nodatacow (`chattr +C`) on block images when it is; keeping it out of mountinfo leaves nodatacow available to workloads that want it. A subvolume created under `root` inherits its compression property, so a workload that needs nodatacow on its own subvolume should clear it there first with `chattr -c`, since nodatacow and compression are mutually exclusive on btrfs.
 
 To change mount options, edit `/etc/cache22/extra-cmdline` and let the path watcher trigger a UKI rebuild. The new options take effect on next boot.
 

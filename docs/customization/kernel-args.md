@@ -30,7 +30,7 @@ Example after a fresh install:
 rd.luks.uuid=1ba5a644-d061-4ef2-b0c1-21e84af7585e
 rd.luks.name=1ba5a644-d061-4ef2-b0c1-21e84af7585e=cache22-root
 rd.luks.options=1ba5a644-d061-4ef2-b0c1-21e84af7585e=discard,tpm2-device=auto
-rootflags=subvol=root,compress=zstd:1,noatime,space_cache=v2,discard=async
+rootflags=subvol=root,noatime,space_cache=v2,discard=async
 ```
 
 These define how the initramfs unlocks LUKS, names the dm-crypt mapper, and mounts the btrfs root with the right subvol and options. They are essential for boot. Do not remove them.
