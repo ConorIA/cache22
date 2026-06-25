@@ -144,10 +144,29 @@ EOF
         echo
         echo "==> Enrolling PCR 7 kexec-fallback keyslot..."
         echo "    (You'll be prompted for the existing LUKS passphrase again.)"
+        # systemd-cryptenroll auto-uses a tpm2-pcr-public-key.pem found in
+        # /etc/systemd, /run/systemd or /usr/lib/systemd, and would append the
+        # signed PCR 11 policy to this keyslot. That produces a combined 7+11
+        # slot which cannot unseal after a kexec (PCR 11 is unmeasured then),
+        # defeating the fallback. sd-stub drops that key into /run/systemd on a
+        # normal boot, so move any copy aside for this one enroll to keep the
+        # keyslot bound to PCR 7 only, then restore it.
+        local hidden=() pk_dir pk
+        for pk_dir in /etc/systemd /run/systemd /usr/lib/systemd; do
+            pk="$pk_dir/tpm2-pcr-public-key.pem"
+            if [[ -f "$pk" ]] && mv "$pk" "$pk.cache22-enroll-hidden" 2>/dev/null; then
+                hidden+=("$pk")
+            fi
+        done
+        local rc=0
         systemd-cryptenroll \
             --tpm2-device=auto \
             --tpm2-pcrs=7 \
-            "$device"
+            "$device" || rc=$?
+        for pk in ${hidden[@]+"${hidden[@]}"}; do
+            mv "$pk.cache22-enroll-hidden" "$pk" 2>/dev/null || true
+        done
+        (( rc == 0 )) || die "PCR 7 enrollment failed (exit $rc)."
         echo "[OK] PCR 7 keyslot enrolled."
     fi
 

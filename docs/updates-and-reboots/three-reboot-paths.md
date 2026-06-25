@@ -79,11 +79,11 @@ The default for kernel-changing updates is full reboot, not kexec. kexec is opt-
 
 ### LUKS+TPM caveat
 
-When LUKS is configured for TPM2 auto-unlock with a PCR 11 signed-policy keyslot (the default), kexec breaks auto-unlock. PCR 11 is measured by sd-stub at boot. kexec bypasses sd-stub, so PCR 11 stays at the booted UKI's value, not the kexec'd one. The TPM refuses to release the LUKS key.
+When LUKS is configured for TPM2 auto-unlock with a PCR 11 signed-policy keyslot (the default), kexec breaks auto-unlock. PCR 11 is measured by sd-stub at boot. kexec bypasses sd-stub, so PCR 11 stays at the booted UKI's value, not the kexec'd one. The TPM refuses to release the LUKS key. The kexec'd kernel would then reach the LUKS prompt, which may not be visible (GPU re-init after kexec frequently leaves the screen blank until a later mode change).
 
-The new kernel boots and reaches the LUKS prompt, but the prompt may not be visible (GPU re-init after kexec frequently leaves the screen blank until a mode change happens later).
+To avoid that trap, `cache22-reboot` checks the boot LUKS before it kexecs. If no kexec-unlockable keyslot is enrolled, it aborts the kexec and falls back to a full reboot (where the passphrase prompt is visible), unless `--no-fallback` is set. A keyslot is kexec-unlockable only when it binds plain PCRs with no signed PCR 11 policy: a PCR 11 only keyslot, or a combined PCR 7 + signed PCR 11 keyslot, does not qualify.
 
-To fix: enroll a PCR 7 fallback keyslot. PCR 7 captures Secure Boot state, which does not change between cache22 UKIs signed by the same key. The PCR 7 keyslot survives kexec.
+To enable kexec auto-unlock, enroll a PCR 7 fallback keyslot. PCR 7 captures Secure Boot state, which does not change between cache22 UKIs signed by the same key, and it survives kexec.
 
 ```
 sudo cache22-encryption enroll /dev/<luks-dev>     # When prompted, answer 'y' to PCR 7.

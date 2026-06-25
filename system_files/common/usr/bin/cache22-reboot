@@ -194,40 +194,50 @@ do_soft_reboot() {
 # VERSION_ID across cache22-*.efi). For a staged-but-not-finalized
 # deploy, the UKI doesn't exist yet — finalize + build first.
 #
-# kexec + LUKS+TPM caveat: kexec bypasses sd-stub, so PCR 11 isn't
-# measured for the new UKI → TPM unseal under PCR 11 binding fails.
-# If LUKS auto-unlock is bound to PCR 11 (default for cache22-encryption),
-# the new kernel will fall through to passphrase prompt. Heads-up
-# below; see `cache22-encryption --help` for the PCR 7 alternative.
+# kexec + LUKS+TPM caveat: kexec bypasses sd-stub, so PCR 11 is never
+# measured for the new UKI and any keyslot bound to the signed PCR 11
+# policy cannot unseal. do_kexec refuses to kexec when the boot LUKS has
+# no PCR 7 (signed-policy-free) keyslot, since the resulting passphrase
+# prompt is easy to miss after GPU re-init. See `cache22-encryption
+# --help` for enrolling the PCR 7 fallback.
 do_kexec() {
     echo "==> kexec ($(explain))"
 
-    # Detect whether a PCR 7 fallback keyslot exists. PCR 11 keyslots
-    # alone won't auto-unlock after kexec (sd-stub doesn't run, PCR 11
-    # stays at the booted UKI's value, not the kexec'd one). A PCR 7
-    # keyslot covers this case because PCR 7 is unchanged by the kexec.
+    # Refuse the kexec if the encrypted root could not auto-unlock afterwards.
+    # A keyslot is kexec-safe only when it binds plain PCRs (the PCR 7 fallback)
+    # with no signed PCR 11 policy: the signed policy needs sd-stub, which kexec
+    # skips, so a PCR 11 only or a combined PCR 7 + signed PCR 11 slot fails and
+    # the kexec'd kernel lands at a passphrase prompt that is easy to miss after
+    # GPU re-init. The token JSON is authoritative; the luksDump tpm2-hash-pcrs
+    # summary cannot tell a clean PCR 7 slot from a combined one.
     if command -v cryptsetup >/dev/null 2>&1; then
-        local has_tpm2=0 has_pcr7=0 dev pcrs
-        local crypt_devs
-        crypt_devs=$(awk '$1 !~ /^#/ && NF >= 2 {print $2}' /etc/crypttab 2>/dev/null)
-        for dev in $crypt_devs; do
-            [[ -b "$dev" ]] || continue
-            pcrs=$(cryptsetup luksDump "$dev" 2>/dev/null | awk '
-                /^[[:space:]]+[0-9]+: systemd-tpm2/ { in_token=1; next }
-                in_token && /^[[:space:]]+[0-9]+:/   { in_token=0 }
-                in_token && /tpm2-hash-pcrs:/        { gsub(/[^0-9,+]/,""); print }
-            ')
-            [[ -n "$pcrs" ]] && has_tpm2=1
-            grep -qx '7' <<<"$pcrs" && has_pcr7=1
-        done
-        if (( has_tpm2 && !has_pcr7 )); then
+        local spec realdev tok t luks_seen=0 all_safe=1 dev_safe
+        while read -r spec; do
+            [[ -n "$spec" ]] || continue
+            if [[ "$spec" == /dev/* ]]; then realdev="$spec"; else realdev=$(findfs "$spec" 2>/dev/null); fi
+            [[ -b "$realdev" ]] || continue
+            cryptsetup isLuks "$realdev" 2>/dev/null || continue
+            luks_seen=1
+            dev_safe=0
+            for t in $(seq 0 31); do
+                tok=$(cryptsetup token export --token-id "$t" "$realdev" 2>/dev/null) || continue
+                [[ "$tok" == *'"systemd-tpm2"'* ]] || continue
+                if [[ "$tok" =~ \"tpm2-pcrs\":\[[0-9] ]] && ! [[ "$tok" =~ \"tpm2_pubkey_pcrs\":\[[0-9] ]]; then
+                    dev_safe=1
+                fi
+            done
+            (( dev_safe )) || all_safe=0
+        done < <(awk '$1 !~ /^#/ && NF >= 2 {print $2}' /etc/crypttab 2>/dev/null)
+        if (( luks_seen && ! all_safe )); then
             cat >&2 <<'EOF'
-    NOTE: TPM2 keyslot is enrolled with PCR 11 only — kexec will not
-          auto-unlock LUKS. You'll get a passphrase prompt after the
-          kexec'd kernel boots. To auto-unlock, add a PCR 7 fallback
-          via `cache22-encryption remove <dev>` then `enroll <dev>`
-          and answer "y" to the kexec fallback prompt.
+    kexec aborted: the encrypted root has no kexec-unlockable TPM2 keyslot,
+    so the kexec'd kernel would stop at the LUKS passphrase prompt (often
+    invisible after GPU re-init). Enroll a PCR 7 kexec fallback first:
+        sudo cache22-encryption remove <device>
+        sudo cache22-encryption enroll <device>   # answer "y" to the PCR 7 prompt
 EOF
+            fallback "kexec (LUKS would require a passphrase)"
+            return
         fi
     fi
 
