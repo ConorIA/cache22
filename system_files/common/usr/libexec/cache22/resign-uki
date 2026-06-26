@@ -276,13 +276,21 @@ EOF
     local main_initrd="$initramfs"
     local user_img="/var/lib/cache22/initramfs/user-${kver}.img"
     if compgen -G '/etc/dracut.conf.d/*.conf' >/dev/null 2>&1; then
+        # Build the user img on demand if it is missing for this kver. resign-uki
+        # runs in the TARGET deploy's chroot (resign-uki-finalize on upgrade, the
+        # installer chroot at install), so build-user-initrd here builds against
+        # THIS deploy's modules + config — no stale-kernel driver mismatch on a
+        # kernel upgrade. If the build fails we fall back to the base img.
+        if [[ ! -f "$user_img" ]]; then
+            echo "    building user initramfs for $kver" >&2
+            /usr/libexec/cache22/build-user-initrd "$kver" >&2 || \
+                echo "    WARN: build-user-initrd failed; using base img" >&2
+        fi
         if [[ -f "$user_img" ]]; then
             main_initrd="$user_img"
             echo "    using user initramfs override $user_img" >&2
         else
-            echo "    WARN: /etc/dracut.conf.d overrides present but $user_img" >&2
-            echo "          not built; using base img. Run" >&2
-            echo "          /usr/libexec/cache22/build-user-initrd $kver" >&2
+            echo "    WARN: no user img for $kver; using base img" >&2
         fi
     fi
     initrds+=( --initrd="$main_initrd" )
