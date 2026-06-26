@@ -251,10 +251,41 @@ VERSION_ID=${version_priority}
 VERSION="${version_priority}"
 EOF
 
+    # Assemble the initrd list in load order. The kernel unpacks concatenated
+    # cpio segments, so a UKI can carry several:
+    #   1. microcode — must come first; the CPU applies it before the main
+    #      initramfs is unpacked. Shipped in the deploy, kernel-independent.
+    #   2. main — a per-machine user override if one is built for this kver,
+    #      otherwise the shipped base img (BLS initrd=). The base img alone is
+    #      always sufficient to boot, so older tooling or the BIOS/BLS path
+    #      that loads only it stays bootable.
+    local -a initrds=()
+    local ucode_img=""
+    if [[ -n "${deploy_dir:-}" && -f "$deploy_dir/usr/lib/cache22/microcode.img" ]]; then
+        ucode_img="$deploy_dir/usr/lib/cache22/microcode.img"
+    elif [[ -f /usr/lib/cache22/microcode.img ]]; then
+        ucode_img=/usr/lib/cache22/microcode.img
+    fi
+    [[ -n "$ucode_img" ]] && initrds+=( --initrd="$ucode_img" )
+
+    local main_initrd="$initramfs"
+    local user_img="/var/lib/cache22/initramfs/user-${kver}.img"
+    if compgen -G '/etc/dracut.conf.d/*.conf' >/dev/null 2>&1; then
+        if [[ -f "$user_img" ]]; then
+            main_initrd="$user_img"
+            echo "    using user initramfs override $user_img" >&2
+        else
+            echo "    WARN: /etc/dracut.conf.d overrides present but $user_img" >&2
+            echo "          not built; using base img. Run" >&2
+            echo "          /usr/libexec/cache22/build-user-initrd $kver" >&2
+        fi
+    fi
+    initrds+=( --initrd="$main_initrd" )
+
     echo "==> Building UKI for ${bootcsum:0:16} (kver=$kver, prio=$version_priority)" >&2
     ukify build \
         --linux="$vmlinuz" \
-        --initrd="$initramfs" \
+        "${initrds[@]}" \
         --cmdline="$cmdline" \
         --uname="$kver" \
         --os-release="@$osrel" \
