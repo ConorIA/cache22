@@ -13,6 +13,7 @@ Quick links:
 - [Getting Started](https://cmspam.github.io/cache22/getting-started/) for install + first-boot Secure Boot setup.
 - [Updates and Reboots](https://cmspam.github.io/cache22/updates-and-reboots/) including the [three reboot paths](https://cmspam.github.io/cache22/updates-and-reboots/three-reboot-paths/) cache22 supports (soft-reboot, kexec, hard).
 - [Boot and Security](https://cmspam.github.io/cache22/boot-and-security/) including [TPM and LUKS](https://cmspam.github.io/cache22/boot-and-security/tpm-luks/).
+- [Backup and Restore](https://cmspam.github.io/cache22/system-ops/cache22-backup/) for the user-layer backup, whole-system clone, and restoring onto a fresh install.
 - [Troubleshooting](https://cmspam.github.io/cache22/troubleshooting/) for common problems.
 
 ## Variants
@@ -76,6 +77,7 @@ It kexecs into a small in-RAM Alpine, streams the image to disk, injects your SS
 | [`cache22-karg`](https://cmspam.github.io/cache22/customization/kernel-args/) | Manage persistent kernel command-line args. |
 | [`cache22-shell`](https://cmspam.github.io/cache22/customization/distrobox/) | Open a CachyOS distrobox container for non-immutable package work. |
 | [`cache22-healthcheck`](https://cmspam.github.io/cache22/system-ops/healthcheck/) | Auto-rollback after 3 consecutive bad boots. |
+| [`cache22-backup`](https://cmspam.github.io/cache22/system-ops/cache22-backup/) | Back up the user layer, or make a whole-system btrfs `send` clone; restore either onto a fresh install. |
 | [`cache22-gamescope-mode`](https://cmspam.github.io/cache22/customization/gamescope-mode/) | (KDE variants only) Toggle SteamOS-style gamescope autologin. |
 
 ## Forking

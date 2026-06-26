@@ -39,6 +39,8 @@ Desktop variants (`*-kde`, `*-gnome`) additionally include Steam, Lutris, gamemo
 
 **Per-package layer rechunking for small daily upgrades.** Typical daily upgrades download only the layers whose contents actually changed (~100-300 MB), not the full multi-GB image. See [Architecture](./architecture/).
 
+**Backup, restore, and whole-system clone.** `cache22-backup` captures the user-adjusted layer (small, replays onto any matching install) or, on btrfs, makes an exact `btrfs send` clone of the whole system, preserving sparse and reflinked data. The installer can rebuild a machine from a clone onto a fresh disk. See [Backup and Restore](./system-ops/cache22-backup/).
+
 ## Sections
 
 1. [Getting Started](./getting-started/). Install, first-boot Secure Boot setup, picking a variant.
