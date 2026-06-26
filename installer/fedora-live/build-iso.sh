@@ -102,8 +102,9 @@ PKGS=(
     # Container / installer tooling
     podman bootc skopeo
     # cache22-install needs python for variants.json parsing,
-    # openssl for password hashing.
-    python3 openssl
+    # openssl for password hashing. zstd decompresses a clone archive
+    # when restoring with cache22-install --restore.
+    python3 openssl zstd
 )
 
 # Bootstrap just the filesystem package first so the rootfs directory

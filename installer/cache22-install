@@ -61,6 +61,14 @@ declare -A CFG=(
     [locale]="$DEFAULT_LOCALE"
     [timezone]="$DEFAULT_TZ"
     [reboot]="no"
+    # Restore mode: when [restore] is non-empty it is a cache22 clone archive
+    # source (a file path, an http(s)/ftp URL, or - for stdin). Instead of a
+    # fresh image deploy, the installer receives the clone's subvolumes onto the
+    # new disk and rewrites only the disk-bound boot files. The account, hostname,
+    # locale, and timezone come from the clone, so those steps are skipped.
+    [restore]=""
+    [restore_key_mode]="none"
+    [restore_key_arg]=""
 )
 
 # Set to 1 if maybe_setup_ipv6_github_proxy added entries to /etc/hosts.
@@ -218,6 +226,22 @@ Common flags:
   --no-prompt          fail instead of prompting for missing values
   -h, --help           this help
 
+Restore (rebuild a machine from a cache22 clone backup):
+  --restore SRC        clone archive source: a file path, an http(s)/ftp
+                       URL, or - for stdin (e.g. over ssh). Instead of a
+                       fresh image, the installer receives the clone's
+                       subvolumes onto the new disk (forces --filesystem
+                       btrfs) and rewrites only the disk-bound boot files
+                       (fstab, crypttab, kernel cmdline, UKI). The account,
+                       hostname, locale, and timezone come from the clone.
+                       The clone's own Secure Boot signing key is reused, so
+                       the restored system boots under the same key. Still
+                       pick the disk and (optionally) --luks with a fresh
+                       passphrase; re-enroll TPM auto-unlock after first boot.
+  --restore-passphrase       decrypt the archive with a prompted passphrase
+  --restore-passphrase-file F  read the archive passphrase from F
+  --restore-key-file F         use F as the archive symmetric key
+
 Password and LUKS passphrase are never accepted on the command line as
 plaintext args; use --password - to feed via stdin, or
 CACHE22_LUKS_PASSWORD env for LUKS.
@@ -277,6 +301,7 @@ pick_from() {
 # Each prompts, validates, stores in CFG, returns 0=ok 1=back 2=quit.
 
 step_variant() {
+    [[ -n "${CFG[restore]}" ]] && return 0   # image comes from the clone
     banner "Step 1/10 — Variant"
     load_variants
     local count
@@ -441,7 +466,43 @@ step_disk() {
     done
 }
 
+# Prompt for a clone archive source. Blank = a fresh install (normal path).
+step_restore() {
+    banner "Restore from backup (optional)"
+    say "To rebuild a machine from a cache22 clone backup, enter the archive"
+    say "source: a file path, an http(s)/ftp URL, or - to read from stdin."
+    say "Leave blank for a normal fresh install."
+    prompt "Clone source (blank = fresh install)" "${CFG[restore]}" || return $?
+    CFG[restore]="$REPLY"
+    if [[ -n "${CFG[restore]}" ]]; then
+        # A clone is a whole btrfs filesystem; only btrfs is valid.
+        CFG[filesystem]="btrfs"
+    fi
+    return 0
+}
+
+# Decryption key for an encrypted clone archive. Only runs in restore mode.
+step_restore_key() {
+    [[ -z "${CFG[restore]}" ]] && { CFG[restore_key_mode]="none"; return 0; }
+    banner "Restore — archive encryption"
+    say "If the clone archive is encrypted, provide its key. Leave blank if it"
+    say "is not encrypted."
+    while :; do
+        prompt "Archive key (p=passphrase, f=key/passphrase file, blank=none)" "" || return $?
+        case "${REPLY,,}" in
+            ""|n|none) CFG[restore_key_mode]="none"; return 0 ;;
+            p|pass|passphrase) CFG[restore_key_mode]="pass"; return 0 ;;
+            f|file)
+                prompt "Path to key or passphrase file" "${CFG[restore_key_arg]}" || return $?
+                [[ -r "$REPLY" ]] || { printf '  Cannot read %s\n' "$REPLY"; continue; }
+                CFG[restore_key_mode]="keyfile"; CFG[restore_key_arg]="$REPLY"; return 0 ;;
+            *) printf '  Answer p, f, or leave blank.\n' ;;
+        esac
+    done
+}
+
 step_filesystem() {
+    [[ -n "${CFG[restore]}" ]] && { CFG[filesystem]="btrfs"; return 0; }
     banner "Step 3/9 — Root filesystem"
     pick_from "Filesystem" "${CFG[filesystem]}" \
         "btrfs (recommended, supports snapshots)" \
@@ -485,6 +546,7 @@ step_encryption() {
 }
 
 step_hostname() {
+    [[ -n "${CFG[restore]}" ]] && return 0   # comes from the clone
     banner "Step 5/9 — Hostname"
     while :; do
         prompt "Hostname" "${CFG[hostname]}" || return $?
@@ -496,6 +558,7 @@ step_hostname() {
 }
 
 step_user() {
+    [[ -n "${CFG[restore]}" ]] && return 0   # comes from the clone
     banner "Step 6/9 — User account"
     while :; do
         prompt "Username (lowercase letters, digits, _, -)" "${CFG[username]}" || return $?
@@ -510,6 +573,7 @@ step_user() {
 }
 
 step_password() {
+    [[ -n "${CFG[restore]}" ]] && return 0   # comes from the clone
     banner "Step 7/9 — Password for ${CFG[username]}"
     while :; do
         prompt_secret "Password" || return $?
@@ -525,6 +589,7 @@ step_password() {
 }
 
 step_locale() {
+    [[ -n "${CFG[restore]}" ]] && return 0   # comes from the clone
     banner "Step 8/9 — Locale"
     pick_from "Locale" "${CFG[locale]}" "${COMMON_LOCALES[@]}" || return $?
     if [[ "$REPLY" =~ ^[a-z]{2,3}_[A-Z]{2}(\.[A-Za-z0-9-]+)?$ ]]; then
@@ -535,6 +600,7 @@ step_locale() {
 }
 
 step_timezone() {
+    [[ -n "${CFG[restore]}" ]] && return 0   # comes from the clone
     banner "Step 9/9 — Timezone"
     pick_from "Timezone" "${CFG[timezone]}" "${COMMON_TZS[@]}" || return $?
     if [[ -e "/usr/share/zoneinfo/$REPLY" ]]; then
@@ -547,6 +613,12 @@ step_timezone() {
 step_review() {
     while :; do
         banner "Review"
+        if [[ -n "${CFG[restore]}" ]]; then
+            printf '  RESTORE from clone: %s\n' "${CFG[restore]}"
+            printf '  archive key:        %s\n' "${CFG[restore_key_mode]}"
+            printf '  (hostname, user, locale, timezone come from the clone)\n'
+            hr
+        fi
         printf '  1) Mode:        %s\n' "${CFG[mode]}"
         case "${CFG[mode]}" in
             custom)
@@ -562,10 +634,12 @@ step_review() {
         esac
         printf '  3) Filesystem:  %s\n'        "${CFG[filesystem]}"
         printf '  4) Encryption:  %s\n'        "${CFG[luks]}"
-        printf '  5) Hostname:    %s\n'        "${CFG[hostname]}"
-        printf '  6) User:        %s (%s)\n'   "${CFG[username]}" "${CFG[fullname]}"
-        printf '  7) Locale:      %s\n'        "${CFG[locale]}"
-        printf '  8) Timezone:    %s\n'        "${CFG[timezone]}"
+        if [[ -z "${CFG[restore]}" ]]; then
+            printf '  5) Hostname:    %s\n'        "${CFG[hostname]}"
+            printf '  6) User:        %s (%s)\n'   "${CFG[username]}" "${CFG[fullname]}"
+            printf '  7) Locale:      %s\n'        "${CFG[locale]}"
+            printf '  8) Timezone:    %s\n'        "${CFG[timezone]}"
+        fi
         printf '  9) Reboot:      %s\n'        "${CFG[reboot]}"
         hr
         printf '  Press ENTER to install, a number to edit, b=back, q=quit.\n'
@@ -590,7 +664,7 @@ step_review() {
 }
 
 # ─── Wizard loop ───────────────────────────────────────────────────────
-STEPS=(variant mode disk filesystem encryption hostname user password locale timezone)
+STEPS=(restore variant mode disk filesystem encryption restore_key hostname user password locale timezone)
 run_wizard() {
     local i=0
     while (( i < ${#STEPS[@]} )); do
@@ -658,6 +732,13 @@ parse_args() {
             --locale)       CFG[locale]="$2"; shift 2 ;;
             --timezone)     CFG[timezone]="$2"; shift 2 ;;
             --reboot)       CFG[reboot]="yes"; shift ;;
+            --restore)      CFG[restore]="$2"; CFG[filesystem]="btrfs"; shift 2 ;;
+            --restore-passphrase)
+                            CFG[restore_key_mode]="pass"; shift ;;
+            --restore-passphrase-file)
+                            CFG[restore_key_mode]="passfile"; CFG[restore_key_arg]="$2"; shift 2 ;;
+            --restore-key-file)
+                            CFG[restore_key_mode]="keyfile"; CFG[restore_key_arg]="$2"; shift 2 ;;
             --no-prompt)    NO_PROMPT=1; shift ;;
             -h|--help)      usage; exit 0 ;;
             *)              die "Unknown argument: $1 (--help for options)" ;;
@@ -679,6 +760,13 @@ needs_wizard() {
         *)
             return 0 ;;
     esac
+    # Restore mode takes the account, hostname, locale, and timezone from the
+    # clone, so those are not required; only the disk, LUKS passphrase (if
+    # encrypting), and the archive source matter.
+    if [[ -n "${CFG[restore]}" ]]; then
+        [[ "${CFG[luks]}" == "yes" && -z "${CFG[luks_password]}" ]] && return 0
+        return 1
+    fi
     [[ -z "${CFG[username]}" || -z "${CFG[password]}" ]] && return 0
     [[ "${CFG[luks]}" == "yes" && -z "${CFG[luks_password]}" ]] && return 0
     return 1
@@ -690,9 +778,20 @@ needs_wizard() {
 # (openssl missing → empty password hash → passwordless account).
 # Refuse to start if anything's missing.
 require_tools() {
-    local need=(openssl podman bootc mkfs.ext4 mkfs.btrfs btrfs sgdisk parted blkid mountpoint dmsetup pvs vgchange mdadm wipefs lsblk udevadm)
+    local need=(mkfs.ext4 mkfs.btrfs btrfs sgdisk parted blkid mountpoint dmsetup pvs vgchange mdadm wipefs lsblk udevadm)
     if is_uefi; then
         need+=(efibootmgr mkfs.fat)
+    fi
+    # A fresh install pulls + deploys the image and hashes the password with
+    # openssl; restore receives a clone via cache22-backup (needs zstd) and takes
+    # the account from the clone. So podman/bootc/openssl are only required for a
+    # fresh install; restore needs openssl only when the archive is encrypted.
+    if [[ -n "${CFG[restore]}" ]]; then
+        need+=(cache22-backup zstd)
+        [[ "${CFG[restore_key_mode]}" != "none" ]] && need+=(openssl)
+        case "${CFG[restore]}" in http://*|https://*|ftp://*|ftps://*) need+=(curl) ;; esac
+    else
+        need+=(podman bootc openssl)
     fi
     local missing=()
     local t
@@ -1229,6 +1328,92 @@ setup_target() {
     fi
 }
 
+# Restore counterpart to setup_target + run_bootc_install + configure_deploy.
+# Lays down a fresh LUKS (with a new passphrase) and a fresh btrfs, then
+# receives the clone's subvolumes into it instead of deploying an image. The
+# clone already carries the OS root subvol, the deploys, /etc, /var, and the
+# per-machine SB key, so no bootc pull and no configure_deploy run; only the
+# disk-bound boot files are rewritten afterwards (rewrite_clone_boot_identity).
+setup_target_receive() {
+    [[ "${CFG[filesystem]}" == "btrfs" ]] || die "restore requires btrfs (a clone is a whole btrfs filesystem)"
+
+    if [[ "${CFG[luks]}" == "yes" ]]; then
+        printf '%s' "${CFG[luks_password]}" | cryptsetup luksFormat \
+            --type luks2 --batch-mode --label cache22-luks "${CFG[root_part]}" -
+        printf '%s' "${CFG[luks_password]}" | cryptsetup open "${CFG[root_part]}" cache22-root -
+        ROOT_DEV="/dev/mapper/cache22-root"
+    else
+        ROOT_DEV="${CFG[root_part]}"
+    fi
+
+    if is_uefi; then
+        mkfs.fat -F32 -n EFI-SYSTEM "${CFG[esp_part]}" >/dev/null
+    else
+        mkfs.ext4 -F -q -L cache22-boot "${CFG[boot_part]}"
+    fi
+    mkfs.btrfs -L cache22-root -f "$ROOT_DEV" >/dev/null
+
+    ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV")
+    if is_uefi; then
+        ESP_UUID=$(blkid -s UUID -o value "${CFG[esp_part]}")
+    else
+        BOOT_UUID=$(blkid -s UUID -o value "${CFG[boot_part]}")
+    fi
+    BTRFS_OPTS="noatime,space_cache=v2,discard=async"
+
+    # Receive every subvolume into the btrfs top level (subvolid=5), where nested
+    # subvolumes can be placed at their original paths. Stage on the target itself
+    # so a large clone is not bounded by the scratch partition; cache22-backup
+    # frees each stream as it is received, so peak extra space stays near 1x.
+    local TOPMNT="${TARGET}.top"
+    mkdir -p "$TOPMNT"
+    mount -o subvolid=5 "$ROOT_DEV" "$TOPMNT"
+
+    # BIOS keeps /boot on a separate partition, which the btrfs send does not
+    # include; mount the fresh boot partition so receive can restore the clone's
+    # captured /boot (kernel + BLS entries) onto it. UEFI carries /boot inside
+    # the root subvol, so there is nothing separate to restore.
+    local BOOTMNT=""
+    local -a bootargs=()
+    if ! is_uefi; then
+        BOOTMNT="${TARGET}.boot"
+        mkdir -p "$BOOTMNT"
+        mount "${CFG[boot_part]}" "$BOOTMNT"
+        bootargs=(--boot-dir "$BOOTMNT")
+    fi
+
+    local -a keyargs=()
+    case "${CFG[restore_key_mode]}" in
+        pass)     keyargs=(--passphrase) ;;
+        passfile) keyargs=(--passphrase-file "${CFG[restore_key_arg]}") ;;
+        keyfile)  keyargs=(--key-file "${CFG[restore_key_arg]}") ;;
+    esac
+
+    say "Receiving clone subvolumes onto the new disk"
+    cache22-backup receive --top "$TOPMNT" --tmpdir "$TOPMNT" \
+        "${bootargs[@]}" -i "${CFG[restore]}" "${keyargs[@]}" \
+        || die "clone receive failed"
+
+    [[ -n "$BOOTMNT" ]] && { umount "$BOOTMNT"; rmdir "$BOOTMNT"; }
+    umount "$TOPMNT"; rmdir "$TOPMNT"
+
+    # Mount the received layout exactly as a fresh install would: root subvol at
+    # $TARGET, ESP (or /boot) under it, so install_sb_and_uki / install_grub_bios
+    # run unchanged.
+    mkdir -p "$TARGET"
+    mount -o "subvol=root,$BTRFS_OPTS" "$ROOT_DEV" "$TARGET"
+    mount --make-rshared "$TARGET" || true
+    if is_uefi; then
+        mkdir -p "$TARGET/efi"
+        mount "${CFG[esp_part]}" "$TARGET/efi"
+        mount --make-rshared "$TARGET/efi" || true
+    else
+        mkdir -p "$TARGET/boot"
+        mount "${CFG[boot_part]}" "$TARGET/boot"
+        mount --make-rshared "$TARGET/boot" || true
+    fi
+}
+
 run_bootc_install() {
     say "Pulling ${CFG[image]} (large download — multi-GB)"
     podman pull "${CFG[image]}"
@@ -1336,9 +1521,15 @@ install_sb_and_uki() {
     # deploy's /usr/bin etc., so bare-command lookups inside the
     # chroot would fail with "No such file or directory" for sh,
     # bootctl, sbctl, etc.
+    #
+    # TMPDIR=/tmp pins temp files to the chroot's /tmp. setup_scratch
+    # exports TMPDIR=/var/tmp for the installer, which would otherwise be
+    # inherited here; on a restore the clone prunes /var/tmp (ephemeral),
+    # so resign-uki's mktemp would fail and ukify would get an empty
+    # os-release path. /tmp always exists in the deploy.
     local CHROOT_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-    chroot "$DEPLOY_ROOT" /usr/bin/env PATH="$CHROOT_PATH" \
+    chroot "$DEPLOY_ROOT" /usr/bin/env PATH="$CHROOT_PATH" TMPDIR=/tmp \
         /usr/libexec/cache22/sb-key-init
 
     # sbctl --export auth writes to cwd; the chroot's / is the deploy
@@ -1346,11 +1537,11 @@ install_sb_and_uki() {
     # /loader/keys/auto/ where sd-boot's secure-boot-enroll auto-
     # discovers them.
     install -d -m 0700 "$ESP/loader/keys/auto"
-    chroot "$DEPLOY_ROOT" /usr/bin/env PATH="$CHROOT_PATH" sh -c \
+    chroot "$DEPLOY_ROOT" /usr/bin/env PATH="$CHROOT_PATH" TMPDIR=/tmp sh -c \
         'cd /efi/loader/keys/auto && sbctl enroll-keys --microsoft --export auth' || \
         say "  WARN: sbctl enroll-keys --export auth failed; sd-boot auto-enroll won't work — user can run cache22-secureboot enable later"
 
-    chroot "$DEPLOY_ROOT" /usr/bin/env PATH="$CHROOT_PATH" \
+    chroot "$DEPLOY_ROOT" /usr/bin/env PATH="$CHROOT_PATH" TMPDIR=/tmp \
         bootctl install --esp-path=/efi || \
         die "bootctl install failed"
 
@@ -1363,7 +1554,7 @@ editor       no
 secure-boot-enroll force
 EOF
 
-    chroot "$DEPLOY_ROOT" /usr/bin/env PATH="$CHROOT_PATH" \
+    chroot "$DEPLOY_ROOT" /usr/bin/env PATH="$CHROOT_PATH" TMPDIR=/tmp \
         /usr/libexec/cache22/resign-uki || \
         die "first UKI build failed"
 }
@@ -1424,7 +1615,7 @@ install_grub_bios() {
     # stage 1 in the MBR + stage 1.5 in the BIOS-boot partition. The
     # prefix baked into core.img resolves to (hdX,gptN)/grub on the
     # ext4 /boot partition — no btrfs subvolume traversal involved.
-    chroot "$DEPLOY_ROOT" /usr/bin/env PATH="$CHROOT_PATH" \
+    chroot "$DEPLOY_ROOT" /usr/bin/env PATH="$CHROOT_PATH" TMPDIR=/tmp \
         grub-install \
         --target=i386-pc \
         --recheck \
@@ -1491,6 +1682,16 @@ deploy_etc() {
         [[ -n "$d" && -d "$d/etc" ]] && { echo "$d/etc"; return 0; }
     fi
     die "Could not locate <deploy>/etc under $TARGET (checked ostree/deploy and state/deploy)"
+}
+
+# Every <deploy>/etc under the target. A clone can carry more than one deploy
+# (the booted one plus a rollback), and the disk-bound boot files live in each
+# deploy's /etc, so a restore must rewrite all of them.
+all_deploy_etc() {
+    [[ -d "$TARGET/ostree/deploy" ]] || return 0
+    find "$TARGET/ostree/deploy" -mindepth 3 -maxdepth 3 -type d -regextype posix-extended \
+        -regex '.*\.[0-9]+' ! -path "*/backing/*" 2>/dev/null \
+        | while read -r d; do [[ -d "$d/etc" ]] && echo "$d/etc"; done
 }
 
 configure_deploy() {
@@ -1633,6 +1834,78 @@ configure_deploy() {
         echo "${CFG[username]}:${SUB_BASE}:65536" >> "$DEPLOY_ETC/subuid"
     grep -q "^${CFG[username]}:" "$DEPLOY_ETC/subgid" 2>/dev/null || \
         echo "${CFG[username]}:${SUB_BASE}:65536" >> "$DEPLOY_ETC/subgid"
+}
+
+# Restore counterpart to configure_deploy's disk-identity writes. After a clone
+# is received, the deploys still carry the SOURCE machine's fstab, crypttab,
+# kernel cmdline, and BLS root=UUID. Rewrite exactly those for the new disk;
+# everything else (hostname, accounts, services, the SB signing key) is the
+# clone's and is left untouched. The UKI is rebuilt from these by the existing
+# install_sb_and_uki / install_grub_bios using the clone's own key.
+rewrite_clone_boot_identity() {
+    say "Rewriting disk-bound boot files for the new disk"
+
+    local LUKS_PART_UUID=""
+    [[ "${CFG[luks]}" == "yes" ]] && LUKS_PART_UUID=$(blkid -s UUID -o value "${CFG[root_part]}")
+
+    local etc
+    while read -r etc; do
+        [[ -n "$etc" ]] || continue
+
+        # fstab: drop the cache22-managed mount lines, re-add with new UUIDs.
+        local fstab="$etc/fstab"; [[ -f "$fstab" ]] || : > "$fstab"
+        sed -i -E '/[[:space:]]\/efi[[:space:]]/d; /[[:space:]]\/boot[[:space:]]/d; /[[:space:]]\/var\/home[[:space:]]/d' "$fstab"
+        if is_uefi; then
+            echo "UUID=$ESP_UUID   /efi  vfat  umask=0077,shortname=winnt  0 2" >> "$fstab"
+        else
+            echo "UUID=$BOOT_UUID  /boot  ext4  defaults  0 2" >> "$fstab"
+        fi
+        echo "UUID=$ROOT_UUID  /var/home  btrfs  subvol=home,$BTRFS_OPTS  0 0" >> "$fstab"
+
+        # crypttab: rewrite (or remove) the root mapping for the new LUKS device.
+        local crypttab="$etc/crypttab"
+        [[ -f "$crypttab" ]] && sed -i '/^cache22-root[[:space:]]/d' "$crypttab"
+        if [[ "${CFG[luks]}" == "yes" ]]; then
+            echo "cache22-root UUID=$LUKS_PART_UUID none luks,discard" >> "$crypttab"
+        fi
+
+        # extra-cmdline is entirely cache22-owned; regenerate it.
+        install -d "$etc/cache22"
+        {
+            echo "# Per-machine kargs written by cache22-install (restore)."
+            if [[ "${CFG[luks]}" == "yes" ]]; then
+                echo "rd.luks.uuid=$LUKS_PART_UUID"
+                echo "rd.luks.name=$LUKS_PART_UUID=cache22-root"
+                echo "rd.luks.options=$LUKS_PART_UUID=discard,tpm2-device=auto"
+            fi
+            echo "rootflags=subvol=root,$BTRFS_OPTS"
+        } > "$etc/cache22/extra-cmdline"
+    done < <(all_deploy_etc)
+
+    # BLS entries (inside the root subvol on UEFI, on /boot for BIOS) carry the
+    # old root=UUID in options=. resign-uki reads options= as the cmdline source
+    # of truth, so fix root= here. On BIOS the LUKS + rootflags kargs are baked
+    # into options= too (UEFI gets them from extra-cmdline), so fix those as well.
+    local boot="$TARGET/boot" d e
+    for d in "$boot"/loader/entries "$boot"/loader.0/entries "$boot"/loader.1/entries; do
+        [[ -d "$d" ]] || continue
+        for e in "$d"/ostree-*.conf; do
+            [[ -f "$e" ]] || continue
+            sed -i -E "s#root=UUID=[0-9A-Fa-f-]+#root=UUID=$ROOT_UUID#g" "$e"
+            if ! is_uefi; then
+                if [[ "${CFG[luks]}" == "yes" ]]; then
+                    sed -i -E \
+                        -e "s#rd\.luks\.uuid=[0-9A-Fa-f-]+#rd.luks.uuid=$LUKS_PART_UUID#g" \
+                        -e "s#rd\.luks\.name=[0-9A-Fa-f-]+=cache22-root#rd.luks.name=$LUKS_PART_UUID=cache22-root#g" \
+                        -e "s#rd\.luks\.options=[0-9A-Fa-f-]+=#rd.luks.options=$LUKS_PART_UUID=#g" \
+                        "$e"
+                else
+                    # Source was encrypted, target is not: strip the LUKS kargs.
+                    sed -i -E 's#[[:space:]]rd\.luks\.[^[:space:]]*##g' "$e"
+                fi
+            fi
+        done
+    done
 }
 
 # Three-way network check. cache22's install pulls from ghcr.io +
@@ -1866,7 +2139,9 @@ main() {
         run_wizard
     fi
 
-    maybe_setup_ipv6_github_proxy
+    # The GitHub reachability check only matters for the image pull; a restore
+    # receives a local/streamed clone and never touches ghcr.io.
+    [[ -z "${CFG[restore]}" ]] && maybe_setup_ipv6_github_proxy
 
     confirm_destructive
 
@@ -1890,9 +2165,14 @@ main() {
             die "Unknown install mode: ${CFG[mode]}" ;;
     esac
     setup_scratch
-    setup_target
-    run_bootc_install
-    configure_deploy
+    if [[ -n "${CFG[restore]}" ]]; then
+        setup_target_receive
+        rewrite_clone_boot_identity
+    else
+        setup_target
+        run_bootc_install
+        configure_deploy
+    fi
     if is_uefi; then
         install_sb_and_uki
     else
@@ -1900,6 +2180,40 @@ main() {
     fi
     reclaim_scratch
 
+    if [[ -n "${CFG[restore]}" ]]; then
+        local boot_desc sb_note
+        if is_uefi; then
+            boot_desc="The disk-bound boot files (fstab, crypttab, kernel cmdline)
+  were rewritten for this disk and the UKI was rebuilt and signed with the
+  clone's own Secure Boot key."
+            sb_note="
+  Secure Boot — IMPORTANT FIRST STEP (same as a fresh install)
+    The ESP is new, so before rebooting put your firmware into setup
+    mode (disable Secure Boot, or clear/reset the Platform Key). On
+    first boot sd-boot auto-enrolls the clone's SB key + Microsoft DB
+    keys; after that Secure Boot is on and UKIs are verified.
+"
+        else
+            boot_desc="The disk-bound boot files (fstab, crypttab, kernel cmdline,
+  GRUB boot entries) were rewritten for this disk and GRUB was reinstalled."
+            sb_note=""
+        fi
+        cat <<DONE
+
+══════════════════════════════════════════════════
+  RESTORE COMPLETE
+    source:   ${CFG[restore]}
+    disk:     ${CFG[disk]:-${CFG[root_part]}}
+    log:      $LOG
+
+  The clone's accounts, hostname, services, and data were restored as
+  they were. $boot_desc
+
+  After first boot, re-enroll TPM auto-unlock if you use it:
+    sudo cache22-encryption enroll <luks-device>
+$sb_note══════════════════════════════════════════════════
+DONE
+    else
     cat <<DONE
 
 ══════════════════════════════════════════════════
@@ -1935,6 +2249,7 @@ main() {
     setup mode manually anyway.
 ══════════════════════════════════════════════════
 DONE
+    fi
 
     if (( USED_IPV6_PROXY )); then
         cat <<EOF

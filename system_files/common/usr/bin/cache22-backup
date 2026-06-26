@@ -1,13 +1,25 @@
 #!/usr/bin/env bash
-# cache22-backup — back up and restore the user-adjusted layer of a cache22
-# install, so it can be replayed onto a fresh install of the same image.
+# cache22-backup — back up and restore a cache22 install.
 #
-# It captures only what is NOT shipped by the image:
-#   /etc      files changed or added vs the image default (ostree config-diff)
-#   /var      everything on the root filesystem minus an exclude set
-#   subvols   the btrfs subvolume layout (recreated on restore; ext4/xfs skip it)
-#   incus     profile, network and storage definitions (+ instances on request)
-#   meta      the image ref + digest, the root fs type, and the exclude set
+# Two backup engines, picked by the root filesystem:
+#
+#   backup (tar overlay) — the user-adjusted layer only, replayed onto a fresh
+#     install of the same image. Works on any root fs (btrfs, ext4, xfs).
+#       /etc      files changed or added vs the image default (ostree config-diff)
+#       /var      everything on the root filesystem minus an exclude set
+#       subvols   the btrfs subvolume layout (recreated on restore; ext4/xfs skip)
+#       meta      the image ref + digest, the root fs type, and the exclude set
+#
+#   clone (btrfs send) — every subvolume of the root, including the OS itself,
+#     captured with btrfs send so reflinks, compression, xattrs, nodatacow, and
+#     read-only state are carried natively and shared extents are sent once. A
+#     clone is restored onto a fresh disk by the installer in restore mode, which
+#     partitions, sets up LUKS, receives the subvolumes, rewrites the disk-bound
+#     boot files, and re-signs the UKI with the clone's own SB key. btrfs only.
+#
+# Everything is captured at the file and subvolume level. There is no
+# application-specific logic (incus, podman, etc.); their state lives under /var
+# and is backed up and restored like any other files.
 #
 # Scope is the filesystem the root lives on. Anything mounted from a different
 # filesystem (external disk, USB, NAS) is detected by its filesystem UUID and
@@ -15,11 +27,15 @@
 #
 # The archive is a single stream: a tar, optionally zstd-compressed, optionally
 # encrypted with openssl (passphrase or key file). It reads from and writes to
-# files or stdin/stdout, so it pipes over ssh.
+# files or stdin/stdout, so it pipes over ssh. Both engines share this container,
+# so info reads either and an archive can be fetched from a file, stdin, an
+# http(s)/ftp URL, or ssh.
 #
 # Usage:
 #   cache22-backup backup  [options] [-o DIR|-]
+#   cache22-backup clone   [options] [-o DIR|-]
 #   cache22-backup restore [options] [-i FILE|-]
+#   cache22-backup receive --top DIR [options] [-i FILE|-]   (installer use)
 #   cache22-backup info    [options] [-i FILE|-]
 #
 # Backup options:
@@ -35,8 +51,6 @@
 #                           subvolume under it is also dropped from the recreate
 #                           list, so restore does not resurrect an empty subvol.
 #   --include DIR           re-add a path excluded by default (repeatable)
-#   --incus-instances       also export Incus instance disks (may be large)
-#   --no-incus              skip Incus entirely
 #   --full                  full backup; reset the incremental state (default
 #                           when no prior state exists)
 #   --incremental           only /var changes since the last backup
@@ -44,12 +58,24 @@
 #   --tmpdir DIR            staging directory (default: /var/tmp)
 #   --dry-run               report what would be captured; write nothing
 #
+# Clone options:
+#   -o, --output DEST       as for backup; auto-named cache22-clone-host-time
+#   --exclude DIR           drop a subtree or whole subvolume (repeatable)
+#   --include DIR           re-add a path excluded by default (repeatable)
+#   --no-compress           store uncompressed (default: zstd)
+#   --tmpdir DIR            staging directory; needs room for a full data copy
+#   --dry-run               list the subvolumes that would be sent; write nothing
+#
 # Restore options:
 #   -i, --input FILE        read the archive from FILE ('-' is stdin, default)
 #   --force                 restore even if the image digest differs
 #   --dry-run               report what would be restored; change nothing
 #
-# Encryption (either command):
+# Receive options (installer use; target disk already prepared and mounted):
+#   --top DIR               the mounted btrfs top level (subvolid=5) to receive into
+#   -i, --input FILE        read the clone archive from FILE ('-' is stdin)
+#
+# Encryption (any command):
 #   --passphrase            prompt for a passphrase
 #   --passphrase-file FILE  read the passphrase from FILE
 #   --key-file FILE         use FILE as a symmetric key
@@ -91,35 +117,59 @@ EOF
 # the target; restoring the source copy would break boot or identity.
 DEFAULT_ETC_EXCLUDE=(machine-id fstab crypttab mtab .updated)
 
-# /var paths that are regenerable, re-pullable, or machine-bound. Incus lives
-# under /var/lib/incus and is handled by the incus export, not the raw tar.
+# The default exclude set is intentionally minimal: ephemeral data, this tool's
+# own archive directory, and machine-bound boot/security state. Everything else
+# (containers and their images, incus instances and images, logs, crontabs, home)
+# is captured at the file and subvolume level, so a restore reproduces the system
+# exactly. All of these are overridable: --include re-adds one, --exclude or
+# EXTRA_EXCLUDE drop more.
 DEFAULT_VAR_EXCLUDE=(
-    /var/cache /var/tmp /var/log
-    /var/lib/cache22/sbkey
+    /var/cache
+    /var/tmp
     /var/lib/cache22/backup
-    /var/lib/containers/storage
-    /var/lib/incus
-    /var/lib/systemd/coredump
-    /var/spool /var/run /var/lock
+    /var/lib/cache22/sbkey
 )
 
-[[ -f "$CONF" ]] && . "$CONF"   # may set EXTRA_EXCLUDE=(...) or INCUS=no
+# Clone mode keeps the per-machine SB + TPM keys: a clone is restored under its
+# own signing key (the installer reuses it to re-sign the UKI), so unlike the tar
+# overlay it must not drop /var/lib/cache22/sbkey. Everything else excluded here
+# is ephemeral or this tool's own state.
+DEFAULT_CLONE_EXCLUDE=(
+    /var/cache
+    /var/tmp
+    /var/lib/cache22/backup
+)
+
+[[ -f "$CONF" ]] && . "$CONF"   # may set EXTRA_EXCLUDE=(...)
 
 IO=-
 DRYRUN=no
 FORCE=no
 COMPRESS=yes
-INCUS=${INCUS:-yes}
-INCUS_INSTANCES=no
 LEVEL=auto
+# Preserve POSIX ACLs and all xattr namespaces (user/security/trusted: file
+# capabilities, SELinux labels, overlay metadata). btrfs.* is excluded because
+# the kernel rejects setxattr for it on restore; btrfs properties (compression)
+# are handled separately at the subvolume level.
+XATTR_OPTS=(--acls --xattrs --xattrs-include='*' --xattrs-exclude='btrfs.*')
 TMPDIR_BASE=/var/tmp
 declare -a USER_EXCLUDE=() USER_INCLUDE=()
 ENC_MODE=none
 ENC_ARG=""
 PASS_TMP=""
 STAGE=""
+CLONE_TOP=""
+CLONE_SNAPS=""
 
-cleanup() { [[ -n "$PASS_TMP" ]] && rm -f "$PASS_TMP"; [[ -n "$STAGE" ]] && rm -rf "$STAGE"; }
+cleanup() {
+    [[ -n "$PASS_TMP" ]] && rm -f "$PASS_TMP"
+    if [[ -n "$CLONE_SNAPS" && -d "$CLONE_SNAPS" ]]; then
+        local s; for s in "$CLONE_SNAPS"/*; do [[ -e "$s" ]] && btrfs subvolume delete "$s" >/dev/null 2>&1; done
+        rmdir "$CLONE_SNAPS" 2>/dev/null
+    fi
+    [[ -n "$CLONE_TOP" ]] && { umount "$CLONE_TOP" 2>/dev/null; rmdir "$CLONE_TOP" 2>/dev/null; }
+    [[ -n "$STAGE" ]] && rm -rf "$STAGE"
+}
 trap cleanup EXIT
 
 # Live image identity (always the running system, for the manifest and for the
@@ -152,6 +202,50 @@ pass_arg() {
         keyfile|passfile) echo "file:$ENC_ARG" ;;
         pass) echo "file:$PASS_TMP" ;;
     esac
+}
+
+# Resolve the archive destination from $IO into globals OUT (a file path or
+# /dev/stdout), REPO (the tool-owned directory written into, if any), and IO_REL
+# (OUT relative to /, so the in-progress archive can exclude itself). A directory
+# is accepted only when new, empty, or already a tagged cache22 repo; the chosen
+# directory gets a CACHEDIR.TAG so this and later backups skip it. $1 is the
+# archive basename.
+OUT=""; REPO=""; IO_REL=""
+resolve_output() {
+    local base="$1"
+    OUT=/dev/stdout; REPO=""; IO_REL=""
+    [[ "$IO" == "-" ]] && return 0
+    if [[ -z "$IO" ]]; then
+        REPO="$ARCHIVE_DIR"
+    else
+        local dest; dest=$(readlink -m "$IO")
+        if [[ -e "$dest/$TAG_FILE" ]]; then
+            REPO="$dest"
+        elif [[ ! -e "$dest" || -z "$(ls -A "$dest" 2>/dev/null)" ]]; then
+            REPO="$dest"
+        else
+            die "refusing to write into non-empty directory '$dest' (not a cache22 backup repo). Use a new or empty directory, omit -o for the default ($ARCHIVE_DIR), or stream with -o -."
+        fi
+    fi
+    mkdir -p "$REPO"; tag_dir "$REPO"
+    OUT="$REPO/$base"; IO_REL="${OUT#/}"
+}
+
+# Package a staging directory into the single archive stream on stdout: tar it,
+# then optionally zstd-compress and openssl-encrypt. Used by both backup and
+# clone so the on-disk format (and the info/restore decode path) is identical.
+emit_archive() {
+    local stage="$1" pa
+    pa=$(pass_arg) || pa=""
+    if [[ -n "$pa" && "$COMPRESS" == yes ]]; then
+        ( cd "$stage" && tar -cf - "${XATTR_OPTS[@]}" . ) | zstd -q -T0 | openssl enc -aes-256-ctr -pbkdf2 -iter 300000 -salt -pass "$pa"
+    elif [[ -n "$pa" ]]; then
+        ( cd "$stage" && tar -cf - "${XATTR_OPTS[@]}" . ) | openssl enc -aes-256-ctr -pbkdf2 -iter 300000 -salt -pass "$pa"
+    elif [[ "$COMPRESS" == yes ]]; then
+        ( cd "$stage" && tar -cf - "${XATTR_OPTS[@]}" . ) | zstd -q -T0
+    else
+        ( cd "$stage" && tar -cf - "${XATTR_OPTS[@]}" . )
+    fi
 }
 
 root_uuid()     { findmnt -no UUID /; }
@@ -222,8 +316,6 @@ cmd_backup() {
             -o|--output)       IO="$2"; shift 2 ;;
             --exclude)         USER_EXCLUDE+=("${2%/}"); shift 2 ;;
             --include)         USER_INCLUDE+=("${2%/}"); shift 2 ;;
-            --incus-instances) INCUS_INSTANCES=yes; shift ;;
-            --no-incus)        INCUS=no; shift ;;
             --full)            LEVEL=full; shift ;;
             --incremental)     LEVEL=incr; shift ;;
             --no-compress)     COMPRESS=no; shift ;;
@@ -258,7 +350,6 @@ cmd_backup() {
         echo "/etc files:   ${#etc_files[@]} captured (disk/machine state excluded)"
         echo "subvols to recreate:"; printf '  %s\n' ${subvols[@]+"${subvols[@]}"}
         echo "/var excludes:"; printf '  %s\n' "${var_ex[@]}"
-        echo "incus:        $INCUS (instances: $INCUS_INSTANCES)"
         echo "encryption:   $ENC_MODE"
         case "$IO" in "") echo "output:       $ARCHIVE_DIR (default)";; "-") echo "output:       stdout";; *) echo "output:       $IO";; esac
         return 0
@@ -266,31 +357,8 @@ cmd_backup() {
 
     setup_key confirm
     STAGE=$(mktemp -d "$TMPDIR_BASE/cache22-backup.XXXXXX")
-    # A file destination is a directory the tool owns. It writes a timestamped
-    # archive into a dedicated CACHEDIR.TAG-marked subdirectory, so only that
-    # subdirectory is excluded from later backups, never the parent the user
-    # chose (e.g. a Documents folder keeps backing up; just its backup subdir
-    # does not). If the destination is already a tagged repo, it is used as-is.
-    local out=/dev/stdout io_rel="" repo=""
-    if [[ "$IO" == "-" ]]; then
-        out=/dev/stdout
-    else
-        if [[ -z "$IO" ]]; then
-            repo="$ARCHIVE_DIR"
-        else
-            local dest; dest=$(readlink -m "$IO")
-            if [[ -e "$dest/$TAG_FILE" ]]; then
-                repo="$dest"
-            elif [[ ! -e "$dest" || -z "$(ls -A "$dest" 2>/dev/null)" ]]; then
-                repo="$dest"
-            else
-                die "refusing to write into non-empty directory '$dest' (not a cache22 backup repo). Use a new or empty directory, omit -o for the default ($ARCHIVE_DIR), or stream with -o -."
-            fi
-        fi
-        mkdir -p "$repo"; tag_dir "$repo"
-        out="$repo/cache22-backup-$(hostname)-$(date -u +%Y%m%dT%H%M%SZ)-$LEVEL.c22b"
-        io_rel="${out#/}"
-    fi
+    resolve_output "cache22-backup-$(hostname)-$(date -u +%Y%m%dT%H%M%SZ)-$LEVEL.c22b"
+    local out="$OUT" io_rel="$IO_REL" repo="$REPO"
 
     note "capturing /etc overlay (${#etc_files[@]} files)"
     mkdir -p "$STAGE/etc"
@@ -302,16 +370,22 @@ cmd_backup() {
     done < <(ostree admin config-diff 2>/dev/null)
     if [[ ${#etc_files[@]} -gt 0 ]]; then
         local erc=0
-        ( cd /etc && tar -cf "$STAGE/etc.tar.tmp" --numeric-owner --warning=no-file-changed -- "${etc_files[@]}" ) || erc=$?
+        ( cd /etc && tar -cf "$STAGE/etc.tar.tmp" --numeric-owner "${XATTR_OPTS[@]}" --warning=no-file-changed -- "${etc_files[@]}" ) || erc=$?
         (( erc <= 1 )) || die "tar failed capturing /etc (exit $erc)"
-        tar -xpf "$STAGE/etc.tar.tmp" -C "$STAGE/etc"; rm -f "$STAGE/etc.tar.tmp"
+        tar -xpf "$STAGE/etc.tar.tmp" "${XATTR_OPTS[@]}" -C "$STAGE/etc"; rm -f "$STAGE/etc.tar.tmp"
     fi
 
     printf '%s\n' ${subvols[@]+"${subvols[@]}"} > "$STAGE/subvols.list"
+    : > "$STAGE/subvols-ro.list"
+    local sv
+    for sv in ${subvols[@]+"${subvols[@]}"}; do
+        btrfs property get "$sv" ro 2>/dev/null | grep -q 'true' && echo "$sv" >> "$STAGE/subvols-ro.list" || true
+    done
     printf '%s\n' "${var_ex[@]}" > "$STAGE/excludes.list"
     bootc status --format json > "$STAGE/bootc.json" 2>/dev/null || true
     {
         echo "format=$FORMAT"
+        echo "type=tar"
         echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         echo "hostname=$(hostname)"
         echo "image=$(img_ref)"
@@ -319,8 +393,6 @@ cmd_backup() {
         echo "ostree_checksum=$(ostree_checksum)"
         echo "rootfs=$(findmnt -no FSTYPE /)"
         echo "level=$LEVEL"
-        echo "incus=$INCUS"
-        echo "incus_instances=$INCUS_INSTANCES"
     } > "$STAGE/MANIFEST"
 
     note "capturing /var ($LEVEL)"
@@ -332,40 +404,13 @@ cmd_backup() {
     local worksnar="$STAGE/var.snar"
     [[ -f "$SNAR" ]] && cp "$SNAR" "$worksnar"
     local trc=0
-    ( cd / && tar --listed-incremental="$worksnar" --numeric-owner --exclude-caches-all \
+    ( cd / && tar --listed-incremental="$worksnar" --numeric-owner "${XATTR_OPTS[@]}" --exclude-caches-all \
         --warning=no-file-changed --warning=no-file-removed --warning=no-file-shrank \
         "${tar_ex[@]}" -cf "$STAGE/var.tar" var ) || trc=$?
     (( trc <= 1 )) || die "tar failed capturing /var (exit $trc)"
 
-    if [[ "$INCUS" == yes ]] && command -v incus >/dev/null && incus info >/dev/null 2>&1; then
-        note "exporting incus definitions"
-        mkdir -p "$STAGE/incus/profiles" "$STAGE/incus/networks" "$STAGE/incus/storage"
-        local n
-        for n in $(incus profile list -f csv -c n 2>/dev/null); do incus profile show "$n" > "$STAGE/incus/profiles/$n.yaml" 2>/dev/null || true; done
-        for n in $(incus network list -f csv 2>/dev/null | awk -F, '$3=="YES"{print $1}'); do incus network show "$n" > "$STAGE/incus/networks/$n.yaml" 2>/dev/null || true; done
-        for n in $(incus storage list -f csv -c n 2>/dev/null); do incus storage show "$n" > "$STAGE/incus/storage/$n.yaml" 2>/dev/null || true; done
-        if [[ "$INCUS_INSTANCES" == yes ]]; then
-            mkdir -p "$STAGE/incus/instances"
-            for n in $(incus list -f csv -c n 2>/dev/null); do
-                note "  exporting instance $n (this can be large)"
-                incus export "$n" "$STAGE/incus/instances/$n.tar.gz" --instance-only 2>/dev/null || echo "    WARN: export of $n failed" >&2
-            done
-        fi
-    fi
-
     note "writing archive"
-    local pa; pa=$(pass_arg) || pa=""
-    {
-        if [[ -n "$pa" && "$COMPRESS" == yes ]]; then
-            ( cd "$STAGE" && tar -cf - . ) | zstd -q -T0 | openssl enc -aes-256-ctr -pbkdf2 -iter 300000 -salt -pass "$pa"
-        elif [[ -n "$pa" ]]; then
-            ( cd "$STAGE" && tar -cf - . ) | openssl enc -aes-256-ctr -pbkdf2 -iter 300000 -salt -pass "$pa"
-        elif [[ "$COMPRESS" == yes ]]; then
-            ( cd "$STAGE" && tar -cf - . ) | zstd -q -T0
-        else
-            ( cd "$STAGE" && tar -cf - . )
-        fi
-    } > "$out"
+    emit_archive "$STAGE" > "$out"
 
     [[ -f "$worksnar" ]] && cp "$worksnar" "$SNAR"
     ok "backup complete (level: $LEVEL)"
@@ -392,23 +437,38 @@ unzstd_if() {
 
 # Emit the inner tar stream of the archive to stdout: detect+decrypt openssl,
 # then strip zstd. Handles both a seekable file and stdin.
-open_stream() {
-    local src="$1" h; h=$(mktemp "$TMPDIR_BASE/c22b.XXXXXX")
-    if [[ "$src" == "-" ]]; then head -c8 > "$h"; else head -c8 "$src" > "$h" 2>/dev/null || true; fi
+# Decode a raw archive stream on stdin: auto-detect openssl encryption (decrypt
+# with the supplied key) then auto-detect zstd, emitting the inner tar stream.
+_decode_stdin() {
+    local h; h=$(mktemp "$TMPDIR_BASE/c22b.XXXXXX"); head -c8 > "$h"
     local magic; magic=$(tr -d '\0' < "$h")
     if [[ "$magic" == "$ENC_MAGIC" ]]; then
         local pa; pa=$(pass_arg) || { rm -f "$h"; die "archive is encrypted; provide --passphrase, --passphrase-file or --key-file"; }
-        { if [[ "$src" == "-" ]]; then cat "$h" -; else cat "$src"; fi; } \
-            | openssl enc -d -aes-256-ctr -pbkdf2 -iter 300000 -salt -pass "$pa" | unzstd_if
+        { cat "$h" -; } | openssl enc -d -aes-256-ctr -pbkdf2 -iter 300000 -salt -pass "$pa" | unzstd_if
     else
-        { if [[ "$src" == "-" ]]; then cat "$h" -; else cat "$src"; fi; } | unzstd_if
+        { cat "$h" -; } | unzstd_if
     fi
     rm -f "$h"
 }
 
+# Feed an archive from any source into the decoder: a file on any mounted disk,
+# stdin ('-', which also covers ssh via 'ssh host cat arch | ... -i -'), or an
+# http(s)/ftp URL. Encryption and compression are detected the same way for all.
+open_stream() {
+    local src="$1"
+    case "$src" in
+        http://*|https://*|ftp://*|ftps://*)
+            command -v curl >/dev/null || die "curl is required to fetch $src"
+            curl -fsSL --retry 3 "$src" | _decode_stdin ;;
+        -)  _decode_stdin ;;
+        *)  [[ -r "$src" ]] || die "cannot read archive: $src"
+            _decode_stdin < "$src" ;;
+    esac
+}
+
 unpack_to_stage() {
     STAGE=$(mktemp -d "$TMPDIR_BASE/cache22-restore.XXXXXX")
-    open_stream "$1" | tar -xpf - -C "$STAGE"
+    open_stream "$1" | tar -xpf - "${XATTR_OPTS[@]}" -C "$STAGE"
     [[ -f "$STAGE/MANIFEST" ]] || die "not a cache22-backup archive (no MANIFEST)"
 }
 manifest_get() { sed -n "s/^$1=//p" "$STAGE/MANIFEST"; }
@@ -433,16 +493,22 @@ cmd_info() {
     parse_io_enc "$@"
     unpack_to_stage "$IO"
     echo "── cache22-backup archive ──"; cat "$STAGE/MANIFEST"
-    echo "── subvolumes to recreate ──"; cat "$STAGE/subvols.list" 2>/dev/null || true
-    echo "── /etc deletions ──"; cat "$STAGE/etc-deleted.list" 2>/dev/null || true
-    echo "── /var size (uncompressed) ──"; du -h "$STAGE/var.tar" 2>/dev/null | cut -f1 || true
-    [[ -d "$STAGE/incus" ]] && { echo "── incus ──"; find "$STAGE/incus" -type f | sed "s#$STAGE/##"; } || true
+    if [[ "$(manifest_get type)" == clone ]]; then
+        echo "── subvolumes (id, path, ro) ──"; cat "$STAGE/subvols.tsv" 2>/dev/null || true
+        echo "── stream sizes (uncompressed) ──"; du -h "$STAGE"/streams/*.send 2>/dev/null || true
+    else
+        echo "── subvolumes to recreate ──"; cat "$STAGE/subvols.list" 2>/dev/null || true
+        echo "── /etc deletions ──"; cat "$STAGE/etc-deleted.list" 2>/dev/null || true
+        echo "── /var size (uncompressed) ──"; du -h "$STAGE/var.tar" 2>/dev/null | cut -f1 || true
+    fi
 }
 
 cmd_restore() {
     require_root restore "$@"
     parse_io_enc "$@"
     unpack_to_stage "$IO"
+
+    [[ "$(manifest_get type)" == clone ]] && die "this is a whole-system clone, not a tar backup. Restore it from the installer (boot the cache22 installer and choose restore), which lays down a fresh disk and receives the subvolumes."
 
     local want cur; want=$(manifest_get image_digest); cur=$(img_digest)
     echo "archive image: $(manifest_get image)  $want" >&2
@@ -456,7 +522,6 @@ cmd_restore() {
         echo "── would recreate subvolumes ──"; cat "$STAGE/subvols.list" 2>/dev/null || true
         echo "── would delete from /etc ──"; cat "$STAGE/etc-deleted.list" 2>/dev/null || true
         echo "── would extract /etc overlay ──"; ( cd "$STAGE/etc" && find . -type f | sed 's#^\./#/etc/#' )
-        [[ -d "$STAGE/incus" ]] && { echo "── incus to recreate ──"; find "$STAGE/incus" -type f | sed "s#$STAGE/##"; } || true
         return 0
     fi
 
@@ -465,33 +530,31 @@ cmd_restore() {
         local sv
         while read -r sv; do
             [[ -n "$sv" ]] || continue
-            if [[ -e "$sv" ]]; then btrfs subvolume show "$sv" >/dev/null 2>&1 || note "  $sv exists (dir); leaving as-is"; continue; fi
+            if [[ -e "$sv" ]]; then
+                if btrfs subvolume show "$sv" >/dev/null 2>&1; then
+                    btrfs property set "$sv" ro false 2>/dev/null || true   # writable so the file restore can overwrite it
+                else
+                    note "  $sv exists (dir); leaving as-is"
+                fi
+                continue
+            fi
             mkdir -p "$(dirname "$sv")"; btrfs subvolume create "$sv" >/dev/null && echo "  + $sv" >&2
         done < "$STAGE/subvols.list"
     fi
 
     note "restoring /etc overlay"
-    ( cd "$STAGE/etc" && tar -cf - . ) | tar -xpf - -C /etc --numeric-owner
+    ( cd "$STAGE/etc" && tar -cf - "${XATTR_OPTS[@]}" . ) | tar -xpf - "${XATTR_OPTS[@]}" -C /etc --numeric-owner
     if [[ -s "$STAGE/etc-deleted.list" ]]; then
         local f; while read -r f; do [[ -n "$f" ]] && rm -f "/etc/$f"; done < "$STAGE/etc-deleted.list"
     fi
 
     note "restoring /var"
-    tar --listed-incremental=/dev/null -xpf "$STAGE/var.tar" -C / --numeric-owner
+    tar --listed-incremental=/dev/null --overwrite -xpf "$STAGE/var.tar" "${XATTR_OPTS[@]}" -C / --numeric-owner
 
-    if [[ -d "$STAGE/incus" ]] && command -v incus >/dev/null && incus info >/dev/null 2>&1; then
-        note "restoring incus definitions"
-        local f name
-        for f in "$STAGE"/incus/storage/*.yaml; do [[ -e "$f" ]] || continue; name=$(basename "$f" .yaml)
-            incus storage show "$name" >/dev/null 2>&1 || incus storage create "$name" "$(sed -n 's/^driver: //p' "$f")" >/dev/null 2>&1 || true; done
-        for f in "$STAGE"/incus/networks/*.yaml; do [[ -e "$f" ]] || continue; name=$(basename "$f" .yaml)
-            incus network show "$name" >/dev/null 2>&1 || incus network create "$name" >/dev/null 2>&1 || true
-            incus network edit "$name" < "$f" 2>/dev/null || true; done
-        for f in "$STAGE"/incus/profiles/*.yaml; do [[ -e "$f" ]] || continue; name=$(basename "$f" .yaml)
-            incus profile show "$name" >/dev/null 2>&1 || incus profile create "$name" >/dev/null 2>&1 || true
-            incus profile edit "$name" < "$f" 2>/dev/null || true; done
-        for f in "$STAGE"/incus/instances/*.tar.gz; do [[ -e "$f" ]] || continue; name=$(basename "$f" .tar.gz)
-            note "  importing instance $name"; incus import "$f" 2>/dev/null || echo "    WARN: import of $name failed" >&2; done
+    if [[ -s "$STAGE/subvols-ro.list" ]]; then
+        note "restoring read-only subvolume flags"
+        local rosv
+        while read -r rosv; do [[ -n "$rosv" ]] && btrfs property set "$rosv" ro true 2>/dev/null || true; done < "$STAGE/subvols-ro.list"
     fi
 
     systemctl daemon-reload || true
@@ -504,10 +567,323 @@ Next steps:
 EOF
 }
 
+# =============================================================================
+# clone — whole-filesystem capture via btrfs send (btrfs roots only)
+# =============================================================================
+# Captures every subvolume of the root filesystem (including the OS root) as a
+# btrfs send stream, so reflinks, compression, xattrs, nodatacow, and the
+# read-only state are all carried natively. Shared extents (snapshots, container
+# and VM images) are sent once with incremental send (-p), so the clone is no
+# larger than the data it holds. It is restored onto a fresh disk by the
+# installer in restore mode. The output format is the same archive container as a
+# tar backup (tar, optionally zstd + openssl), so info/restore decode it the same
+# way and it pipes over ssh.
+#
+# The staging directory holds the send streams before they are packaged, so for a
+# large system point --tmpdir at a disk with room for a full copy of the data.
+
+# Map a top-level-relative subvolume path to its runtime mount path, so excludes
+# (expressed as runtime /var/... paths) match. ostree keeps the per-stateroot
+# /var under <root>/ostree/deploy/<stateroot>/var.
+sv_runtime() {
+    local tp="/$1"
+    case "$tp" in
+        */ostree/deploy/*/var)   echo "/var" ;;
+        */ostree/deploy/*/var/*) echo "/var/${tp##*/ostree/deploy/*/var/}" ;;
+        *)                       echo "$tp" ;;
+    esac
+}
+
+cmd_clone() {
+    require_root clone "$@"
+    IO=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -o|--output)       IO="$2"; shift 2 ;;
+            --exclude)         USER_EXCLUDE+=("${2%/}"); shift 2 ;;
+            --include)         USER_INCLUDE+=("${2%/}"); shift 2 ;;
+            --no-compress)     COMPRESS=no; shift ;;
+            --tmpdir)          TMPDIR_BASE="$2"; shift 2 ;;
+            --dry-run)         DRYRUN=yes; shift ;;
+            --passphrase)      ENC_MODE=pass; shift ;;
+            --passphrase-file) ENC_MODE=passfile; ENC_ARG="$2"; shift 2 ;;
+            --key-file)        ENC_MODE=keyfile; ENC_ARG="$2"; shift 2 ;;
+            *)                 die "unknown arg: $1" ;;
+        esac
+    done
+    [[ "$(findmnt -no FSTYPE /)" == btrfs ]] || die "clone requires a btrfs root filesystem; use 'backup' for ext4/xfs"
+
+    # Effective exclude set: clone defaults (keeps sbkey) + EXTRA_EXCLUDE + user
+    # excludes + foreign mounts, minus user includes.
+    local -a ex=("${DEFAULT_CLONE_EXCLUDE[@]}" ${EXTRA_EXCLUDE[@]+"${EXTRA_EXCLUDE[@]}"} ${USER_EXCLUDE[@]+"${USER_EXCLUDE[@]}"})
+    local m; while read -r m; do [[ -n "$m" ]] && ex+=("$m"); done < <(foreign_mounts)
+    local -a clone_ex=(); local e i keep
+    for e in "${ex[@]}"; do
+        keep=yes
+        for i in ${USER_INCLUDE[@]+"${USER_INCLUDE[@]}"}; do [[ "$e" == "$i" ]] && keep=no; done
+        [[ "$keep" == yes ]] && clone_ex+=("$e")
+    done
+
+    local dev; dev=$(findmnt -no SOURCE -T / | sed 's/\[.*\]//')
+    [[ -n "$dev" ]] || die "could not determine the device backing /"
+
+    if [[ "$DRYRUN" == yes ]]; then
+        echo "── cache22-backup clone dry run ──"
+        echo "device:       $dev"
+        echo "image:        $(img_ref)  $(img_digest)"
+        echo "excludes:"; printf '  %s\n' "${clone_ex[@]}"
+        case "$IO" in "") echo "output:       $ARCHIVE_DIR (default)";; "-") echo "output:       stdout";; *) echo "output:       $IO";; esac
+        echo "subvolumes:"
+        local peek; peek=$(mktemp -d "$TMPDIR_BASE/c22clone-peek.XXXXXX")
+        if mount -o ro,subvolid=5 "$dev" "$peek" 2>/dev/null; then
+            btrfs subvolume list -u -q "$peek" | sed 's/^/  /'
+            umount "$peek"
+        fi
+        rmdir "$peek"
+        return 0
+    fi
+
+    setup_key confirm
+    STAGE=$(mktemp -d "$TMPDIR_BASE/cache22-clone.XXXXXX")
+    mkdir -p "$STAGE/streams"
+    resolve_output "cache22-clone-$(hostname)-$(date -u +%Y%m%dT%H%M%SZ).c22b"
+    local out="$OUT"
+
+    # Mount the btrfs top level so every subvolume is reachable by its path.
+    CLONE_TOP=$(mktemp -d "$TMPDIR_BASE/c22clone-top.XXXXXX")
+    mount -o subvolid=5 "$dev" "$CLONE_TOP" || die "could not mount btrfs top level"
+    CLONE_SNAPS="$CLONE_TOP/.cache22-clone-snaps.$$"
+    mkdir "$CLONE_SNAPS"
+
+    note "enumerating subvolumes"
+    local -a U=() P=() PATHS=()
+    while IFS=$'\t' read -r u p pth; do
+        [[ -n "$u" ]] || continue
+        U+=("$u"); P+=("$p"); PATHS+=("$pth")
+    done < <(btrfs subvolume list -u -q "$CLONE_TOP" | awk '{
+        u=""; p=""; pa="";
+        for (i=1;i<=NF;i++){
+            if($i=="uuid")             u=$(i+1);
+            else if($i=="parent_uuid") p=$(i+1);
+            else if($i=="path"){ pa=$(i+1); for(j=i+2;j<=NF;j++) pa=pa" "$j; }
+        }
+        print u"\t"p"\t"pa
+    }')
+    [[ ${#U[@]} -gt 0 ]] || die "no subvolumes found"
+
+    # Identify the OS root subvolume by structure, not by name: it is a top-level
+    # subvolume that holds the ostree deploys. (btrfs subvolume show / fails on
+    # the composefs overlay, so it cannot be used here.)
+    local ROOT_SUBVOL_PATH="" q
+    for q in "${PATHS[@]}"; do
+        [[ "$q" == */* ]] && continue
+        [[ -d "$CLONE_TOP/$q/ostree/deploy" ]] && { ROOT_SUBVOL_PATH="$q"; break; }
+    done
+    [[ -n "$ROOT_SUBVOL_PATH" ]] || die "could not identify the OS root subvolume (no top-level subvolume with ostree/deploy)"
+
+    # Drop subvolumes excluded directly, plus any nested beneath an excluded one.
+    local n=${#U[@]} a b
+    local -a KU=() KP=() KPATH=()
+    local -a skip_paths=()
+    for ((a=0;a<n;a++)); do
+        local rt; rt=$(sv_runtime "${PATHS[$a]}")
+        if under_any "$rt" "${clone_ex[@]}"; then
+            note "  excluding subvolume ${PATHS[$a]}"
+            skip_paths+=("${PATHS[$a]}")
+        fi
+    done
+    for ((a=0;a<n;a++)); do
+        local p="${PATHS[$a]}" drop=no
+        for b in ${skip_paths[@]+"${skip_paths[@]}"}; do
+            [[ "$p" == "$b" || "$p" == "$b/"* ]] && { drop=yes; break; }
+        done
+        [[ "$drop" == yes ]] && continue
+        KU+=("${U[$a]}"); KP+=("${P[$a]}"); KPATH+=("${PATHS[$a]}")
+    done
+
+    # Topological order: emit a subvolume only after the one it was snapshotted
+    # from (its parent_uuid, when captured) so btrfs send -p always has its base.
+    local -A INSET=() SEQOF=() DONE=()
+    local kn=${#KU[@]} j
+    for ((j=0;j<kn;j++)); do INSET[${KU[$j]}]=1; done
+    local -a order=()
+    local progress=1
+    while (( ${#order[@]} < kn )) && (( progress )); do
+        progress=0
+        for ((j=0;j<kn;j++)); do
+            [[ -n "${DONE[${KU[$j]}]:-}" ]] && continue
+            local par="${KP[$j]}"
+            if [[ "$par" == "-" || -z "${INSET[$par]:-}" || -n "${DONE[$par]:-}" ]]; then
+                order+=("$j"); DONE[${KU[$j]}]=1; progress=1
+            fi
+        done
+    done
+    (( ${#order[@]} == kn )) || die "subvolume dependency cycle (unexpected)"
+
+    note "capturing $kn subvolumes"
+    : > "$STAGE/subvols.tsv"
+    local seq=0 oi
+    for oi in "${order[@]}"; do
+        local id; id=$(printf 'sv%04d' "$seq")
+        SEQOF[${KU[$oi]}]="$id"
+        local sp="${KPATH[$oi]}" snap="$CLONE_SNAPS/$id"
+        btrfs subvolume snapshot "$CLONE_TOP/$sp" "$snap" >/dev/null
+        # Prune excluded subtrees inside the OS root subvolume's /var.
+        if [[ "$sp" == "$ROOT_SUBVOL_PATH" ]]; then
+            local snapvar; snapvar=$(echo "$snap"/ostree/deploy/*/var)
+            if [[ -d "$snapvar" ]]; then
+                local E
+                for E in "${clone_ex[@]}"; do
+                    case "$E" in /var/?*) rm -rf "$snapvar/${E#/var/}" 2>/dev/null || true ;; esac
+                done
+            fi
+        fi
+        local ro=0; btrfs property get "$CLONE_TOP/$sp" ro 2>/dev/null | grep -q 'true' && ro=1
+        btrfs property set "$snap" ro true
+        local par="${KP[$oi]}" base=""
+        [[ "$par" != "-" && -n "${SEQOF[$par]:-}" ]] && base="${SEQOF[$par]}"
+        if [[ -n "$base" ]]; then
+            btrfs send -p "$CLONE_SNAPS/$base" "$snap" > "$STAGE/streams/$id.send" 2>/dev/null || die "btrfs send failed for $sp"
+        else
+            btrfs send "$snap" > "$STAGE/streams/$id.send" 2>/dev/null || die "btrfs send failed for $sp"
+        fi
+        printf '%s\t%s\t%s\n' "$id" "$sp" "$ro" >> "$STAGE/subvols.tsv"
+        echo "  + $sp${base:+ (incremental from $base)}" >&2
+        seq=$((seq+1))
+    done
+
+    # A separately-mounted /boot (BIOS: an ext4 partition, not part of the btrfs
+    # send) holds the kernel, initramfs, and BLS entries. Capture it as a tar so
+    # the restore can repopulate the fresh boot partition. On UEFI /boot lives in
+    # the root subvol and is already in the send, so this is skipped.
+    local boot_uuid boot_captured=0 boot_fstype=""
+    boot_uuid=$(findmnt -no UUID /boot 2>/dev/null || true)
+    if [[ -n "$boot_uuid" && "$boot_uuid" != "$(root_uuid)" ]]; then
+        boot_fstype=$(findmnt -no FSTYPE /boot)
+        note "capturing separate /boot ($boot_fstype)"
+        ( cd /boot && tar -cf "$STAGE/boot.tar" --numeric-owner "${XATTR_OPTS[@]}" --warning=no-file-changed -- . ) \
+            || die "tar failed capturing /boot"
+        boot_captured=1
+    fi
+
+    {
+        echo "format=$FORMAT"
+        echo "type=clone"
+        echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "hostname=$(hostname)"
+        echo "image=$(img_ref)"
+        echo "image_digest=$(img_digest)"
+        echo "ostree_checksum=$(ostree_checksum)"
+        echo "rootfs=btrfs"
+        echo "root_subvol=$ROOT_SUBVOL_PATH"
+        echo "subvols=$kn"
+        echo "boot_captured=$boot_captured"
+        echo "boot_fstype=$boot_fstype"
+    } > "$STAGE/MANIFEST"
+
+    note "writing archive"
+    emit_archive "$STAGE" > "$out"
+    ok "clone complete ($kn subvolumes)"
+    if [[ "$out" != /dev/stdout ]]; then
+        echo "    $out" >&2
+        [[ "$REPO" == "$ARCHIVE_DIR" ]] && echo "    (on the root filesystem; copy it off-disk or use -o - to stream elsewhere)" >&2
+    fi
+}
+
+# =============================================================================
+# receive — lay a clone's subvolumes into a prepared btrfs top level
+# =============================================================================
+# Used by the installer in restore mode. The caller has already created the
+# partition table, LUKS, and filesystem and mounted the btrfs top level (-o
+# subvolid=5) at --top DIR. This receives every subvolume into it at its original
+# path, with its original read-only state. It does NOT touch the bootloader,
+# fstab, or kernel cmdline; the installer rewrites those for the new disk.
+cmd_receive() {
+    require_root receive "$@"
+    IO=-
+    local TOP="" BOOT_DIR=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --top)             TOP="$2"; shift 2 ;;
+            --boot-dir)        BOOT_DIR="$2"; shift 2 ;;
+            -i|--input)        IO="$2"; shift 2 ;;
+            --tmpdir)          TMPDIR_BASE="$2"; shift 2 ;;
+            --passphrase)      ENC_MODE=pass; shift ;;
+            --passphrase-file) ENC_MODE=passfile; ENC_ARG="$2"; shift 2 ;;
+            --key-file)        ENC_MODE=keyfile; ENC_ARG="$2"; shift 2 ;;
+            *)                 die "unknown arg: $1" ;;
+        esac
+    done
+    [[ -n "$TOP" && -d "$TOP" ]] || die "--top DIR (a mounted btrfs top level, subvolid=5) is required"
+    [[ "$(findmnt -no FSTYPE -T "$TOP")" == btrfs ]] || die "$TOP is not on a btrfs filesystem"
+    setup_key
+
+    STAGE=$(mktemp -d "$TMPDIR_BASE/cache22-receive.XXXXXX")
+    open_stream "$IO" | tar -xpf - "${XATTR_OPTS[@]}" -C "$STAGE"
+    [[ -f "$STAGE/MANIFEST" ]] || die "not a cache22-backup archive (no MANIFEST)"
+    [[ "$(manifest_get type)" == clone ]] || die "not a clone archive; 'receive' takes a clone (use 'restore' for a tar backup)"
+    [[ -d "$STAGE/streams" ]] || die "clone archive has no streams"
+
+    local recv="$TOP/.cache22-recv.$$"
+    mkdir "$recv"
+
+    note "receiving subvolumes"
+    # Streams are named in send order (sv0000, sv0001, ...) so glob order is the
+    # order incremental bases must arrive in. Free each after it is received so
+    # peak extra space stays near one copy of the data, not two.
+    local f
+    for f in "$STAGE"/streams/*.send; do
+        [[ -e "$f" ]] || die "no send streams in archive"
+        echo "  < $(basename "$f")" >&2
+        btrfs receive "$recv" -f "$f" >/dev/null || die "btrfs receive failed on $(basename "$f")"
+        rm -f "$f"
+    done
+
+    # Received subvolumes are read-only and carry a received_uuid (set by send).
+    # -f is required to clear ro while received_uuid is set; it also clears
+    # received_uuid, which is what we want: these become normal subvolumes on a
+    # fresh system, not incremental-receive targets. Extent sharing (reflinks)
+    # survives the flag change. Final read-only flags are reapplied below.
+    local s
+    for s in "$recv"/*; do [[ -e "$s" ]] && btrfs property set -f "$s" ro false; done
+
+    note "placing subvolumes"
+    # Shallowest target path first, so a containing subvolume is in place before
+    # its nested children. subvols.tsv columns: id <tab> toppath <tab> ro.
+    while IFS=$'\t' read -r id toppath ro; do
+        [[ -n "$id" ]] || continue
+        local src="$recv/$id" dest="$TOP/$toppath"
+        [[ -e "$src" ]] || die "received subvolume $id missing"
+        mkdir -p "$(dirname "$dest")"
+        [[ -d "$dest" ]] && rmdir "$dest" 2>/dev/null || true
+        mv "$src" "$dest" || die "failed to place $toppath"
+        [[ "$ro" == 1 ]] && btrfs property set "$dest" ro true || true
+        echo "  -> $toppath${ro:+ }$([[ "$ro" == 1 ]] && echo '(ro)')" >&2
+    done < <(awk -F'\t' '{t=$2; d=gsub(/\//,"/",t); print d"\t"$0}' "$STAGE/subvols.tsv" | sort -n | cut -f2-)
+
+    rmdir "$recv" 2>/dev/null || true
+
+    # A separately-captured /boot (BIOS) is restored onto the fresh boot
+    # partition, which the caller has mounted at --boot-dir.
+    if [[ -f "$STAGE/boot.tar" ]]; then
+        if [[ -n "$BOOT_DIR" ]]; then
+            [[ -d "$BOOT_DIR" ]] || die "--boot-dir $BOOT_DIR does not exist"
+            note "restoring /boot into $BOOT_DIR"
+            tar -xpf "$STAGE/boot.tar" "${XATTR_OPTS[@]}" -C "$BOOT_DIR" --numeric-owner
+        else
+            note "archive carries a separate /boot but no --boot-dir was given; the boot partition will be left empty"
+        fi
+    fi
+
+    ok "clone received into $TOP"
+}
+
 case "${1:-}" in
     backup)    shift; cmd_backup "$@" ;;
+    clone)     shift; cmd_clone "$@" ;;
     restore)   shift; cmd_restore "$@" ;;
+    receive)   shift; cmd_receive "$@" ;;
     info)      shift; cmd_info "$@" ;;
-    -h|--help) sed -n '2,57p' "$0" | sed 's/^# \?//' ;;
-    *)         echo "Usage: cache22-backup backup|restore|info [--help]" >&2; exit 1 ;;
+    -h|--help) sed -n '2,/^[^#]/p' "$0" | sed '$d; s/^# \?//' ;;
+    *)         echo "Usage: cache22-backup backup|clone|restore|receive|info [--help]" >&2; exit 1 ;;
 esac

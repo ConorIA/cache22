@@ -56,6 +56,11 @@ in {
   environment.systemPackages = with pkgs; [
     cache22-install
     cache22-repair
+    # Restore (cache22-install --restore) decodes a clone archive with
+    # cache22-backup, which needs zstd to decompress and openssl to decrypt.
+    zstd openssl
+    # LUKS install/restore needs cryptsetup in the live environment.
+    cryptsetup
     htop tmux vim git tcpdump strace lsof pciutils usbutils
   ];
 
