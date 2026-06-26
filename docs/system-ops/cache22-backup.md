@@ -124,6 +124,8 @@ EXTRA_EXCLUDE=(/var/lib/some-large-cache /var/games)
 INCUS=no
 ```
 
-Do not keep archives inside the filesystem being backed up. An archive left
-under `/var` is captured by the next backup, which grows each run. Write
-archives to external storage, or add their directory to `EXTRA_EXCLUDE`.
+A directory that `cache22-backup` writes an archive into is tagged with a
+standard `CACHEDIR.TAG` and skipped by this and later backups, so backups never
+capture earlier backups. The current output file is also excluded explicitly.
+Archives placed by other means (copied in by hand) are not tagged; keep those on
+external storage or add their directory to `EXTRA_EXCLUDE`.

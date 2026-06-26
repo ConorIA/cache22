@@ -58,11 +58,26 @@ SNAR="$STATE_DIR/var.snar"
 CONF=/etc/cache22/backup.conf
 FORMAT=1
 ENC_MAGIC="Salted__"
+TAG_FILE=CACHEDIR.TAG
+TAG_SIG="Signature: 8a477f597d28d172789f06886806bc55"
 
 die()  { echo "Error: $*" >&2; exit 1; }
 note() { echo "==> $*" >&2; }
 ok()   { echo "[OK] $*" >&2; }
 require_root() { [[ ${EUID} -eq 0 ]] || die "must run as root (try: sudo cache22-backup $*)"; }
+
+# Mark a directory we write archives into with a standard CACHEDIR.TAG, so this
+# and future backups (and any tool honoring the tag) skip it. This is what keeps
+# backups from capturing earlier backups.
+tag_dir() {
+    local d="$1"
+    [[ -d "$d" && ! -e "$d/$TAG_FILE" ]] || return 0
+    cat > "$d/$TAG_FILE" 2>/dev/null <<EOF || true
+$TAG_SIG
+# Directory of cache22-backup archives, excluded from backups. Safe to delete
+# this file if the directory no longer holds archives.
+EOF
+}
 
 # /etc files that track disk or machine identity. The installer writes these for
 # the target; restoring the source copy would break boot or identity.
@@ -242,6 +257,11 @@ cmd_backup() {
 
     setup_key confirm
     STAGE=$(mktemp -d "$TMPDIR_BASE/cache22-backup.XXXXXX")
+    local io_rel=""
+    if [[ "$IO" != "-" ]]; then
+        local io_abs; io_abs=$(readlink -m "$IO"); io_rel="${io_abs#/}"
+        tag_dir "$(dirname "$io_abs")"
+    fi
 
     note "capturing /etc overlay (${#etc_files[@]} files)"
     mkdir -p "$STAGE/etc"
@@ -277,12 +297,13 @@ cmd_backup() {
     note "capturing /var ($LEVEL)"
     local -a tar_ex=(); local e
     for e in "${var_ex[@]}"; do tar_ex+=(--exclude="${e#/}"); done
+    [[ -n "$io_rel" ]] && tar_ex+=(--exclude="$io_rel")
     mkdir -p "$STATE_DIR"
     [[ "$LEVEL" == full ]] && rm -f "$SNAR"
     local worksnar="$STAGE/var.snar"
     [[ -f "$SNAR" ]] && cp "$SNAR" "$worksnar"
     local trc=0
-    ( cd / && tar --listed-incremental="$worksnar" --numeric-owner \
+    ( cd / && tar --listed-incremental="$worksnar" --numeric-owner --exclude-caches-all \
         --warning=no-file-changed --warning=no-file-removed --warning=no-file-shrank \
         "${tar_ex[@]}" -cf "$STAGE/var.tar" var ) || trc=$?
     (( trc <= 1 )) || die "tar failed capturing /var (exit $trc)"
