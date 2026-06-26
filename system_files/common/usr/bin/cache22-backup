@@ -18,12 +18,19 @@
 # files or stdin/stdout, so it pipes over ssh.
 #
 # Usage:
-#   cache22-backup backup  [options] [-o FILE|-]
+#   cache22-backup backup  [options] [-o DIR|-]
 #   cache22-backup restore [options] [-i FILE|-]
 #   cache22-backup info    [options] [-i FILE|-]
 #
 # Backup options:
-#   -o, --output FILE       write the archive to FILE ('-' is stdout, default)
+#   -o, --output DEST       Where to write. Omit for the default tool-owned
+#                           location /var/lib/cache22/backup/archives (on the
+#                           root filesystem, excluded from backups). '-' streams
+#                           to stdout, for sending the archive off-box (e.g. over
+#                           ssh). A directory is accepted only if new, empty, or
+#                           an existing cache22 repo; a non-empty multi-purpose
+#                           directory is refused, so one is never tagged. Archives
+#                           are auto-named host + UTC timestamp + level.
 #   --exclude DIR           exclude a directory subtree (repeatable). Any btrfs
 #                           subvolume under it is also dropped from the recreate
 #                           list, so restore does not resurrect an empty subvol.
@@ -55,6 +62,7 @@ set -euo pipefail
 
 STATE_DIR=/var/lib/cache22/backup
 SNAR="$STATE_DIR/var.snar"
+ARCHIVE_DIR="$STATE_DIR/archives"
 CONF=/etc/cache22/backup.conf
 FORMAT=1
 ENC_MAGIC="Salted__"
@@ -208,6 +216,7 @@ build_subvol_list() {
 # =============================================================================
 cmd_backup() {
     require_root backup "$@"
+    IO=""   # default: the tool-owned archive directory (not stdout)
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -o|--output)       IO="$2"; shift 2 ;;
@@ -251,16 +260,36 @@ cmd_backup() {
         echo "/var excludes:"; printf '  %s\n' "${var_ex[@]}"
         echo "incus:        $INCUS (instances: $INCUS_INSTANCES)"
         echo "encryption:   $ENC_MODE"
-        echo "output:       $IO"
+        case "$IO" in "") echo "output:       $ARCHIVE_DIR (default)";; "-") echo "output:       stdout";; *) echo "output:       $IO";; esac
         return 0
     fi
 
     setup_key confirm
     STAGE=$(mktemp -d "$TMPDIR_BASE/cache22-backup.XXXXXX")
-    local io_rel=""
-    if [[ "$IO" != "-" ]]; then
-        local io_abs; io_abs=$(readlink -m "$IO"); io_rel="${io_abs#/}"
-        tag_dir "$(dirname "$io_abs")"
+    # A file destination is a directory the tool owns. It writes a timestamped
+    # archive into a dedicated CACHEDIR.TAG-marked subdirectory, so only that
+    # subdirectory is excluded from later backups, never the parent the user
+    # chose (e.g. a Documents folder keeps backing up; just its backup subdir
+    # does not). If the destination is already a tagged repo, it is used as-is.
+    local out=/dev/stdout io_rel="" repo=""
+    if [[ "$IO" == "-" ]]; then
+        out=/dev/stdout
+    else
+        if [[ -z "$IO" ]]; then
+            repo="$ARCHIVE_DIR"
+        else
+            local dest; dest=$(readlink -m "$IO")
+            if [[ -e "$dest/$TAG_FILE" ]]; then
+                repo="$dest"
+            elif [[ ! -e "$dest" || -z "$(ls -A "$dest" 2>/dev/null)" ]]; then
+                repo="$dest"
+            else
+                die "refusing to write into non-empty directory '$dest' (not a cache22 backup repo). Use a new or empty directory, omit -o for the default ($ARCHIVE_DIR), or stream with -o -."
+            fi
+        fi
+        mkdir -p "$repo"; tag_dir "$repo"
+        out="$repo/cache22-backup-$(hostname)-$(date -u +%Y%m%dT%H%M%SZ)-$LEVEL.c22b"
+        io_rel="${out#/}"
     fi
 
     note "capturing /etc overlay (${#etc_files[@]} files)"
@@ -325,7 +354,6 @@ cmd_backup() {
     fi
 
     note "writing archive"
-    local out=/dev/stdout; [[ "$IO" != "-" ]] && out="$IO"
     local pa; pa=$(pass_arg) || pa=""
     {
         if [[ -n "$pa" && "$COMPRESS" == yes ]]; then
@@ -341,7 +369,10 @@ cmd_backup() {
 
     [[ -f "$worksnar" ]] && cp "$worksnar" "$SNAR"
     ok "backup complete (level: $LEVEL)"
-    [[ "$IO" != "-" ]] && echo "    $IO" >&2 || true
+    if [[ "$out" != /dev/stdout ]]; then
+        echo "    $out" >&2
+        [[ "$repo" == "$ARCHIVE_DIR" ]] && echo "    (on the root filesystem; copy it off-disk or use -o - to stream elsewhere)" >&2
+    fi
 }
 
 # =============================================================================

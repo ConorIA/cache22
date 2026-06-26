@@ -28,19 +28,20 @@ root filesystem is kept.
 ## Synopsis
 
 ```
-sudo cache22-backup backup  [options] [-o FILE|-]
+sudo cache22-backup backup  [options] [-o DIR|-]
 sudo cache22-backup restore [options] [-i FILE|-]
      cache22-backup info    [options] [-i FILE|-]
 ```
 
 The archive is a single stream (a tar, by default zstd-compressed, optionally
-encrypted). With no `-o`/`-i` it uses stdout/stdin, so it pipes over ssh.
+encrypted). With no `-o`, backup writes to a tool-owned directory; `-o -` streams
+to stdout, so it pipes over ssh. Restore and info read a file or stdin (`-i -`).
 
 ## Backup options
 
 | Flag | Effect |
 | --- | --- |
-| `-o, --output FILE` | Write the archive to FILE. `-` is stdout (the default). |
+| `-o, --output DEST` | Where to write. Omit for the default tool-owned directory `/var/lib/cache22/backup/archives` (on the root filesystem, excluded from backups). `-` streams to stdout, for sending the archive off-box. A directory is accepted only if new, empty, or an existing cache22 repo; a non-empty multi-purpose directory is refused, so one is never tagged. Archives are auto-named host + UTC timestamp + level. |
 | `--exclude DIR` | Exclude a directory subtree (repeatable). A btrfs subvolume under it is also dropped from the recreate list, so restore does not recreate an empty subvolume. |
 | `--include DIR` | Re-add a path excluded by default (repeatable). |
 | `--incus-instances` | Also export Incus instance disks. These can be large. |
@@ -74,20 +75,23 @@ Either command accepts a key source. Encryption uses `openssl enc`
 ## Examples
 
 ```
-# Full backup to a USB drive
-sudo cache22-backup backup -o /run/media/usb/host.c22b
+# Full backup to the default location (/var/lib/cache22/backup/archives)
+sudo cache22-backup backup
+
+# Backup to a USB drive (a new or empty directory)
+sudo cache22-backup backup -o /run/media/usb/cache22-backups
 
 # Encrypted backup pulled over ssh to the workstation
 ssh root@host 'cache22-backup backup --passphrase-file /root/k -o -' > host.c22b
 
 # Incremental backup (only /var changes since the last run)
-sudo cache22-backup backup --incremental -o /run/media/usb/host-$(date +%F).c22b
+sudo cache22-backup backup --incremental
 
 # Inspect an archive without restoring
 cache22-backup info -i host.c22b
 
 # Restore onto a fresh install of the same image
-sudo cache22-backup restore -i /run/media/usb/host.c22b
+sudo cache22-backup restore -i host.c22b
 ```
 
 ## Incremental backups
@@ -124,8 +128,14 @@ EXTRA_EXCLUDE=(/var/lib/some-large-cache /var/games)
 INCUS=no
 ```
 
-A directory that `cache22-backup` writes an archive into is tagged with a
-standard `CACHEDIR.TAG` and skipped by this and later backups, so backups never
-capture earlier backups. The current output file is also excluded explicitly.
-Archives placed by other means (copied in by hand) are not tagged; keep those on
-external storage or add their directory to `EXTRA_EXCLUDE`.
+## Where archives go, and why backups never capture backups
+
+By default archives are written to the tool-owned directory
+`/var/lib/cache22/backup/archives`, which is already excluded. A directory given
+with `-o` is accepted only when it is new, empty, or already a cache22 backup
+repo; a non-empty multi-purpose directory is refused, so the tool never tags one
+by mistake. Any directory it does write into is marked with a standard
+`CACHEDIR.TAG` and skipped by later backups (and by any tool honoring the tag),
+and the current output file is excluded explicitly. Archives placed somewhere by
+other means (copied in by hand) are not tagged; keep those off the backed-up
+filesystem or add their directory to `EXTRA_EXCLUDE`.
