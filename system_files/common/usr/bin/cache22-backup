@@ -305,6 +305,168 @@ build_subvol_list() {
     fi
 }
 
+# Snapshot and btrfs-send a set of subvolumes into a stream directory.
+#   $1 top-level btrfs mount (subvolid=5)   $2 snapshot dir (under $1)
+#   $3 stream output dir                     $4 tsv to append "id<TAB>path<TAB>ro"
+#   $5 OS root subvolume top-level path ("" if the root is not in the set)
+#   $6.. the top-level paths to capture
+# Sent parents-first so incremental send (-p) always has its base (a subvolume
+# whose parent_uuid is also in the set), which makes shared extents (snapshots,
+# container/VM images) travel once. If the OS root is in the set, the runtime
+# /var excludes in CAPTURE_PRUNE_EX are removed from its snapshot before sending.
+# Streams are named svNNNN.send in send order. Shared by clone and backup.
+CAPTURE_PRUNE_EX=()
+capture_subvols() {
+    local top="$1" snaps="$2" streams="$3" tsv="$4" rootsv="$5"; shift 5
+    local -A WANT=(); local w; for w in "$@"; do WANT["$w"]=1; done
+    [[ ${#WANT[@]} -gt 0 ]] || return 0
+    local -a U=() P=() PATHS=()
+    while IFS=$'\t' read -r u p pth; do
+        [[ -n "$u" ]] || continue
+        U+=("$u"); P+=("$p"); PATHS+=("$pth")
+    done < <(btrfs subvolume list -u -q "$top" | awk '{
+        u=""; p=""; pa="";
+        for (i=1;i<=NF;i++){
+            if($i=="uuid")             u=$(i+1);
+            else if($i=="parent_uuid") p=$(i+1);
+            else if($i=="path"){ pa=$(i+1); for(j=i+2;j<=NF;j++) pa=pa" "$j; }
+        }
+        print u"\t"p"\t"pa
+    }')
+    local -A INSET=() SEQOF=() DONE=()
+    local n=${#U[@]} a
+    local -a KU=() KP=() KPATH=()
+    for ((a=0;a<n;a++)); do
+        [[ -n "${WANT[${PATHS[$a]}]:-}" ]] || continue
+        KU+=("${U[$a]}"); KP+=("${P[$a]}"); KPATH+=("${PATHS[$a]}"); INSET[${U[$a]}]=1
+    done
+    local kn=${#KU[@]} j
+    local -a order=(); local progress=1
+    while (( ${#order[@]} < kn )) && (( progress )); do
+        progress=0
+        for ((j=0;j<kn;j++)); do
+            [[ -n "${DONE[${KU[$j]}]:-}" ]] && continue
+            local par="${KP[$j]}"
+            if [[ "$par" == "-" || -z "${INSET[$par]:-}" || -n "${DONE[$par]:-}" ]]; then
+                order+=("$j"); DONE[${KU[$j]}]=1; progress=1
+            fi
+        done
+    done
+    (( ${#order[@]} == kn )) || die "subvolume dependency cycle (unexpected)"
+    local seq=0 oi
+    for oi in "${order[@]}"; do
+        local id; id=$(printf 'sv%04d' "$seq")
+        SEQOF[${KU[$oi]}]="$id"
+        local sp="${KPATH[$oi]}" snap="$snaps/$id"
+        btrfs subvolume snapshot "$top/$sp" "$snap" >/dev/null
+        if [[ -n "$rootsv" && "$sp" == "$rootsv" && ${#CAPTURE_PRUNE_EX[@]} -gt 0 ]]; then
+            local snapvar; snapvar=$(echo "$snap"/ostree/deploy/*/var)
+            if [[ -d "$snapvar" ]]; then
+                local E
+                for E in "${CAPTURE_PRUNE_EX[@]}"; do
+                    case "$E" in /var/?*) rm -rf "$snapvar/${E#/var/}" 2>/dev/null || true ;; esac
+                done
+            fi
+        fi
+        local ro=0; btrfs property get "$top/$sp" ro 2>/dev/null | grep -q 'true' && ro=1
+        btrfs property set "$snap" ro true
+        local par="${KP[$oi]}" base=""
+        [[ "$par" != "-" && -n "${SEQOF[$par]:-}" ]] && base="${SEQOF[$par]}"
+        if [[ -n "$base" ]]; then
+            btrfs send -p "$snaps/$base" "$snap" > "$streams/$id.send" 2>/dev/null || die "btrfs send failed for $sp"
+        else
+            btrfs send "$snap" > "$streams/$id.send" 2>/dev/null || die "btrfs send failed for $sp"
+        fi
+        printf '%s\t%s\t%s\n' "$id" "$sp" "$ro" >> "$tsv"
+        echo "  + $sp${base:+ (incremental from $base)}" >&2
+        seq=$((seq+1))
+    done
+}
+
+# Receive svNNNN.send streams into a prepared top-level mount and move each to
+# its recorded top-level path (shallowest first, so a nested subvolume lands
+# after its container), restoring read-only flags. Frees each stream as it is
+# received so peak extra space stays near one copy of the data. Shared by the
+# clone receive and the hybrid tar restore.
+#   $1 top-level btrfs mount   $2 stream dir   $3 tsv
+place_subvols() {
+    local top="$1" streams="$2" tsv="$3"
+    local recv="$top/.cache22-recv.$$"
+    mkdir "$recv"
+    local f
+    for f in "$streams"/*.send; do
+        [[ -e "$f" ]] || die "no send streams to receive"
+        echo "  < $(basename "$f")" >&2
+        btrfs receive "$recv" -f "$f" >/dev/null || die "btrfs receive failed on $(basename "$f")"
+        rm -f "$f"
+    done
+    local s
+    for s in "$recv"/*; do [[ -e "$s" ]] && btrfs property set -f "$s" ro false; done
+
+    # Replace any pre-existing target subvolumes wholesale: btrfs receive cannot
+    # merge into an existing subvolume the way tar overwrites files, and a
+    # subvolume restore is all-or-nothing anyway. Delete deepest-first so a
+    # nested subvolume goes before its container. (On a fresh target nothing
+    # matches, so this is a no-op.)
+    local did toppath2
+    while IFS=$'\t' read -r did toppath2 _; do
+        [[ -n "$did" ]] || continue
+        local d="$top/$toppath2"
+        if btrfs subvolume show "$d" >/dev/null 2>&1; then
+            btrfs subvolume delete "$d" >/dev/null 2>&1 \
+                || die "cannot replace existing subvolume $toppath2 (it has nested subvolumes not in the backup; remove them first)"
+        fi
+    done < <(awk -F'\t' '{t=$2; d=gsub(/\//,"/",t); print d"\t"$0}' "$tsv" | sort -rn | cut -f2-)
+
+    while IFS=$'\t' read -r id toppath ro; do
+        [[ -n "$id" ]] || continue
+        local src="$recv/$id" dest="$top/$toppath"
+        [[ -e "$src" ]] || die "received subvolume $id missing"
+        mkdir -p "$(dirname "$dest")"
+        [[ -d "$dest" ]] && rmdir "$dest" 2>/dev/null || true
+        mv "$src" "$dest" || die "failed to place $toppath"
+        [[ "$ro" == 1 ]] && btrfs property set "$dest" ro true || true
+    done < <(awk -F'\t' '{t=$2; d=gsub(/\//,"/",t); print d"\t"$0}' "$tsv" | sort -n | cut -f2-)
+    rmdir "$recv" 2>/dev/null || true
+}
+
+# Mount the btrfs top level (subvolid=5) of the root filesystem at a temp dir,
+# setting CLONE_TOP (and CLONE_SNAPS for a snapshot scratch dir). cleanup() tears
+# both down. Echoes nothing; sets the globals.
+mount_top_level() {
+    local dev; dev=$(findmnt -no SOURCE -T / | sed 's/\[.*\]//')
+    [[ -n "$dev" ]] || die "could not determine the device backing /"
+    CLONE_TOP=$(mktemp -d "$TMPDIR_BASE/c22-top.XXXXXX")
+    mount -o subvolid=5 "$dev" "$CLONE_TOP" || die "could not mount btrfs top level"
+    CLONE_SNAPS="$CLONE_TOP/.cache22-snaps.$$"
+    mkdir "$CLONE_SNAPS"
+}
+
+# On btrfs, keep the tool's own state directory as a subvolume. A subvolume is a
+# CoW boundary, so a clone's root send never descends into it (a nested
+# subvolume is an empty placeholder in the parent's stream) and a tar backup
+# excludes it as its own subvolume: backup data can never end up inside a backup.
+# Created on first use; if it already exists as a plain directory (older
+# installs) it is left as-is and the path-based exclude still covers it.
+ensure_archive_subvol() {
+    [[ "$(findmnt -no FSTYPE /)" == btrfs ]] || return 0
+    [[ -e "$STATE_DIR" ]] && return 0
+    mkdir -p "$(dirname "$STATE_DIR")"
+    btrfs subvolume create "$STATE_DIR" >/dev/null 2>&1 || mkdir -p "$STATE_DIR"
+}
+
+# Top-level path of the OS root subvolume (the top-level subvolume holding the
+# ostree deploys). btrfs subvolume show / fails on the composefs overlay, so
+# detect it structurally. $1 = top-level mount.
+root_subvol_path() {
+    local top="$1" q
+    for q in $(btrfs subvolume list "$top" | awk '{print $NF}'); do
+        [[ "$q" == */* ]] && continue
+        [[ -d "$top/$q/ostree/deploy" ]] && { echo "$q"; return 0; }
+    done
+    return 1
+}
+
 # =============================================================================
 # backup
 # =============================================================================
@@ -348,7 +510,7 @@ cmd_backup() {
         echo "image:        $(img_ref)  $(img_digest)"
         echo "root fs:      $(findmnt -no FSTYPE /)"
         echo "/etc files:   ${#etc_files[@]} captured (disk/machine state excluded)"
-        echo "subvols to recreate:"; printf '  %s\n' ${subvols[@]+"${subvols[@]}"}
+        echo "/var subvols (btrfs full backup: nested data -> btrfs send, mounted/partial -> dedicated tar):"; printf '  %s\n' ${subvols[@]+"${subvols[@]}"}
         echo "/var excludes:"; printf '  %s\n' "${var_ex[@]}"
         echo "encryption:   $ENC_MODE"
         case "$IO" in "") echo "output:       $ARCHIVE_DIR (default)";; "-") echo "output:       stdout";; *) echo "output:       $IO";; esac
@@ -356,6 +518,7 @@ cmd_backup() {
     fi
 
     setup_key confirm
+    ensure_archive_subvol
     STAGE=$(mktemp -d "$TMPDIR_BASE/cache22-backup.XXXXXX")
     resolve_output "cache22-backup-$(hostname)-$(date -u +%Y%m%dT%H%M%SZ)-$LEVEL.c22b"
     local out="$OUT" io_rel="$IO_REL" repo="$REPO"
@@ -375,12 +538,65 @@ cmd_backup() {
         tar -xpf "$STAGE/etc.tar.tmp" "${XATTR_OPTS[@]}" -C "$STAGE/etc"; rm -f "$STAGE/etc.tar.tmp"
     fi
 
-    printf '%s\n' ${subvols[@]+"${subvols[@]}"} > "$STAGE/subvols.list"
-    : > "$STAGE/subvols-ro.list"
-    local sv
-    for sv in ${subvols[@]+"${subvols[@]}"}; do
-        btrfs property get "$sv" ro 2>/dev/null | grep -q 'true' && echo "$sv" >> "$STAGE/subvols-ro.list" || true
-    done
+    # Classify /var subvolumes (btrfs full backups). tar's recursive descent does
+    # not reliably cross subvolume mount points, so every subvolume is captured
+    # explicitly and excluded by path from the main /var tar (an excluded path is
+    # left untouched by an incremental restore, unlike a placeholder dir):
+    #   send : nested data subvolumes, fully included and not separately mounted
+    #          -> btrfs send (preserves sparse/reflinks, dedups shared extents,
+    #          so a sparse incus VM image is not expanded into the archive)
+    #   tar  : separately-mounted (e.g. /var/home, an incus pool) or partially-
+    #          excluded subvolumes -> a dedicated per-subvolume tar, taken from
+    #          inside the subvolume so it restores in place even while mounted and
+    #          honors any excludes that fall inside it
+    # Incremental backups stay all-tar via the main /var tar (no per-subvolume
+    # send delta to pair with the tar snapshot).
+    local -a send_rt=() tar_rt=()
+    if [[ "$(findmnt -no FSTYPE /)" == btrfs && "$LEVEL" == full && ${#subvols[@]} -gt 0 ]]; then
+        local R E sendable
+        for R in "${subvols[@]}"; do
+            sendable=yes
+            mountpoint -q "$R" && sendable=no
+            [[ "$sendable" == yes ]] && for E in "${var_ex[@]}"; do [[ "$E" == "$R/"* ]] && { sendable=no; break; }; done
+            if [[ "$sendable" == yes ]]; then send_rt+=("$R"); else tar_rt+=("$R"); fi
+        done
+    fi
+
+    if [[ ${#send_rt[@]} -gt 0 ]]; then
+        note "capturing ${#send_rt[@]} /var subvolume(s) with btrfs send"
+        mount_top_level
+        mkdir -p "$STAGE/subvol-streams"; : > "$STAGE/subvol-send.tsv"
+        local -a send_top=(); local rt tp
+        for rt in "${send_rt[@]}"; do
+            tp=$(btrfs subvolume show "$rt" 2>/dev/null | head -1 | sed 's#^[[:space:]]*##; s#^/##')
+            [[ -n "$tp" ]] || die "could not resolve top-level path of subvolume $rt"
+            send_top+=("$tp")
+        done
+        CAPTURE_PRUNE_EX=()
+        capture_subvols "$CLONE_TOP" "$CLONE_SNAPS" "$STAGE/subvol-streams" "$STAGE/subvol-send.tsv" \
+            "" "${send_top[@]}"
+    fi
+
+    if [[ ${#tar_rt[@]} -gt 0 ]]; then
+        note "capturing ${#tar_rt[@]} /var subvolume(s) with a dedicated tar"
+        mkdir -p "$STAGE/subvol-tars"; : > "$STAGE/subvol-tar.tsv"
+        local i=0 R E
+        for R in "${tar_rt[@]}"; do
+            local id; id=$(printf 'tv%04d' "$i")
+            local ro=0; btrfs property get "$R" ro 2>/dev/null | grep -q 'true' && ro=1
+            local -a iex=()
+            for E in "${var_ex[@]}"; do [[ "$E" == "$R/"* ]] && iex+=(--exclude=".${E#$R}"); done
+            local drc=0
+            ( cd "$R" && tar --one-file-system --numeric-owner "${XATTR_OPTS[@]}" --exclude-caches-all \
+                --warning=no-file-changed --warning=no-file-removed --warning=no-file-shrank \
+                "${iex[@]}" -cf "$STAGE/subvol-tars/$id.tar" . ) || drc=$?
+            (( drc <= 1 )) || die "tar failed capturing subvolume $R (exit $drc)"
+            printf '%s\t%s\t%s\n' "$id" "$R" "$ro" >> "$STAGE/subvol-tar.tsv"
+            echo "  ~ $R (dedicated tar)" >&2
+            i=$((i+1))
+        done
+    fi
+
     printf '%s\n' "${var_ex[@]}" > "$STAGE/excludes.list"
     bootc status --format json > "$STAGE/bootc.json" 2>/dev/null || true
     {
@@ -393,12 +609,18 @@ cmd_backup() {
         echo "ostree_checksum=$(ostree_checksum)"
         echo "rootfs=$(findmnt -no FSTYPE /)"
         echo "level=$LEVEL"
+        echo "send_subvols=${#send_rt[@]}"
+        echo "tar_subvols=${#tar_rt[@]}"
     } > "$STAGE/MANIFEST"
 
     note "capturing /var ($LEVEL)"
     local -a tar_ex=(); local e
     for e in "${var_ex[@]}"; do tar_ex+=(--exclude="${e#/}"); done
     [[ -n "$io_rel" ]] && tar_ex+=(--exclude="$io_rel")
+    # Exclude every separately-captured subvolume (send + dedicated tar) from the
+    # main /var tar. An excluded path is left untouched by an incremental restore.
+    local sx
+    for sx in ${send_rt[@]+"${send_rt[@]}"} ${tar_rt[@]+"${tar_rt[@]}"}; do tar_ex+=(--exclude="${sx#/}"); done
     mkdir -p "$STATE_DIR"
     [[ "$LEVEL" == full ]] && rm -f "$SNAR"
     local worksnar="$STAGE/var.snar"
@@ -497,7 +719,13 @@ cmd_info() {
         echo "── subvolumes (id, path, ro) ──"; cat "$STAGE/subvols.tsv" 2>/dev/null || true
         echo "── stream sizes (uncompressed) ──"; du -h "$STAGE"/streams/*.send 2>/dev/null || true
     else
-        echo "── subvolumes to recreate ──"; cat "$STAGE/subvols.list" 2>/dev/null || true
+        if [[ -f "$STAGE/subvol-tar.tsv" ]]; then
+            echo "── subvolumes via dedicated tar (id, path, ro) ──"; cat "$STAGE/subvol-tar.tsv"
+        fi
+        if [[ -f "$STAGE/subvol-send.tsv" ]]; then
+            echo "── subvolumes via btrfs send (id, path, ro) ──"; cat "$STAGE/subvol-send.tsv"
+            echo "── send stream sizes (uncompressed) ──"; du -h "$STAGE"/subvol-streams/*.send 2>/dev/null || true
+        fi
         echo "── /etc deletions ──"; cat "$STAGE/etc-deleted.list" 2>/dev/null || true
         echo "── /var size (uncompressed) ──"; du -h "$STAGE/var.tar" 2>/dev/null | cut -f1 || true
     fi
@@ -519,27 +747,11 @@ cmd_restore() {
     fi
 
     if [[ "$DRYRUN" == yes ]]; then
-        echo "── would recreate subvolumes ──"; cat "$STAGE/subvols.list" 2>/dev/null || true
+        [[ -f "$STAGE/subvol-tar.tsv" ]]  && { echo "── would restore subvolumes (dedicated tar) ──"; cut -f2 "$STAGE/subvol-tar.tsv"; }
+        [[ -f "$STAGE/subvol-send.tsv" ]] && { echo "── would receive subvolumes (btrfs send) ──"; cut -f2 "$STAGE/subvol-send.tsv"; }
         echo "── would delete from /etc ──"; cat "$STAGE/etc-deleted.list" 2>/dev/null || true
         echo "── would extract /etc overlay ──"; ( cd "$STAGE/etc" && find . -type f | sed 's#^\./#/etc/#' )
         return 0
-    fi
-
-    if [[ "$(findmnt -no FSTYPE /)" == btrfs && -s "$STAGE/subvols.list" ]]; then
-        note "recreating btrfs subvolumes"
-        local sv
-        while read -r sv; do
-            [[ -n "$sv" ]] || continue
-            if [[ -e "$sv" ]]; then
-                if btrfs subvolume show "$sv" >/dev/null 2>&1; then
-                    btrfs property set "$sv" ro false 2>/dev/null || true   # writable so the file restore can overwrite it
-                else
-                    note "  $sv exists (dir); leaving as-is"
-                fi
-                continue
-            fi
-            mkdir -p "$(dirname "$sv")"; btrfs subvolume create "$sv" >/dev/null && echo "  + $sv" >&2
-        done < "$STAGE/subvols.list"
     fi
 
     note "restoring /etc overlay"
@@ -551,10 +763,36 @@ cmd_restore() {
     note "restoring /var"
     tar --listed-incremental=/dev/null --overwrite -xpf "$STAGE/var.tar" "${XATTR_OPTS[@]}" -C / --numeric-owner
 
-    if [[ -s "$STAGE/subvols-ro.list" ]]; then
-        note "restoring read-only subvolume flags"
-        local rosv
-        while read -r rosv; do [[ -n "$rosv" ]] && btrfs property set "$rosv" ro true 2>/dev/null || true; done < "$STAGE/subvols-ro.list"
+    # btrfs subvolumes captured as a dedicated tar (separately-mounted like
+    # /var/home, or partially-excluded). Recreate each as a subvolume unless it is
+    # already a live subvolume/mount (e.g. mounted /var/home), then extract its
+    # tar in place. Shallowest first so a parent exists before a nested one.
+    if [[ -f "$STAGE/subvol-tar.tsv" ]]; then
+        [[ "$(findmnt -no FSTYPE /)" == btrfs ]] || die "archive has btrfs subvolume tars but the root is not btrfs"
+        note "restoring btrfs subvolumes (dedicated tar)"
+        local tid tpath tro
+        while IFS=$'\t' read -r tid tpath tro; do
+            [[ -n "$tid" ]] || continue
+            if mountpoint -q "$tpath" || btrfs subvolume show "$tpath" >/dev/null 2>&1; then
+                btrfs property set "$tpath" ro false 2>/dev/null || true
+            else
+                [[ -d "$tpath" ]] && rmdir "$tpath" 2>/dev/null || true
+                mkdir -p "$(dirname "$tpath")"; btrfs subvolume create "$tpath" >/dev/null
+            fi
+            tar --overwrite -xpf "$STAGE/subvol-tars/$tid.tar" "${XATTR_OPTS[@]}" -C "$tpath" --numeric-owner
+            [[ "$tro" == 1 ]] && btrfs property set "$tpath" ro true || true
+            echo "  ~ $tpath" >&2
+        done < <(awk -F'\t' '{t=$2; d=gsub(/\//,"/",t); print d"\t"$0}' "$STAGE/subvol-tar.tsv" | sort -n | cut -f2-)
+    fi
+
+    # btrfs subvolumes captured with send (sparse/reflinked data) received into
+    # place after the file overlay, so their parent directories already exist.
+    # Best run before the services that own them are started.
+    if [[ -d "$STAGE/subvol-streams" ]]; then
+        [[ "$(findmnt -no FSTYPE /)" == btrfs ]] || die "archive has btrfs subvolume streams but the root is not btrfs"
+        note "restoring btrfs subvolumes via receive"
+        mount_top_level
+        place_subvols "$CLONE_TOP" "$STAGE/subvol-streams" "$STAGE/subvol-send.tsv"
     fi
 
     systemctl daemon-reload || true
@@ -644,113 +882,37 @@ cmd_clone() {
     fi
 
     setup_key confirm
+    ensure_archive_subvol
     STAGE=$(mktemp -d "$TMPDIR_BASE/cache22-clone.XXXXXX")
     mkdir -p "$STAGE/streams"
     resolve_output "cache22-clone-$(hostname)-$(date -u +%Y%m%dT%H%M%SZ).c22b"
     local out="$OUT"
 
     # Mount the btrfs top level so every subvolume is reachable by its path.
-    CLONE_TOP=$(mktemp -d "$TMPDIR_BASE/c22clone-top.XXXXXX")
-    mount -o subvolid=5 "$dev" "$CLONE_TOP" || die "could not mount btrfs top level"
-    CLONE_SNAPS="$CLONE_TOP/.cache22-clone-snaps.$$"
-    mkdir "$CLONE_SNAPS"
+    mount_top_level
 
     note "enumerating subvolumes"
-    local -a U=() P=() PATHS=()
-    while IFS=$'\t' read -r u p pth; do
-        [[ -n "$u" ]] || continue
-        U+=("$u"); P+=("$p"); PATHS+=("$pth")
-    done < <(btrfs subvolume list -u -q "$CLONE_TOP" | awk '{
-        u=""; p=""; pa="";
-        for (i=1;i<=NF;i++){
-            if($i=="uuid")             u=$(i+1);
-            else if($i=="parent_uuid") p=$(i+1);
-            else if($i=="path"){ pa=$(i+1); for(j=i+2;j<=NF;j++) pa=pa" "$j; }
-        }
-        print u"\t"p"\t"pa
-    }')
-    [[ ${#U[@]} -gt 0 ]] || die "no subvolumes found"
+    local ROOT_SUBVOL_PATH
+    ROOT_SUBVOL_PATH=$(root_subvol_path "$CLONE_TOP") \
+        || die "could not identify the OS root subvolume (no top-level subvolume with ostree/deploy)"
 
-    # Identify the OS root subvolume by structure, not by name: it is a top-level
-    # subvolume that holds the ostree deploys. (btrfs subvolume show / fails on
-    # the composefs overlay, so it cannot be used here.)
-    local ROOT_SUBVOL_PATH="" q
-    for q in "${PATHS[@]}"; do
-        [[ "$q" == */* ]] && continue
-        [[ -d "$CLONE_TOP/$q/ostree/deploy" ]] && { ROOT_SUBVOL_PATH="$q"; break; }
-    done
-    [[ -n "$ROOT_SUBVOL_PATH" ]] || die "could not identify the OS root subvolume (no top-level subvolume with ostree/deploy)"
-
-    # Drop subvolumes excluded directly, plus any nested beneath an excluded one.
-    local n=${#U[@]} a b
-    local -a KU=() KP=() KPATH=()
-    local -a skip_paths=()
-    for ((a=0;a<n;a++)); do
-        local rt; rt=$(sv_runtime "${PATHS[$a]}")
-        if under_any "$rt" "${clone_ex[@]}"; then
-            note "  excluding subvolume ${PATHS[$a]}"
-            skip_paths+=("${PATHS[$a]}")
-        fi
-    done
-    for ((a=0;a<n;a++)); do
-        local p="${PATHS[$a]}" drop=no
-        for b in ${skip_paths[@]+"${skip_paths[@]}"}; do
-            [[ "$p" == "$b" || "$p" == "$b/"* ]] && { drop=yes; break; }
-        done
-        [[ "$drop" == yes ]] && continue
-        KU+=("${U[$a]}"); KP+=("${P[$a]}"); KPATH+=("${PATHS[$a]}")
-    done
-
-    # Topological order: emit a subvolume only after the one it was snapshotted
-    # from (its parent_uuid, when captured) so btrfs send -p always has its base.
-    local -A INSET=() SEQOF=() DONE=()
-    local kn=${#KU[@]} j
-    for ((j=0;j<kn;j++)); do INSET[${KU[$j]}]=1; done
-    local -a order=()
-    local progress=1
-    while (( ${#order[@]} < kn )) && (( progress )); do
-        progress=0
-        for ((j=0;j<kn;j++)); do
-            [[ -n "${DONE[${KU[$j]}]:-}" ]] && continue
-            local par="${KP[$j]}"
-            if [[ "$par" == "-" || -z "${INSET[$par]:-}" || -n "${DONE[$par]:-}" ]]; then
-                order+=("$j"); DONE[${KU[$j]}]=1; progress=1
-            fi
-        done
-    done
-    (( ${#order[@]} == kn )) || die "subvolume dependency cycle (unexpected)"
+    # Keep every subvolume except those at or under an exclude (a nested
+    # subvolume's runtime path falls under its excluded ancestor, so the single
+    # under_any check covers nesting too).
+    local -a KEEP=(); local p
+    while read -r p; do
+        [[ -n "$p" ]] || continue
+        under_any "$(sv_runtime "$p")" "${clone_ex[@]}" && { note "  excluding subvolume $p"; continue; }
+        KEEP+=("$p")
+    done < <(btrfs subvolume list "$CLONE_TOP" | awk '{print $NF}' | sort)
+    local kn=${#KEEP[@]}
+    (( kn > 0 )) || die "no subvolumes to capture"
 
     note "capturing $kn subvolumes"
     : > "$STAGE/subvols.tsv"
-    local seq=0 oi
-    for oi in "${order[@]}"; do
-        local id; id=$(printf 'sv%04d' "$seq")
-        SEQOF[${KU[$oi]}]="$id"
-        local sp="${KPATH[$oi]}" snap="$CLONE_SNAPS/$id"
-        btrfs subvolume snapshot "$CLONE_TOP/$sp" "$snap" >/dev/null
-        # Prune excluded subtrees inside the OS root subvolume's /var.
-        if [[ "$sp" == "$ROOT_SUBVOL_PATH" ]]; then
-            local snapvar; snapvar=$(echo "$snap"/ostree/deploy/*/var)
-            if [[ -d "$snapvar" ]]; then
-                local E
-                for E in "${clone_ex[@]}"; do
-                    case "$E" in /var/?*) rm -rf "$snapvar/${E#/var/}" 2>/dev/null || true ;; esac
-                done
-            fi
-        fi
-        local ro=0; btrfs property get "$CLONE_TOP/$sp" ro 2>/dev/null | grep -q 'true' && ro=1
-        btrfs property set "$snap" ro true
-        local par="${KP[$oi]}" base=""
-        [[ "$par" != "-" && -n "${SEQOF[$par]:-}" ]] && base="${SEQOF[$par]}"
-        if [[ -n "$base" ]]; then
-            btrfs send -p "$CLONE_SNAPS/$base" "$snap" > "$STAGE/streams/$id.send" 2>/dev/null || die "btrfs send failed for $sp"
-        else
-            btrfs send "$snap" > "$STAGE/streams/$id.send" 2>/dev/null || die "btrfs send failed for $sp"
-        fi
-        printf '%s\t%s\t%s\n' "$id" "$sp" "$ro" >> "$STAGE/subvols.tsv"
-        echo "  + $sp${base:+ (incremental from $base)}" >&2
-        seq=$((seq+1))
-    done
+    CAPTURE_PRUNE_EX=("${clone_ex[@]}")
+    capture_subvols "$CLONE_TOP" "$CLONE_SNAPS" "$STAGE/streams" "$STAGE/subvols.tsv" \
+        "$ROOT_SUBVOL_PATH" "${KEEP[@]}"
 
     # A separately-mounted /boot (BIOS: an ext4 partition, not part of the btrfs
     # send) holds the kernel, initramfs, and BLS entries. Capture it as a tar so
@@ -824,44 +986,8 @@ cmd_receive() {
     [[ "$(manifest_get type)" == clone ]] || die "not a clone archive; 'receive' takes a clone (use 'restore' for a tar backup)"
     [[ -d "$STAGE/streams" ]] || die "clone archive has no streams"
 
-    local recv="$TOP/.cache22-recv.$$"
-    mkdir "$recv"
-
     note "receiving subvolumes"
-    # Streams are named in send order (sv0000, sv0001, ...) so glob order is the
-    # order incremental bases must arrive in. Free each after it is received so
-    # peak extra space stays near one copy of the data, not two.
-    local f
-    for f in "$STAGE"/streams/*.send; do
-        [[ -e "$f" ]] || die "no send streams in archive"
-        echo "  < $(basename "$f")" >&2
-        btrfs receive "$recv" -f "$f" >/dev/null || die "btrfs receive failed on $(basename "$f")"
-        rm -f "$f"
-    done
-
-    # Received subvolumes are read-only and carry a received_uuid (set by send).
-    # -f is required to clear ro while received_uuid is set; it also clears
-    # received_uuid, which is what we want: these become normal subvolumes on a
-    # fresh system, not incremental-receive targets. Extent sharing (reflinks)
-    # survives the flag change. Final read-only flags are reapplied below.
-    local s
-    for s in "$recv"/*; do [[ -e "$s" ]] && btrfs property set -f "$s" ro false; done
-
-    note "placing subvolumes"
-    # Shallowest target path first, so a containing subvolume is in place before
-    # its nested children. subvols.tsv columns: id <tab> toppath <tab> ro.
-    while IFS=$'\t' read -r id toppath ro; do
-        [[ -n "$id" ]] || continue
-        local src="$recv/$id" dest="$TOP/$toppath"
-        [[ -e "$src" ]] || die "received subvolume $id missing"
-        mkdir -p "$(dirname "$dest")"
-        [[ -d "$dest" ]] && rmdir "$dest" 2>/dev/null || true
-        mv "$src" "$dest" || die "failed to place $toppath"
-        [[ "$ro" == 1 ]] && btrfs property set "$dest" ro true || true
-        echo "  -> $toppath${ro:+ }$([[ "$ro" == 1 ]] && echo '(ro)')" >&2
-    done < <(awk -F'\t' '{t=$2; d=gsub(/\//,"/",t); print d"\t"$0}' "$STAGE/subvols.tsv" | sort -n | cut -f2-)
-
-    rmdir "$recv" 2>/dev/null || true
+    place_subvols "$TOP" "$STAGE/streams" "$STAGE/subvols.tsv"
 
     # A separately-captured /boot (BIOS) is restored onto the fresh boot
     # partition, which the caller has mounted at --boot-dir.

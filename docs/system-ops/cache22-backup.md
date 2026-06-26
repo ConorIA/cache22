@@ -13,7 +13,12 @@ stream back from a file, stdin, or a URL.
 `backup` captures the user-adjusted layer of an install and replays it onto a
 fresh install of the same image. It does not store what the image already ships,
 so the archive is small and stays valid as the base image moves. It works on any
-root filesystem.
+root filesystem. On btrfs it captures each `/var` subvolume efficiently: nested
+data subvolumes (for example incus images and VM disks) with `btrfs send`, so
+sparse and reflinked data is not expanded into the archive; separately-mounted or
+partially-excluded subvolumes (for example `/var/home`) with a dedicated
+per-subvolume tar that restores in place. ext4/xfs roots have no subvolumes and
+are captured purely as files.
 
 `clone` captures every subvolume of a btrfs root, including the OS itself, using
 `btrfs send`. Reflinks, compression, xattrs, nodatacow, and the read-only state
@@ -53,7 +58,7 @@ is restored by the installer (see Restoring a clone).
 | Flag | Effect |
 | --- | --- |
 | `-o, --output DEST` | Where to write. Omit for the default tool-owned directory `/var/lib/cache22/backup/archives` (on the root filesystem, excluded from backups). `-` streams to stdout, for sending the archive off-box. A directory is accepted only if new, empty, or an existing cache22 repo; a non-empty multi-purpose directory is refused, so one is never tagged. Archives are auto-named host + UTC timestamp + level. |
-| `--exclude DIR` | Exclude a directory subtree (repeatable). A btrfs subvolume under it is also dropped from the recreate list, so restore does not recreate an empty subvolume. |
+| `--exclude DIR` | Exclude a directory subtree (repeatable). A btrfs subvolume at or under it is dropped entirely, so it is neither sent nor tarred. A subvolume with an exclude *inside* it falls back to a dedicated tar that honors the exclude. |
 | `--include DIR` | Re-add a path excluded by default (repeatable). |
 | `--full` | Full backup; reset the incremental state. Default when no prior state exists. |
 | `--incremental` | Capture only `/var` changes since the last backup. |
