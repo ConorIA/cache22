@@ -259,6 +259,11 @@ EOF
     #      otherwise the shipped base img (BLS initrd=). The base img alone is
     #      always sufficient to boot, so older tooling or the BIOS/BLS path
     #      that loads only it stays bootable.
+    #   3. extra segments — any *.img dropped in the deploy's initramfs.d, in
+    #      sorted order. These are GLOBBED, not hardcoded, so a future image can
+    #      split high-churn content (e.g. firmware) into its own img/layer and
+    #      the resign-uki ALREADY DEPLOYED on a machine picks it up on the next
+    #      upgrade without needing a code change. Empty today.
     local -a initrds=()
     local ucode_img=""
     if [[ -n "${deploy_dir:-}" && -f "$deploy_dir/usr/lib/cache22/microcode.img" ]]; then
@@ -281,6 +286,21 @@ EOF
         fi
     fi
     initrds+=( --initrd="$main_initrd" )
+
+    # Extra image segments (tier 3): glob, do not hardcode — see comment above.
+    local segdir=""
+    if [[ -n "${deploy_dir:-}" && -d "$deploy_dir/usr/lib/cache22/initramfs.d" ]]; then
+        segdir="$deploy_dir/usr/lib/cache22/initramfs.d"
+    elif [[ -d /usr/lib/cache22/initramfs.d ]]; then
+        segdir=/usr/lib/cache22/initramfs.d
+    fi
+    if [[ -n "$segdir" ]]; then
+        while IFS= read -r seg; do
+            [[ -f "$seg" ]] || continue
+            initrds+=( --initrd="$seg" )
+            echo "    + extra segment $(basename "$seg")" >&2
+        done < <(find "$segdir" -maxdepth 1 -name '*.img' 2>/dev/null | LC_ALL=C sort)
+    fi
 
     echo "==> Building UKI for ${bootcsum:0:16} (kver=$kver, prio=$version_priority)" >&2
     ukify build \

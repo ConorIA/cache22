@@ -38,6 +38,18 @@ package bump no longer re-pulls the whole initramfs layer.
 present, `resign-uki` uses it in place of the base img. See
 [Customizing](#customizing) below.
 
+### Extra segments (extensibility)
+
+`resign-uki` also globs `/usr/lib/cache22/initramfs.d/*.img` in sorted order and
+folds any imgs found there into the UKI, after the base img. The directory is
+empty today. It exists so a future image can split high-churn content out of the
+base img (for example firmware, or a driver set) into its own img, and therefore
+its own OCI layer, by simply shipping a numbered img there. Because resign-uki
+globs this directory rather than hardcoding names, the resign-uki already
+deployed on a machine picks up such a new img on the next upgrade with no code
+change. The microcode and base imgs stay hardcoded: microcode must load first,
+and the base img is the kernel-specific anchor ostree manages.
+
 ## What is excluded, and why
 
 Out-of-tree and DKMS modules (nvidia, zfs, the Realtek and Intel NIC DKMS
