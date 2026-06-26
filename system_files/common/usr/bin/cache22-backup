@@ -1,0 +1,461 @@
+#!/usr/bin/env bash
+# cache22-backup — back up and restore the user-adjusted layer of a cache22
+# install, so it can be replayed onto a fresh install of the same image.
+#
+# It captures only what is NOT shipped by the image:
+#   /etc      files changed or added vs the image default (ostree config-diff)
+#   /var      everything on the root filesystem minus an exclude set
+#   subvols   the btrfs subvolume layout (recreated on restore; ext4/xfs skip it)
+#   incus     profile, network and storage definitions (+ instances on request)
+#   meta      the image ref + digest, the root fs type, and the exclude set
+#
+# Scope is the filesystem the root lives on. Anything mounted from a different
+# filesystem (external disk, USB, NAS) is detected by its filesystem UUID and
+# excluded, while every subvolume of the root filesystem is kept.
+#
+# The archive is a single stream: a tar, optionally zstd-compressed, optionally
+# encrypted with openssl (passphrase or key file). It reads from and writes to
+# files or stdin/stdout, so it pipes over ssh.
+#
+# Usage:
+#   cache22-backup backup  [options] [-o FILE|-]
+#   cache22-backup restore [options] [-i FILE|-]
+#   cache22-backup info    [options] [-i FILE|-]
+#
+# Backup options:
+#   -o, --output FILE       write the archive to FILE ('-' is stdout, default)
+#   --exclude DIR           exclude a directory subtree (repeatable). Any btrfs
+#                           subvolume under it is also dropped from the recreate
+#                           list, so restore does not resurrect an empty subvol.
+#   --include DIR           re-add a path excluded by default (repeatable)
+#   --incus-instances       also export Incus instance disks (may be large)
+#   --no-incus              skip Incus entirely
+#   --full                  full backup; reset the incremental state (default
+#                           when no prior state exists)
+#   --incremental           only /var changes since the last backup
+#   --no-compress           store uncompressed (default: zstd)
+#   --tmpdir DIR            staging directory (default: /var/tmp)
+#   --dry-run               report what would be captured; write nothing
+#
+# Restore options:
+#   -i, --input FILE        read the archive from FILE ('-' is stdin, default)
+#   --force                 restore even if the image digest differs
+#   --dry-run               report what would be restored; change nothing
+#
+# Encryption (either command):
+#   --passphrase            prompt for a passphrase
+#   --passphrase-file FILE  read the passphrase from FILE
+#   --key-file FILE         use FILE as a symmetric key
+#
+# A restore lands the user layer on a freshly installed cache22 of the same
+# image. It does not restore disk identity (fstab, crypttab, machine-id) or TPM
+# enrollment; the installer owns those. Re-enroll TPM with cache22-encryption.
+
+set -euo pipefail
+
+STATE_DIR=/var/lib/cache22/backup
+SNAR="$STATE_DIR/var.snar"
+CONF=/etc/cache22/backup.conf
+FORMAT=1
+ENC_MAGIC="Salted__"
+
+die()  { echo "Error: $*" >&2; exit 1; }
+note() { echo "==> $*" >&2; }
+ok()   { echo "[OK] $*" >&2; }
+require_root() { [[ ${EUID} -eq 0 ]] || die "must run as root (try: sudo cache22-backup $*)"; }
+
+# /etc files that track disk or machine identity. The installer writes these for
+# the target; restoring the source copy would break boot or identity.
+DEFAULT_ETC_EXCLUDE=(machine-id fstab crypttab mtab .updated)
+
+# /var paths that are regenerable, re-pullable, or machine-bound. Incus lives
+# under /var/lib/incus and is handled by the incus export, not the raw tar.
+DEFAULT_VAR_EXCLUDE=(
+    /var/cache /var/tmp /var/log
+    /var/lib/cache22/sbkey
+    /var/lib/cache22/backup
+    /var/lib/containers/storage
+    /var/lib/incus
+    /var/lib/systemd/coredump
+    /var/spool /var/run /var/lock
+)
+
+[[ -f "$CONF" ]] && . "$CONF"   # may set EXTRA_EXCLUDE=(...) or INCUS=no
+
+IO=-
+DRYRUN=no
+FORCE=no
+COMPRESS=yes
+INCUS=${INCUS:-yes}
+INCUS_INSTANCES=no
+LEVEL=auto
+TMPDIR_BASE=/var/tmp
+declare -a USER_EXCLUDE=() USER_INCLUDE=()
+ENC_MODE=none
+ENC_ARG=""
+PASS_TMP=""
+STAGE=""
+
+cleanup() { [[ -n "$PASS_TMP" ]] && rm -f "$PASS_TMP"; [[ -n "$STAGE" ]] && rm -rf "$STAGE"; }
+trap cleanup EXIT
+
+# Live image identity (always the running system, for the manifest and for the
+# restore compatibility check).
+img_ref()         { bootc status --format json 2>/dev/null | grep -o '"image":"[^"]*"' | head -1 | cut -d'"' -f4; }
+img_digest()      { bootc status --format json 2>/dev/null | grep -o '"imageDigest":"sha256:[0-9a-f]*"' | head -1 | cut -d'"' -f4; }
+ostree_checksum() { bootc status --format json 2>/dev/null | grep -o '"checksum":"[0-9a-f]*"' | head -1 | cut -d'"' -f4; }
+
+# Prepare the encryption key in the main shell (so the temp file is tracked for
+# cleanup and the prompt is not lost inside a subshell).
+setup_key() {
+    case "$ENC_MODE" in
+        none) ;;
+        keyfile|passfile) [[ -r "$ENC_ARG" ]] || die "cannot read key file: $ENC_ARG" ;;
+        pass)
+            PASS_TMP=$(mktemp); chmod 600 "$PASS_TMP"
+            local p p2
+            read -rsp "Passphrase: " p; echo >&2
+            if [[ "${1:-}" == confirm ]]; then
+                read -rsp "Confirm: " p2; echo >&2
+                [[ "$p" == "$p2" ]] || die "passphrases do not match"
+            fi
+            printf '%s' "$p" > "$PASS_TMP" ;;
+    esac
+}
+# Echo the openssl -pass selector; return 1 when no encryption.
+pass_arg() {
+    case "$ENC_MODE" in
+        none) return 1 ;;
+        keyfile|passfile) echo "file:$ENC_ARG" ;;
+        pass) echo "file:$PASS_TMP" ;;
+    esac
+}
+
+root_uuid()     { findmnt -no UUID /; }
+root_subvolid() { findmnt -no OPTIONS / | grep -o 'subvolid=[0-9]*' | cut -d= -f2; }
+
+# Mountpoints under /var on a different filesystem than the root: external
+# storage, plus virtual mounts (tmpfs/fuse/overlay have no/other UUID). These
+# must not be descended into. --real is NOT used; it hides fuse mounts.
+foreign_mounts() {
+    local ru; ru=$(root_uuid)
+    findmnt -rno TARGET,UUID | while read -r tgt uuid; do
+        [[ "$tgt" == /var || "$tgt" == /var/* ]] || continue
+        [[ "$uuid" != "$ru" ]] && echo "$tgt"
+    done
+}
+
+# True if PATH is at or under any prefix in the argument list.
+under_any() {
+    local path="$1"; shift
+    local p
+    for p in "$@"; do
+        [[ "$path" == "$p" || "$path" == "$p/"* ]] && return 0
+    done
+    return 1
+}
+
+# The effective /var exclude list: defaults + EXTRA_EXCLUDE + foreign mounts +
+# user excludes, minus anything the user re-included.
+build_var_excludes() {
+    local -a ex=("${DEFAULT_VAR_EXCLUDE[@]}" ${EXTRA_EXCLUDE[@]+"${EXTRA_EXCLUDE[@]}"} ${USER_EXCLUDE[@]+"${USER_EXCLUDE[@]}"})
+    local m; while read -r m; do [[ -n "$m" ]] && ex+=("$m"); done < <(foreign_mounts)
+    local e i keep
+    for e in "${ex[@]}"; do
+        keep=yes
+        for i in ${USER_INCLUDE[@]+"${USER_INCLUDE[@]}"}; do [[ "$e" == "$i" ]] && keep=no; done
+        [[ "$keep" == yes ]] && echo "$e"
+    done | sort -u
+}
+
+# Real paths of same-filesystem subvolumes under /var to recreate. A btrfs
+# subvolume root always has inode 256, so they are found by real path directly,
+# avoiding the top-level-vs-mount path translation entirely. Excluded subtrees
+# are pruned, which also keeps find out of fuse/tmpfs mounts.
+build_subvol_list() {
+    [[ "$(findmnt -no FSTYPE /)" == btrfs ]] || return 0
+    local -a ex; mapfile -t ex < <(build_var_excludes)
+    local -a fx=(); local e first=1
+    for e in "${ex[@]}"; do
+        [[ "$e" == /var || "$e" == /var/* ]] || continue
+        if (( first )); then fx+=( '(' -path "$e" ); first=0; else fx+=( -o -path "$e" ); fi
+    done
+    if (( first )); then
+        find /var -inum 256 -type d -print 2>/dev/null | sort -u
+    else
+        fx+=( ')' -prune -o -inum 256 -type d -print )
+        find /var "${fx[@]}" 2>/dev/null | sort -u
+    fi
+}
+
+# =============================================================================
+# backup
+# =============================================================================
+cmd_backup() {
+    require_root backup "$@"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -o|--output)       IO="$2"; shift 2 ;;
+            --exclude)         USER_EXCLUDE+=("${2%/}"); shift 2 ;;
+            --include)         USER_INCLUDE+=("${2%/}"); shift 2 ;;
+            --incus-instances) INCUS_INSTANCES=yes; shift ;;
+            --no-incus)        INCUS=no; shift ;;
+            --full)            LEVEL=full; shift ;;
+            --incremental)     LEVEL=incr; shift ;;
+            --no-compress)     COMPRESS=no; shift ;;
+            --tmpdir)          TMPDIR_BASE="$2"; shift 2 ;;
+            --dry-run)         DRYRUN=yes; shift ;;
+            --passphrase)      ENC_MODE=pass; shift ;;
+            --passphrase-file) ENC_MODE=passfile; ENC_ARG="$2"; shift 2 ;;
+            --key-file)        ENC_MODE=keyfile; ENC_ARG="$2"; shift 2 ;;
+            *)                 die "unknown arg: $1" ;;
+        esac
+    done
+
+    [[ "$LEVEL" == incr && ! -f "$SNAR" ]] && { note "no prior state; making a full backup"; LEVEL=full; }
+    [[ "$LEVEL" == auto ]] && LEVEL=full
+
+    local -a var_ex subvols etc_files=()
+    mapfile -t var_ex < <(build_var_excludes)
+    mapfile -t subvols < <(build_subvol_list)
+
+    local status path
+    while read -r status path; do
+        [[ -z "$path" ]] && continue
+        under_any "$path" "${DEFAULT_ETC_EXCLUDE[@]}" && continue
+        [[ "$status" == D ]] || etc_files+=("$path")
+    done < <(ostree admin config-diff 2>/dev/null)
+
+    if [[ "$DRYRUN" == yes ]]; then
+        echo "── cache22-backup dry run ──"
+        echo "level:        $LEVEL"
+        echo "image:        $(img_ref)  $(img_digest)"
+        echo "root fs:      $(findmnt -no FSTYPE /)"
+        echo "/etc files:   ${#etc_files[@]} captured (disk/machine state excluded)"
+        echo "subvols to recreate:"; printf '  %s\n' ${subvols[@]+"${subvols[@]}"}
+        echo "/var excludes:"; printf '  %s\n' "${var_ex[@]}"
+        echo "incus:        $INCUS (instances: $INCUS_INSTANCES)"
+        echo "encryption:   $ENC_MODE"
+        echo "output:       $IO"
+        return 0
+    fi
+
+    setup_key confirm
+    STAGE=$(mktemp -d "$TMPDIR_BASE/cache22-backup.XXXXXX")
+
+    note "capturing /etc overlay (${#etc_files[@]} files)"
+    mkdir -p "$STAGE/etc"
+    : > "$STAGE/etc-deleted.list"
+    while read -r status path; do
+        [[ "$status" == D ]] || continue
+        under_any "$path" "${DEFAULT_ETC_EXCLUDE[@]}" && continue
+        echo "$path" >> "$STAGE/etc-deleted.list"
+    done < <(ostree admin config-diff 2>/dev/null)
+    if [[ ${#etc_files[@]} -gt 0 ]]; then
+        local erc=0
+        ( cd /etc && tar -cf "$STAGE/etc.tar.tmp" --numeric-owner --warning=no-file-changed -- "${etc_files[@]}" ) || erc=$?
+        (( erc <= 1 )) || die "tar failed capturing /etc (exit $erc)"
+        tar -xpf "$STAGE/etc.tar.tmp" -C "$STAGE/etc"; rm -f "$STAGE/etc.tar.tmp"
+    fi
+
+    printf '%s\n' ${subvols[@]+"${subvols[@]}"} > "$STAGE/subvols.list"
+    printf '%s\n' "${var_ex[@]}" > "$STAGE/excludes.list"
+    bootc status --format json > "$STAGE/bootc.json" 2>/dev/null || true
+    {
+        echo "format=$FORMAT"
+        echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "hostname=$(hostname)"
+        echo "image=$(img_ref)"
+        echo "image_digest=$(img_digest)"
+        echo "ostree_checksum=$(ostree_checksum)"
+        echo "rootfs=$(findmnt -no FSTYPE /)"
+        echo "level=$LEVEL"
+        echo "incus=$INCUS"
+        echo "incus_instances=$INCUS_INSTANCES"
+    } > "$STAGE/MANIFEST"
+
+    note "capturing /var ($LEVEL)"
+    local -a tar_ex=(); local e
+    for e in "${var_ex[@]}"; do tar_ex+=(--exclude="${e#/}"); done
+    mkdir -p "$STATE_DIR"
+    [[ "$LEVEL" == full ]] && rm -f "$SNAR"
+    local worksnar="$STAGE/var.snar"
+    [[ -f "$SNAR" ]] && cp "$SNAR" "$worksnar"
+    local trc=0
+    ( cd / && tar --listed-incremental="$worksnar" --numeric-owner \
+        --warning=no-file-changed --warning=no-file-removed --warning=no-file-shrank \
+        "${tar_ex[@]}" -cf "$STAGE/var.tar" var ) || trc=$?
+    (( trc <= 1 )) || die "tar failed capturing /var (exit $trc)"
+
+    if [[ "$INCUS" == yes ]] && command -v incus >/dev/null && incus info >/dev/null 2>&1; then
+        note "exporting incus definitions"
+        mkdir -p "$STAGE/incus/profiles" "$STAGE/incus/networks" "$STAGE/incus/storage"
+        local n
+        for n in $(incus profile list -f csv -c n 2>/dev/null); do incus profile show "$n" > "$STAGE/incus/profiles/$n.yaml" 2>/dev/null || true; done
+        for n in $(incus network list -f csv 2>/dev/null | awk -F, '$3=="YES"{print $1}'); do incus network show "$n" > "$STAGE/incus/networks/$n.yaml" 2>/dev/null || true; done
+        for n in $(incus storage list -f csv -c n 2>/dev/null); do incus storage show "$n" > "$STAGE/incus/storage/$n.yaml" 2>/dev/null || true; done
+        if [[ "$INCUS_INSTANCES" == yes ]]; then
+            mkdir -p "$STAGE/incus/instances"
+            for n in $(incus list -f csv -c n 2>/dev/null); do
+                note "  exporting instance $n (this can be large)"
+                incus export "$n" "$STAGE/incus/instances/$n.tar.gz" --instance-only 2>/dev/null || echo "    WARN: export of $n failed" >&2
+            done
+        fi
+    fi
+
+    note "writing archive"
+    local out=/dev/stdout; [[ "$IO" != "-" ]] && out="$IO"
+    local pa; pa=$(pass_arg) || pa=""
+    {
+        if [[ -n "$pa" && "$COMPRESS" == yes ]]; then
+            ( cd "$STAGE" && tar -cf - . ) | zstd -q -T0 | openssl enc -aes-256-ctr -pbkdf2 -iter 300000 -salt -pass "$pa"
+        elif [[ -n "$pa" ]]; then
+            ( cd "$STAGE" && tar -cf - . ) | openssl enc -aes-256-ctr -pbkdf2 -iter 300000 -salt -pass "$pa"
+        elif [[ "$COMPRESS" == yes ]]; then
+            ( cd "$STAGE" && tar -cf - . ) | zstd -q -T0
+        else
+            ( cd "$STAGE" && tar -cf - . )
+        fi
+    } > "$out"
+
+    [[ -f "$worksnar" ]] && cp "$worksnar" "$SNAR"
+    ok "backup complete (level: $LEVEL)"
+    [[ "$IO" != "-" ]] && echo "    $IO" >&2 || true
+}
+
+# =============================================================================
+# restore / info
+# =============================================================================
+# Strip zstd if present; pass through otherwise. Peeks 4 bytes via a temp file
+# (binary-safe) and reconstructs the stream, so it works on a pipe.
+unzstd_if() {
+    local h; h=$(mktemp "$TMPDIR_BASE/c22b.XXXXXX"); head -c4 > "$h"
+    if [[ "$(od -An -tx1 < "$h" | tr -d ' \n')" == 28b52ffd ]]; then
+        { cat "$h"; cat; } | zstd -dq
+    else
+        cat "$h"; cat
+    fi
+    rm -f "$h"
+}
+
+# Emit the inner tar stream of the archive to stdout: detect+decrypt openssl,
+# then strip zstd. Handles both a seekable file and stdin.
+open_stream() {
+    local src="$1" h; h=$(mktemp "$TMPDIR_BASE/c22b.XXXXXX")
+    if [[ "$src" == "-" ]]; then head -c8 > "$h"; else head -c8 "$src" > "$h" 2>/dev/null || true; fi
+    local magic; magic=$(tr -d '\0' < "$h")
+    if [[ "$magic" == "$ENC_MAGIC" ]]; then
+        local pa; pa=$(pass_arg) || { rm -f "$h"; die "archive is encrypted; provide --passphrase, --passphrase-file or --key-file"; }
+        { if [[ "$src" == "-" ]]; then cat "$h" -; else cat "$src"; fi; } \
+            | openssl enc -d -aes-256-ctr -pbkdf2 -iter 300000 -salt -pass "$pa" | unzstd_if
+    else
+        { if [[ "$src" == "-" ]]; then cat "$h" -; else cat "$src"; fi; } | unzstd_if
+    fi
+    rm -f "$h"
+}
+
+unpack_to_stage() {
+    STAGE=$(mktemp -d "$TMPDIR_BASE/cache22-restore.XXXXXX")
+    open_stream "$1" | tar -xpf - -C "$STAGE"
+    [[ -f "$STAGE/MANIFEST" ]] || die "not a cache22-backup archive (no MANIFEST)"
+}
+manifest_get() { sed -n "s/^$1=//p" "$STAGE/MANIFEST"; }
+
+parse_io_enc() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -i|--input)        IO="$2"; shift 2 ;;
+            --force)           FORCE=yes; shift ;;
+            --dry-run)         DRYRUN=yes; shift ;;
+            --tmpdir)          TMPDIR_BASE="$2"; shift 2 ;;
+            --passphrase)      ENC_MODE=pass; shift ;;
+            --passphrase-file) ENC_MODE=passfile; ENC_ARG="$2"; shift 2 ;;
+            --key-file)        ENC_MODE=keyfile; ENC_ARG="$2"; shift 2 ;;
+            *)                 die "unknown arg: $1" ;;
+        esac
+    done
+    setup_key
+}
+
+cmd_info() {
+    parse_io_enc "$@"
+    unpack_to_stage "$IO"
+    echo "── cache22-backup archive ──"; cat "$STAGE/MANIFEST"
+    echo "── subvolumes to recreate ──"; cat "$STAGE/subvols.list" 2>/dev/null || true
+    echo "── /etc deletions ──"; cat "$STAGE/etc-deleted.list" 2>/dev/null || true
+    echo "── /var size (uncompressed) ──"; du -h "$STAGE/var.tar" 2>/dev/null | cut -f1 || true
+    [[ -d "$STAGE/incus" ]] && { echo "── incus ──"; find "$STAGE/incus" -type f | sed "s#$STAGE/##"; } || true
+}
+
+cmd_restore() {
+    require_root restore "$@"
+    parse_io_enc "$@"
+    unpack_to_stage "$IO"
+
+    local want cur; want=$(manifest_get image_digest); cur=$(img_digest)
+    echo "archive image: $(manifest_get image)  $want" >&2
+    echo "current image: $(img_ref)  $cur" >&2
+    if [[ "$want" != "$cur" ]]; then
+        [[ "$FORCE" == yes ]] || die "image digest differs; reinstall the matching image or pass --force"
+        note "image digest differs; continuing (--force)"
+    fi
+
+    if [[ "$DRYRUN" == yes ]]; then
+        echo "── would recreate subvolumes ──"; cat "$STAGE/subvols.list" 2>/dev/null || true
+        echo "── would delete from /etc ──"; cat "$STAGE/etc-deleted.list" 2>/dev/null || true
+        echo "── would extract /etc overlay ──"; ( cd "$STAGE/etc" && find . -type f | sed 's#^\./#/etc/#' )
+        [[ -d "$STAGE/incus" ]] && { echo "── incus to recreate ──"; find "$STAGE/incus" -type f | sed "s#$STAGE/##"; } || true
+        return 0
+    fi
+
+    if [[ "$(findmnt -no FSTYPE /)" == btrfs && -s "$STAGE/subvols.list" ]]; then
+        note "recreating btrfs subvolumes"
+        local sv
+        while read -r sv; do
+            [[ -n "$sv" ]] || continue
+            if [[ -e "$sv" ]]; then btrfs subvolume show "$sv" >/dev/null 2>&1 || note "  $sv exists (dir); leaving as-is"; continue; fi
+            mkdir -p "$(dirname "$sv")"; btrfs subvolume create "$sv" >/dev/null && echo "  + $sv" >&2
+        done < "$STAGE/subvols.list"
+    fi
+
+    note "restoring /etc overlay"
+    ( cd "$STAGE/etc" && tar -cf - . ) | tar -xpf - -C /etc --numeric-owner
+    if [[ -s "$STAGE/etc-deleted.list" ]]; then
+        local f; while read -r f; do [[ -n "$f" ]] && rm -f "/etc/$f"; done < "$STAGE/etc-deleted.list"
+    fi
+
+    note "restoring /var"
+    tar --listed-incremental=/dev/null -xpf "$STAGE/var.tar" -C / --numeric-owner
+
+    if [[ -d "$STAGE/incus" ]] && command -v incus >/dev/null && incus info >/dev/null 2>&1; then
+        note "restoring incus definitions"
+        local f name
+        for f in "$STAGE"/incus/storage/*.yaml; do [[ -e "$f" ]] || continue; name=$(basename "$f" .yaml)
+            incus storage show "$name" >/dev/null 2>&1 || incus storage create "$name" "$(sed -n 's/^driver: //p' "$f")" >/dev/null 2>&1 || true; done
+        for f in "$STAGE"/incus/networks/*.yaml; do [[ -e "$f" ]] || continue; name=$(basename "$f" .yaml)
+            incus network show "$name" >/dev/null 2>&1 || incus network create "$name" >/dev/null 2>&1 || true
+            incus network edit "$name" < "$f" 2>/dev/null || true; done
+        for f in "$STAGE"/incus/profiles/*.yaml; do [[ -e "$f" ]] || continue; name=$(basename "$f" .yaml)
+            incus profile show "$name" >/dev/null 2>&1 || incus profile create "$name" >/dev/null 2>&1 || true
+            incus profile edit "$name" < "$f" 2>/dev/null || true; done
+        for f in "$STAGE"/incus/instances/*.tar.gz; do [[ -e "$f" ]] || continue; name=$(basename "$f" .tar.gz)
+            note "  importing instance $name"; incus import "$f" 2>/dev/null || echo "    WARN: import of $name failed" >&2; done
+    fi
+
+    systemctl daemon-reload || true
+    ok "restore complete"
+    cat >&2 <<'EOF'
+
+Next steps:
+  - Re-enroll TPM auto-unlock:  sudo cache22-encryption enroll <luks-device>
+  - Review enabled services, then reboot.
+EOF
+}
+
+case "${1:-}" in
+    backup)    shift; cmd_backup "$@" ;;
+    restore)   shift; cmd_restore "$@" ;;
+    info)      shift; cmd_info "$@" ;;
+    -h|--help) sed -n '2,57p' "$0" | sed 's/^# \?//' ;;
+    *)         echo "Usage: cache22-backup backup|restore|info [--help]" >&2; exit 1 ;;
+esac
