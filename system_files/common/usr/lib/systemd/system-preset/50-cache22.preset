@@ -38,6 +38,14 @@ enable fstrim.timer
 # Container infra
 enable podman.socket
 
+# VM guest agents. Only vmtoolsd needs enabling; it is gated by
+# ConditionVirtualization=vmware so it no-ops on bare metal and non-VMware
+# hypervisors. qemu-guest-agent (udev rule on the org.qemu.guest_agent.0
+# virtio port) and incus-agent (udev rule on the org.linuxcontainers.incus
+# virtio port) are started on demand only inside their respective VMs, so
+# they need no preset rule.
+enable vmtoolsd.service
+
 # cache22-resign-uki: rebuild + sign + place the per-deploy UKI on the
 # ESP whenever bootc state changes (upgrade, switch, rollback, edit).
 # Path watchers fire on /ostree/bootc mtime (bootc bumps it on every

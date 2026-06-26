@@ -172,6 +172,10 @@ swtpm
 edk2-ovmf
 iproute2
 
+# ─── Guest agents (VM integration; inert on bare metal) ───
+qemu-guest-agent
+open-vm-tools
+
 # ─── Containers ───────────────────────────────────────────
 podman
 podman-compose

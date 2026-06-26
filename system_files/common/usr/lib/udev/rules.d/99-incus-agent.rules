@@ -1,0 +1,4 @@
+# Start the incus guest agent only inside an incus VM, i.e. when the
+# org.linuxcontainers.incus virtio-serial port appears. Inert on bare metal and
+# non-incus VMs. Vendored from lxc/incus agent-loader.
+SYMLINK=="virtio-ports/org.linuxcontainers.incus", TAG+="systemd", ENV{SYSTEMD_WANTS}+="incus-agent.service"
