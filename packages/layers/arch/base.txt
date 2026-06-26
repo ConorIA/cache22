@@ -54,6 +54,7 @@ dracut
 ostree
 composefs
 skopeo
+umoci
 
 # ─── Bootloader + UKI ─────────────────────────────────────
 efibootmgr
