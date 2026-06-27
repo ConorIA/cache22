@@ -141,9 +141,10 @@ dnf install \
 
 # ─── 2. Stage cache22-install + assets ────────────────────────────
 echo "==> Staging cache22-install + cache22-repair + assets"
-install -Dm0755 "$REPO/installer/cache22-install"  "$ROOTFS/usr/local/bin/cache22-install"
-install -Dm0755 "$REPO/installer/cache22-repair"   "$ROOTFS/usr/local/bin/cache22-repair"
-install -Dm0644 "$REPO/variants.json"              "$ROOTFS/etc/cache22/variants.json"
+install -Dm0755 "$REPO/installer/cache22-install"   "$ROOTFS/usr/local/bin/cache22-install"
+install -Dm0755 "$REPO/installer/cache22-repair"    "$ROOTFS/usr/local/bin/cache22-repair"
+install -Dm0644 "$REPO/installer/cache22-common.sh" "$ROOTFS/usr/local/bin/cache22-common.sh"
+install -Dm0644 "$REPO/variants.json"               "$ROOTFS/etc/cache22/variants.json"
 
 # ─── 3. Live env config (autologin root) ──────────────────────────
 echo "==> Configuring live env (autologin, sshd, branding)"

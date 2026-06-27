@@ -23,6 +23,11 @@ DEFAULT_IMAGE_TAG="rolling"
 TARGET=/var/mnt/target
 LOG=/var/log/cache22-repair.log
 
+# Shared installer constants (BTRFS_OPTS, ...), shipped beside this script.
+_C22_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# shellcheck source=installer/cache22-common.sh
+source "$_C22_DIR/cache22-common.sh" || { echo "FATAL: cache22-common.sh missing beside cache22-repair" >&2; exit 1; }
+
 declare -A CFG=(
     [disk]=""
     [esp_part]=""
@@ -305,8 +310,6 @@ wipe_image_content() {
 }
 
 # ─── Mount fresh + re-run bootc install ────────────────────────────────
-BTRFS_OPTS="compress=zstd:1,noatime,space_cache=v2,discard=async"
-
 setup_mounts() {
     banner "Mounting target for redeploy"
     mkdir -p "$TARGET"

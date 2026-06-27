@@ -16,11 +16,10 @@ DEFAULT_SCRATCH_SIZE="30G"
 TARGET=/var/mnt/target
 LOG=/var/log/cache22-install.log
 
-# btrfs mount options for the root and home subvolumes. compress=zstd:1 is the
-# cheap-good compression Fedora atomic uses; noatime + space_cache=v2 +
-# discard=async are SSD-friendly defaults. A restore reuses these so a restored
-# system mounts exactly like a fresh install.
-BTRFS_OPTS="compress=zstd:1,noatime,space_cache=v2,discard=async"
+# Shared installer constants (BTRFS_OPTS, ...), shipped beside this script.
+_C22_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# shellcheck source=installer/cache22-common.sh
+source "$_C22_DIR/cache22-common.sh" || { echo "FATAL: cache22-common.sh missing beside cache22-install" >&2; exit 1; }
 
 # Variants are fetched at runtime so adding/removing one doesn't need
 # an ISO rebuild. /etc/cache22/variants.json is the offline fallback.
