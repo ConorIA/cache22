@@ -16,6 +16,12 @@ DEFAULT_SCRATCH_SIZE="30G"
 TARGET=/var/mnt/target
 LOG=/var/log/cache22-install.log
 
+# btrfs mount options for the root and home subvolumes. compress=zstd:1 is the
+# cheap-good compression Fedora atomic uses; noatime + space_cache=v2 +
+# discard=async are SSD-friendly defaults. A restore reuses these so a restored
+# system mounts exactly like a fresh install.
+BTRFS_OPTS="compress=zstd:1,noatime,space_cache=v2,discard=async"
+
 # Variants are fetched at runtime so adding/removing one doesn't need
 # an ISO rebuild. /etc/cache22/variants.json is the offline fallback.
 VARIANTS_URL="https://raw.githubusercontent.com/cmspam/cache22/main/variants.json"
@@ -203,13 +209,10 @@ Common flags:
                        picks tmpfs when MemAvailable >= 14 GB for server
                        variants or 20 GB for KDE variants).
   --filesystem FS      btrfs | xfs | ext4 (default: $DEFAULT_FS)
-                       btrfs creates root + home subvolumes, mounted
-                       noatime, space_cache=v2, discard=async. zstd:1
-                       compression is set as a property on root and home
-                       (not a mount option), so a storage pool created on
-                       the filesystem can take nodatacow. /var/home
-                       preserved across cache22-repair. xfs/ext4 are
-                       single-volume.
+                       btrfs creates root + home subvolumes with
+                       compress=zstd:1, noatime, space_cache=v2,
+                       discard=async; /var/home preserved across
+                       cache22-repair. xfs/ext4 are single-volume.
   --esp-size SIZE      ESP size in auto mode (UEFI; default: $DEFAULT_ESP_SIZE)
   --boot-size SIZE     /boot size in auto mode (BIOS; default: $DEFAULT_BOOT_SIZE)
   --scratch-size SIZE  scratch size in auto mode (default: $DEFAULT_SCRATCH_SIZE)
@@ -1282,27 +1285,17 @@ setup_target() {
         BOOT_UUID=$(blkid -s UUID -o value "${CFG[boot_part]}")
     fi
 
-    # On btrfs, lay out the bootc/Silverblue-style subvolume split: `root`
-    # holds /sysroot/ostree/... (the bootc deployments) and `home` is mounted
-    # at /var/home so reinstalls can wipe `root` without touching user data.
-    #
-    # Compression is a per-subvolume property (zstd:1 on root and home), not
-    # a mount option. A mount-option compress appears in the filesystem's
-    # mountinfo super_options, which makes Incus and podman read a storage
-    # pool as compressed and skip nodatacow (chattr +C) on block images.
-    # Applying it as a property keeps it out of mountinfo, so a storage pool
-    # created on this filesystem can take nodatacow. noatime + space_cache=v2
-    # + discard=async are SSD-friendly defaults. xfs/ext4 installs keep the
-    # single-volume layout (no subvols, no /home preservation across
-    # reinstalls, repair tool flags it).
-    BTRFS_OPTS="noatime,space_cache=v2,discard=async"
+    # On btrfs, lay out the canonical bootc/Silverblue/Bazzite-style
+    # subvolume split: `root` holds /sysroot/ostree/... (the bootc
+    # deployments), `home` is mounted at /var/home so reinstalls can
+    # wipe `root` without touching user data. xfs/ext4 installs keep the
+    # existing single-volume layout (no subvols, no /home preservation
+    # across reinstalls — repair tool flags it).
     mkdir -p "$TARGET"
     if [[ "${CFG[filesystem]}" == "btrfs" ]]; then
         mount "$ROOT_DEV" "$TARGET"
         btrfs subvolume create "$TARGET/root" >/dev/null
         btrfs subvolume create "$TARGET/home" >/dev/null
-        btrfs property set "$TARGET/root" compression zstd:1
-        btrfs property set "$TARGET/home" compression zstd:1
         umount "$TARGET"
         mount -o "subvol=root,$BTRFS_OPTS" "$ROOT_DEV" "$TARGET"
     else
@@ -1359,7 +1352,6 @@ setup_target_receive() {
     else
         BOOT_UUID=$(blkid -s UUID -o value "${CFG[boot_part]}")
     fi
-    BTRFS_OPTS="noatime,space_cache=v2,discard=async"
 
     # Receive every subvolume into the btrfs top level (subvolid=5), where nested
     # subvolumes can be placed at their original paths. Stage on the target itself

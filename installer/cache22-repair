@@ -305,26 +305,10 @@ wipe_image_content() {
 }
 
 # ─── Mount fresh + re-run bootc install ────────────────────────────────
-BTRFS_OPTS="noatime,space_cache=v2,discard=async"
-
-# Set zstd:1 as a compression property on root and home (a fresh install
-# does this at subvolume creation). Idempotent, so redeploying an install
-# made before compression moved from a mount option to a property migrates
-# it without leaving the OS uncompressed.
-ensure_btrfs_compression() {
-    [[ "$FS_KIND" == "btrfs" && "$HAS_SUBVOLS" -eq 1 ]] || return 0
-    local top
-    top=$(mktemp -d)
-    mount -t btrfs -o "subvol=/,$BTRFS_OPTS" "$ROOT_DEV" "$top"
-    btrfs property set "$top/root" compression zstd:1
-    [[ -d "$top/home" ]] && btrfs property set "$top/home" compression zstd:1
-    umount "$top"
-    rmdir "$top"
-}
+BTRFS_OPTS="compress=zstd:1,noatime,space_cache=v2,discard=async"
 
 setup_mounts() {
     banner "Mounting target for redeploy"
-    ensure_btrfs_compression
     mkdir -p "$TARGET"
     if [[ "$FS_KIND" == "btrfs" && "$HAS_SUBVOLS" -eq 1 ]]; then
         mount -t btrfs -o "subvol=root,$BTRFS_OPTS" "$ROOT_DEV" "$TARGET"
