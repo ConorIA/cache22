@@ -100,9 +100,8 @@ Server = https://github.com/cmspam/xe-virt-repo/releases/download/latest-host
 SigLevel = Optional TrustAll
 Server = https://github.com/cmspam/gamescope-patched/releases/download/latest-v3
 
-# Out-of-tree Intel NIC drivers: iavf VF (iavf-dkms) + i40e 700-Series PF
-# (i40e-dkms), in one repo. Built against the image kernel via DKMS; each is
-# selected over its in-kernel namesake by a depmod override.
+# Out-of-tree Intel iavf VF driver (iavf-dkms). Built against the image
+# kernel via DKMS; selected over the in-kernel iavf by a depmod override.
 [iavf-dkms]
 SigLevel = Optional TrustAll
 Server = https://github.com/cmspam/intel-iavf/releases/download/arch
