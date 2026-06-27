@@ -76,7 +76,7 @@ Packages must be available in pacman repositories the build sees. cache22 ships 
 - `cmspam/qemu-patched-v3`. VA-API patched QEMU.
 - `cmspam/gamescope-patched`. NVIDIA-fixed gamescope.
 - `cmspam/xe-virt-host-v3`. Intel Xe virgl-host packages.
-- `cmspam/intel-iavf` (release tag `arch`). Out-of-tree Intel iavf VF driver `iavf-dkms`, shipped in base so SR-IOV virtual functions work on kernels 6.10 and newer. Built against the image kernel by DKMS at install; a depmod override selects it over the in-kernel iavf.
+- `cmspam/intel-iavf` (release tag `arch`). Out-of-tree Intel NIC drivers in one repo: `iavf-dkms` (VF driver, shipped in base so SR-IOV virtual functions work on kernels 6.10 and newer) and `i40e-dkms` (700-Series PF driver). Both are built against the image kernel by DKMS at install; a depmod override selects each over its in-kernel namesake.
 - `cache22-aur` (built in-image at build time). AUR packages cache22 needs.
 
 To add an AUR package: just list it in the appropriate layer's `.txt` file. `scripts/build-aur-packages.sh` auto-detects names that no configured pacman repo provides and builds them (plus transitive AUR deps) into the in-image `cache22-aur` repo.
