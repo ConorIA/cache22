@@ -121,10 +121,22 @@ detect_install() {
     if [[ "$kind" == "luks" ]]; then
         CFG[luks]="yes"
         CFG[root_part]="$part"
-        prompt_password "LUKS passphrase for $part"
-        CFG[luks_password]="$REPLY"
-        printf '%s' "${CFG[luks_password]}" | cryptsetup open "$part" cache22-root - \
-            || die "LUKS unlock failed."
+        # Reuse a mapper left open by a previous (interrupted) run rather
+        # than failing on "device already exists". Verify it's backed by
+        # the partition we selected before trusting it.
+        if [[ -e /dev/mapper/cache22-root ]]; then
+            local backing
+            backing=$(cryptsetup status cache22-root 2>/dev/null \
+                      | awk '/^ *device:/{print $2}')
+            [[ "$backing" == "$part" ]] || \
+                die "/dev/mapper/cache22-root is already open but backed by ${backing:-unknown}, not $part. Close it first: cryptsetup close cache22-root"
+            say "  LUKS already unlocked (/dev/mapper/cache22-root) — reusing"
+        else
+            prompt_password "LUKS passphrase for $part"
+            CFG[luks_password]="$REPLY"
+            printf '%s' "${CFG[luks_password]}" | cryptsetup open "$part" cache22-root - \
+                || die "LUKS unlock failed."
+        fi
         ROOT_DEV="/dev/mapper/cache22-root"
     else
         CFG[root_part]="$part"
@@ -290,13 +302,20 @@ wipe_image_content() {
                 [[ -e "$entry" ]] || continue
                 case "${entry##*/}" in
                     var) ;;     # KEEP — /home and all user state live here
-                    *)   rm -rf "$entry" ;;
+                    *)   # ostree marks deploy roots immutable (chattr +i);
+                         # clear it recursively or rm -rf hits EPERM.
+                         chattr -R -i "$entry" 2>/dev/null || true
+                         rm -rf "$entry" ;;
                 esac
             done
         done
     fi
-    say "  Removing /boot/<bootcsum>/ trees on root FS"
-    rm -rf "$probe/boot"/* 2>/dev/null || true
+    # Remove the whole /boot dir, not just its contents: bootc install
+    # rejects a non-mountpoint empty dir at the target root ("Requiring
+    # directory contains only mount points"). ostree recreates it.
+    say "  Removing /boot tree on root FS"
+    chattr -R -i "$probe/boot" 2>/dev/null || true
+    rm -rf "$probe/boot" 2>/dev/null || true
     umount "$probe"
     rmdir "$probe"
 
