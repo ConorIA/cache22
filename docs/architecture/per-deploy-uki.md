@@ -51,6 +51,7 @@ After all UKIs are built, `resign-uki`:
 |---|---|
 | `ostree-finalize-staged.service` ExecStop (via `50-cache22-uki.conf` drop-in) | Shutdown, after ostree finalizes the staged deploy. The default path for normal updates. |
 | `cache22-resign-uki.path` watcher on `/etc/cache22/extra-cmdline` | When kargs are edited. Triggers a runtime rebuild for all live deploys. |
+| `cache22-resign-uki.path` watcher on `/boot/loader` | When the deployment set changes while the system is running: `ostree admin undeploy`, `bootc switch`, `bootc rollback`. ostree swaps the `loader.N` symlink on every write, so this catches an undeploy that the finalize-staged drop-in (staged deploys only) misses. Without it, an undeploy leaves stale UKIs whose `boot.X` no longer resolves. |
 | `cache22-reboot --soft` direct call | Before soft-reboot triggers, so the UKI for the staged deploy exists in case of a future hard reboot. |
 | `cache22-reboot --kexec` direct call | Before kexec, so the kernel can be extracted from the freshly-built UKI. |
 | Manual `sudo systemctl start cache22-resign-uki.service` | On demand. |
@@ -76,6 +77,30 @@ The cmdline baked into each UKI is the concatenation of:
 The `ostree=...` argument's `boot.<X>` index is the active boot slot, which is set by `ostree admin finalize-staged`. This is why `resign-uki` runs AFTER finalize-staged: it needs the BLS entry to know which boot.X the deploy was finalized into.
 
 If a UKI was built before finalize, the cmdline would have the WRONG boot.X (would point at the previously-active slot). The kernel would fail to mount the deploy and panic in the initramfs.
+
+## Stale boot.X recovery (cache22-bootheal)
+
+The `boot.X` index is the one volatile part of the baked cmdline. Any
+`ostree_sysroot_write_deployments` flips it, including `ostree admin
+undeploy`. The triggers above rebuild the UKIs after such a change, but a
+UKI that was already booted, or one written by an older tool, can still
+carry a `boot.X` that no longer resolves. On its own that is a drop to the
+emergency shell.
+
+The `cache22-bootheal` dracut module closes this. It installs a oneshot
+service into the initramfs, ordered `After=sysroot.mount` and
+`Before=ostree-prepare-root.service`. The service reads the `ostree=`
+argument from the kernel cmdline and, only if `/sysroot/<ostree path>`
+does not resolve, repoints the stale `/sysroot/ostree/boot.<X>` symlink at
+the live generation directory (`/ostree/boot.<X>.<Y>`) that still contains
+the deployment. The `<state>/<csum>/<serial>` tail is unaffected by an
+undeploy (ostree does not renumber surviving deployments), so the survivor
+boots.
+
+On a healthy boot the `ostree=` path resolves and the service is a strict
+no-op, so it cannot affect normal boot. The module ships in the initramfs
+via `add_dracutmodules+=" cache22-bootheal "` in
+`/usr/lib/dracut/dracut.conf.d/10-cache22.conf`.
 
 ## Signing chain
 

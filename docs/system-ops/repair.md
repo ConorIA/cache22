@@ -98,6 +98,22 @@ If the SB chain is fundamentally broken and the user wants to boot without enfor
 5. In firmware setup, put firmware in setup mode (or re-enable SB which often does this).
 6. Boot again. SB chain is restored.
 
+#### Emergency shell after removing a deployment
+
+Removing a deployment with `ostree admin undeploy` flips the ostree boot
+version. On a current image this is handled automatically: the
+`cache22-resign-uki.path` watcher on `/boot/loader` rebuilds the UKIs when
+the deployment set changes, and `cache22-bootheal` in the initramfs
+repoints a stale `boot.X` symlink at boot if a UKI was missed. See
+[Per-Deploy UKI](../../architecture/per-deploy-uki/).
+
+On an image that predates those fixes, a removed deployment can leave every
+UKI pointing at a `boot.X` that no longer resolves, dropping all entries to
+the emergency shell. To recover, boot the live ISO and either rerun
+`cache22-resign-uki` from a chroot to rebuild the UKIs, or run
+`cache22-repair` to redeploy. User data in `/var` and `/etc` is preserved
+either way.
+
 #### Force rollback when both deploys are broken
 
 If both the booted and rollback deploys fail:

@@ -1,9 +1,17 @@
 [Unit]
-Description=cache22: watch /etc/cache22/extra-cmdline for kargs changes
+Description=cache22: watch for kargs + deployment changes to rebuild UKIs
 ConditionPathExists=/run/ostree-booted
 
 [Path]
+# Kargs edits: regenerate UKIs for the live deploys without a reboot.
 PathChanged=/etc/cache22/extra-cmdline
+# Deployment-set changes while the system is up — `ostree admin undeploy`,
+# `bootc switch`, `bootc rollback`. ostree rewrites /boot/loader (swaps the
+# loader.N symlink) on every write_deployments, so watching it catches an
+# undeploy that the ostree-finalize-staged drop-in (staged deploys only) and
+# the extra-cmdline watch both miss. Without this, an undeploy leaves stale
+# UKIs on the ESP until the next upgrade.
+PathChanged=/boot/loader
 Unit=cache22-resign-uki.service
 
 [Install]
