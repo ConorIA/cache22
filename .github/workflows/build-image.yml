@@ -348,6 +348,20 @@ jobs:
           restore-keys: |
             pkgcache-${{ matrix.variant }}-
 
+      - name: Restore DKMS .ko cache from previous build
+        if: steps.detect.outputs.has_changes == 'true'
+        uses: actions/cache/restore@v5
+        with:
+          # Prior-build .ko bytes keyed by kver+modname+srcversion. The
+          # rechunker swaps freshly DKMS-compiled modules for these when the
+          # kernel and module source are unchanged, so a compiler-only bump
+          # does not churn the dkms-modules/leftover layers. Cold start (miss
+          # here) populates from this build's fresh modules.
+          path: /tmp/dkms-ko
+          key: dkms-ko-${{ matrix.variant }}-v1
+          restore-keys: |
+            dkms-ko-${{ matrix.variant }}-
+
       - name: Rechunk into ~480 per-package/bucket layers
         if: steps.detect.outputs.has_changes == 'true'
         # Splits the install image into per-package/bucket layers so
@@ -363,14 +377,15 @@ jobs:
         # consults it for each solo package and skips zstd-19 when the
         # mtree-derived cache key matches an entry from a prior build.
         run: |
-          mkdir -p /tmp/rechunked
+          mkdir -p /tmp/rechunked /tmp/dkms-ko
           CREATED=$(git -C "$GITHUB_WORKSPACE" log -1 --format=%ct)
           sudo python3 scripts/rechunk-cache22.py \
             --src localhost/cache22-${{ matrix.variant }}:raw \
             --dst /tmp/rechunked \
             --source-date-epoch 0 \
             --image-created-epoch "$CREATED" \
-            --pkgcache-index /tmp/pkgcache.json
+            --pkgcache-index /tmp/pkgcache.json \
+            --dkms-ko-cache /tmp/dkms-ko
 
       - name: Push rechunked image to ghcr.io
         if: steps.detect.outputs.has_changes == 'true'
@@ -426,6 +441,13 @@ jobs:
           # are immutable once written). Restore-keys prefix-match on
           # `pkgcache-<variant>-` picks the most recent save.
           key: pkgcache-${{ matrix.variant }}-v1-${{ github.run_id }}
+
+      - name: Save DKMS .ko cache for next build
+        if: steps.detect.outputs.has_changes == 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: /tmp/dkms-ko
+          key: dkms-ko-${{ matrix.variant }}-v1-${{ github.run_id }}
 
       - name: Inspect pushed image
         if: steps.detect.outputs.has_changes == 'true'
