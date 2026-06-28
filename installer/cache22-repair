@@ -133,7 +133,7 @@ detect_install() {
 
     # Find ESP from the same parent disk.
     local pkname
-    pkname=$(lsblk -no PKNAME "${CFG[root_part]}" | head -1)
+    pkname=$(lsblk -ndo PKNAME "${CFG[root_part]}" | head -1)
     [[ -n "$pkname" ]] || die "Could not derive parent disk from ${CFG[root_part]}"
     CFG[disk]="/dev/$pkname"
 
@@ -217,8 +217,8 @@ detect_image() {
     local probe; probe=$(mktemp -d)
     probe_mount_ro "$probe" || die "Mount failed: $ROOT_DEV"
     local osrel="" deploy
-    deploy=$(find "$probe/ostree/deploy" -mindepth 3 -maxdepth 3 -type d -name '*.0' \
-                  ! -path '*/backing/*' 2>/dev/null | head -1)
+    deploy=$(find "$probe/ostree/deploy" -mindepth 3 -maxdepth 3 -type d -name '*.[0-9]' \
+                  ! -path '*/backing/*' 2>/dev/null | sort | head -1)
     [[ -n "$deploy" && -f "$deploy/etc/os-release" ]] && osrel="$deploy/etc/os-release"
     [[ -z "$osrel" && -f "$probe/etc/os-release" ]]   && osrel="$probe/etc/os-release"
 
@@ -249,8 +249,8 @@ snapshot_etc() {
     local probe; probe=$(mktemp -d)
     probe_mount_ro "$probe" || die "Mount failed"
     local deploy_etc
-    deploy_etc=$(find "$probe/ostree/deploy" -mindepth 3 -maxdepth 3 -type d -name '*.0' \
-                      ! -path '*/backing/*' 2>/dev/null | head -1)/etc
+    deploy_etc=$(find "$probe/ostree/deploy" -mindepth 3 -maxdepth 3 -type d -name '*.[0-9]' \
+                      ! -path '*/backing/*' 2>/dev/null | sort | head -1)/etc
     [[ -d "$deploy_etc" ]] || { umount "$probe"; rmdir "$probe"; die "Deploy /etc not found"; }
     cp -a "$deploy_etc"/. "$ETC_SNAPSHOT/"
     umount "$probe"
@@ -394,8 +394,8 @@ run_bootc() {
 deploy_etc() {
     local d
     if [[ -d "$TARGET/ostree/deploy" ]]; then
-        d=$(find "$TARGET/ostree/deploy" -mindepth 3 -maxdepth 3 -type d -name "*.0" \
-            ! -path "*/backing/*" 2>/dev/null | head -1)
+        d=$(find "$TARGET/ostree/deploy" -mindepth 3 -maxdepth 3 -type d -name "*.[0-9]" \
+            ! -path "*/backing/*" 2>/dev/null | sort | head -1)
         [[ -n "$d" && -d "$d/etc" ]] && { echo "$d/etc"; return 0; }
     fi
     die "Deploy /etc not found post-install"
