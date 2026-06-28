@@ -17,7 +17,6 @@
 
 set -uo pipefail
 
-DEFAULT_VARIANT="arch-kde"
 DEFAULT_IMAGE_BASE="ghcr.io/cmspam/cache22-"
 DEFAULT_IMAGE_TAG="rolling"
 TARGET=/var/mnt/target
@@ -228,11 +227,12 @@ detect_image() {
     banner "Detecting image to redeploy"
     local probe; probe=$(mktemp -d)
     probe_mount_ro "$probe" || die "Mount failed: $ROOT_DEV"
-    local osrel="" deploy
+    local osrel="" deploy cand
     deploy=$(find "$probe/ostree/deploy" -mindepth 3 -maxdepth 3 -type d -name '*.[0-9]' \
                   ! -path '*/backing/*' 2>/dev/null | sort | head -1)
-    [[ -n "$deploy" && -f "$deploy/etc/os-release" ]] && osrel="$deploy/etc/os-release"
-    [[ -z "$osrel" && -f "$probe/etc/os-release" ]]   && osrel="$probe/etc/os-release"
+    for cand in "$deploy/etc/os-release" "$deploy/usr/lib/os-release" "$deploy/usr/etc/os-release"; do
+        [[ -n "$deploy" && -f "$cand" ]] && { osrel="$cand"; break; }
+    done
 
     local variant=""
     if [[ -n "$osrel" ]]; then
@@ -241,7 +241,13 @@ detect_image() {
     umount "$probe"
     rmdir "$probe"
 
-    [[ -z "$variant" ]] && variant="$DEFAULT_VARIANT"
+    # Refuse to guess. A wrong variant pulls the wrong (and possibly much
+    # larger) image; defaulting silently once turned a repair into an
+    # out-of-space failure deploying the wrong OS. Make the user name it.
+    [[ -n "$variant" ]] || die "Could not detect the cache22 variant from the existing deployment.
+  No VARIANT_ID in the deployment's os-release (or the deployment was already
+  wiped). Re-run naming the image explicitly, e.g.:
+      cache22-repair --image ${DEFAULT_IMAGE_BASE}cachy-server:${DEFAULT_IMAGE_TAG}"
     CFG[image]="${DEFAULT_IMAGE_BASE}${variant}:${DEFAULT_IMAGE_TAG}"
     say "  Detected variant: $variant"
     say "  Image: ${CFG[image]}"
@@ -356,7 +362,19 @@ setup_scratch() {
         mkfs.ext4 -F -q -L cache22-scratch "${CFG[scratch_part]}"
         mount -t ext4 "${CFG[scratch_part]}" /var/lib/containers
     else
-        # Fall back to tmpfs sized to free RAM (50%).
+        # No dedicated scratch partition: fall back to tmpfs at 50% of RAM.
+        # A full image (desktop variants especially) can exceed that on a
+        # low-RAM box and fail the pull mid-unpack with ENOSPC. Warn early so
+        # the user can add a cache22-scratch partition or free RAM first.
+        local ram_mb half_mb
+        ram_mb=$(awk '/^MemTotal:/{print int($2/1024)}' /proc/meminfo 2>/dev/null)
+        half_mb=$(( ${ram_mb:-0} / 2 ))
+        if (( half_mb < 8192 )); then
+            say "  WARNING: no cache22-scratch partition; tmpfs scratch is ~${half_mb} MiB"
+            say "           (50% of ${ram_mb:-?} MiB RAM). A full image may not fit; the pull"
+            say "           can fail with 'no space left on device'. Add a cache22-scratch"
+            say "           partition or use a box with more RAM if it does."
+        fi
         mount -t tmpfs -o size=50% tmpfs /var/lib/containers
     fi
     mkdir -p /var/lib/containers/var-tmp
