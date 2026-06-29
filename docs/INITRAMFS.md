@@ -82,24 +82,34 @@ driver and an SSH client so the initramfs can fetch a remote LUKS key:
    install_items+=" /usr/bin/curl "
    ```
 
-2. Build the user img:
-
-   ```
-   sudo /usr/libexec/cache22/build-user-initrd
-   ```
-
-3. Apply it (folds the user img into the UKI):
+2. Apply it. This rebuilds the running deploy's user img from the current config
+   and folds it into the UKI:
 
    ```
    sudo systemctl start cache22-resign-uki.service
    ```
 
-   It is also applied automatically on the next `bootc` upgrade or reboot.
+   It is also applied automatically on the next `bootc` upgrade or reboot. To
+   build the img by hand, for example for a kernel version that is not running,
+   run `sudo /usr/libexec/cache22/build-user-initrd [kver]`.
 
-Re-run step 2 after a kernel update, since the user img is per kernel version.
-If `/etc/dracut.conf.d/` overrides exist but no user img has been built for the
-running kernel, `resign-uki` falls back to the base img and prints a warning, so
-the machine still boots.
+`resign-uki` builds the user img for each live deploy in that deploy's own
+context. For the deploy it can build in context (the running deploy, or the
+deploy being staged at finalize) it rebuilds the img on every run, so editing
+`/etc/dracut.conf.d` and re-running it picks up the change instead of reusing a
+stale img. For any other deploy (a rollback) it builds only when that deploy has
+no img yet, by chrooting into it; that deploy's `/etc` is frozen, so it needs no
+rebuild otherwise. A deploy whose `/etc` carries no override keeps the base img.
+The img is built to a temp file and renamed, so a failed rebuild never replaces a
+working img.
+
+Because the override lives in `/etc`, which ostree merges forward onto each new
+deploy, a customization applies to the current deploy and to every deploy created
+afterward. A deploy that predates the override (an existing rollback) stays on the
+base img and still boots. On a kernel update no manual step is needed: the new
+deploy's initramfs is built at finalize against that deploy's own kernel modules.
+If a build fails, that deploy falls back to the base img with a warning, so the
+machine still boots.
 
 ## Limitations
 

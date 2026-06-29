@@ -34,13 +34,18 @@ depmod -a "${KVER}" 2>/dev/null || true
 # (/usr/lib/dracut/dracut.conf.d, incl. early_microcode=no and the DKMS omit)
 # plus the user's /etc/dracut.conf.d on top, so microcode and DKMS stay out
 # here too — they remain separate imgs.
+# Build to a temp file and rename on success, so a failed rebuild never replaces
+# a working img.
+TMP="${OUT}.tmp.$$"
+trap 'rm -f "$TMP"' EXIT
 dracut \
     --force \
     --kver "${KVER}" \
     --no-hostonly \
     --reproducible \
     --zstd \
-    "$OUT"
+    "$TMP"
+mv -f "$TMP" "$OUT"
 echo "==> Wrote ${OUT}"
 echo "    It is folded into the UKI on the next rebuild. Apply now with:"
 echo "      systemctl start cache22-resign-uki.service"

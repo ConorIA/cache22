@@ -122,6 +122,55 @@ atomic_install() {
     mv -f "$tmp" "$dst"
 }
 
+# Build the per-machine user img for one deploy, in that deploy's own context.
+# dracut needs the deploy's kernel modules and reads the deploy's own /etc dracut
+# config, so when the target is not the current root we chroot into the deploy
+# (the same bind set as resign-uki-finalize) and build there; output lands in the
+# shared /var either way. A direct build is used when this kver's modules are
+# already present, i.e. the running deploy or when we are already inside its
+# chroot. Returns non-zero on failure; the caller keeps any existing img or the
+# base img.
+build_user_img_for_deploy() {
+    local deploy_dir="$1" kver="$2"
+
+    if [[ -d "/usr/lib/modules/$kver" ]]; then
+        /usr/libexec/cache22/build-user-initrd "$kver" >&2
+        return
+    fi
+
+    [[ -n "$deploy_dir" && -d "$deploy_dir/usr/lib/modules/$kver" ]] || return 1
+    [[ -x "$deploy_dir/usr/libexec/cache22/build-user-initrd" ]] || return 1
+    local var
+    var="$(dirname "$(dirname "$deploy_dir")")/var"
+    [[ -d "$var" ]] || return 1
+    local d
+    for d in sysroot boot var efi dev proc sys tmp; do
+        [[ -d "$deploy_dir/$d" ]] || { echo "    chroot build: $deploy_dir/$d missing" >&2; return 1; }
+    done
+
+    local -a mnt=()
+    local rc=0
+    if mount --bind /sysroot "$deploy_dir/sysroot" && mnt+=( "$deploy_dir/sysroot" ) \
+       && mount --bind /boot "$deploy_dir/boot" && mnt+=( "$deploy_dir/boot" ) \
+       && mount --bind "$var" "$deploy_dir/var" && mnt+=( "$deploy_dir/var" ) \
+       && mount --bind "$ESP" "$deploy_dir/efi" && mnt+=( "$deploy_dir/efi" ) \
+       && mount --bind /dev "$deploy_dir/dev" && mnt+=( "$deploy_dir/dev" ) \
+       && mount -t proc proc "$deploy_dir/proc" && mnt+=( "$deploy_dir/proc" ) \
+       && mount --bind /sys "$deploy_dir/sys" && mnt+=( "$deploy_dir/sys" ) \
+       && mount -t tmpfs tmpfs "$deploy_dir/tmp" && mnt+=( "$deploy_dir/tmp" ); then
+        chroot "$deploy_dir" /usr/bin/env \
+            PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=/tmp \
+            /usr/libexec/cache22/build-user-initrd "$kver" >&2 || rc=1
+    else
+        rc=1
+    fi
+    local i
+    for (( i=${#mnt[@]}-1; i>=0; i-- )); do
+        umount "${mnt[i]}" 2>/dev/null || umount -l "${mnt[i]}" 2>/dev/null || true
+    done
+    return $rc
+}
+
 # Build one UKI from one BLS entry. Echoes the expected ESP filename.
 # The BLS entry's options= line is the source of truth for the cmdline
 # (it contains the correct ostree=/ostree/boot.X/<state>/<bootcsum>/0
@@ -276,21 +325,25 @@ EOF
     local main_initrd="$initramfs"
     local user_img="/var/lib/cache22/initramfs/user-${kver}.img"
     if compgen -G '/etc/dracut.conf.d/*.conf' >/dev/null 2>&1; then
-        # Build the user img on demand if it is missing for this kver. resign-uki
-        # runs in the TARGET deploy's chroot (resign-uki-finalize on upgrade, the
-        # installer chroot at install), so build-user-initrd here builds against
-        # THIS deploy's modules + config — no stale-kernel driver mismatch on a
-        # kernel upgrade. If the build fails we fall back to the base img.
-        if [[ ! -f "$user_img" ]]; then
+        # Build the user img in THIS deploy's own context, against its own kernel
+        # modules and its own /etc dracut config. Rebuild on every run for the
+        # deploy we can build in context (the running deploy, or the one we are
+        # chrooted into at finalize) so config or source changes are picked up;
+        # build a different deploy only when its img is missing, since its /etc is
+        # frozen and needs no rebuild otherwise. build_user_img_for_deploy builds
+        # directly in context and chroots into the deploy otherwise, so a deploy
+        # is never built against another deploy's modules. No override in a
+        # deploy's /etc means no user img, and it keeps the base img.
+        if [[ -d "/usr/lib/modules/$kver" || ! -f "$user_img" ]]; then
             echo "    building user initramfs for $kver" >&2
-            /usr/libexec/cache22/build-user-initrd "$kver" >&2 || \
-                echo "    WARN: build-user-initrd failed; using base img" >&2
+            build_user_img_for_deploy "$deploy_dir" "$kver" || \
+                echo "    WARN: user initramfs build failed for $kver; using base img" >&2
         fi
         if [[ -f "$user_img" ]]; then
             main_initrd="$user_img"
             echo "    using user initramfs override $user_img" >&2
         else
-            echo "    WARN: no user img for $kver; using base img" >&2
+            echo "    using base img for $kver (no user override built)" >&2
         fi
     fi
     initrds+=( --initrd="$main_initrd" )

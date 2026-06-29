@@ -43,6 +43,14 @@ After all UKIs are built, `resign-uki`:
 6. Re-signs and re-installs sd-boot if `/usr/lib/systemd/boot/efi/systemd-bootx64.efi` is newer than the on-ESP copy.
 7. Garbage-collects UKIs on the ESP that do not correspond to a live deploy. GC runs only after all desired UKIs are confirmed present, so a partial failure never deletes a working UKI.
 
+## User img per deploy
+
+When `/etc/dracut.conf.d/` overrides exist, `resign-uki` builds the per-machine user img for each deploy in that deploy's own context: directly for the deploy it can build in context (the running deploy, or the one being staged at finalize), and by chrooting into the deploy otherwise. The build therefore always uses that deploy's own kernel modules and its own `/etc/dracut.conf.d`, never another deploy's.
+
+The in-context deploy is rebuilt on every run, so a changed config or source is picked up rather than a stale img reused; other deploys are built only when their img is missing, since their `/etc` is frozen. Each build writes to a temp file and renames it into `/var/lib/cache22/initramfs/user-<kver>.img`, so a failed rebuild never replaces a working img. The result is folded into that deploy's UKI in place of the base img.
+
+Because `/etc` is merged forward by ostree, an override applies to the current deploy and to every deploy created afterward. A deploy that predates the override keeps the base img. If a per-deploy build fails it falls back to the base img, so the deploy still boots.
+
 ## Triggers
 
 `resign-uki` runs from these triggers:
@@ -125,7 +133,7 @@ If any step fails partway, the previous valid UKIs remain in place. The next boo
 
 ## Build performance
 
-A single UKI build (kernel signing + ukify + sbsign + atomic write) takes ~1-3 seconds on a modern SSD. With three live deploys (booted + staged + rollback), the full `resign-uki` run is ~5-10 seconds.
+A single UKI build (kernel signing + ukify + sbsign + atomic write) takes ~1-3 seconds on a modern SSD. With three live deploys (booted + staged + rollback), the full `resign-uki` run is ~5-10 seconds. When `/etc/dracut.conf.d/` overrides exist, the in-context deploy also runs dracut on every invocation (its user img is rebuilt to pick up changes), adding roughly ten seconds; other deploys reuse their img unless it is missing, in which case a non-running deploy is built inside a chroot.
 
 The shutdown-time invocation extends shutdown by this amount. `TimeoutStopSec=10m` in the drop-in allows ample headroom.
 
