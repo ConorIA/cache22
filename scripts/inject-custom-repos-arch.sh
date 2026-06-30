@@ -96,9 +96,24 @@ Server = https://github.com/cmspam/qemu-patched/releases/download/latest-v3
 SigLevel = Optional TrustAll
 Server = https://github.com/cmspam/xe-virt-repo/releases/download/latest-host
 
+# Guest-side patched mesa + intel-media-driver for running cache22 AS a VM
+# guest with Intel Xe virtio-gpu native context (GL/Vulkan/VA-API, no
+# passthrough). Pairs with xe-virt-host-v3 so one image runs as host or
+# guest. Repo-priority placement wins over stock mesa/lib32-mesa/
+# intel-media-driver (all already in the package layers).
+[xe-virt-guest-v3]
+SigLevel = Optional TrustAll
+Server = https://github.com/cmspam/xe-virt-repo/releases/download/latest-guest
+
 [gamescope-patched-v3]
 SigLevel = Optional TrustAll
 Server = https://github.com/cmspam/gamescope-patched/releases/download/latest-v3
+
+# Out-of-tree Intel iavf VF driver (iavf-dkms). Built against the image
+# kernel via DKMS; selected over the in-kernel iavf by a depmod override.
+[iavf-dkms]
+SigLevel = Optional TrustAll
+Server = https://github.com/cmspam/intel-iavf/releases/download/arch
 
 # Sunshine (game streaming server, Moonlight-compatible) — official
 # pacman repo from upstream LizardByte.

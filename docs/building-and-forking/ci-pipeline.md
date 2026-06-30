@@ -52,6 +52,8 @@ This is what makes per-layer fetch effective: most daily rebuilds change only a 
 
 Determinism is best-effort, not strict. If pacman package timestamps change in upstream, layers re-digest. If a package is rebuilt with new content, its layer changes.
 
+DKMS modules are a special case. They are recompiled on every build against the compiler the image ships, so a compiler bump alone produces byte-different `.ko` output with identical function. The rechunker reuses a prior build's `.ko` bytes when the kernel and module source are unchanged, keyed on the kernel `uname-r` and the module `srcversion` (modpost's hash of the module source and headers, independent of the compiler). A key match means the same kernel ABI and the same source, so the cached module is loadable as-is; modules are unsigned, so there is no signature to invalidate. A kernel or source change moves the key and recompiles. The reuse cache is restored and saved per variant via `actions/cache` (`dkms-ko-<variant>`), and is passed to the rechunker with `--dkms-ko-cache`. Both the loadable copy under `/usr/lib/modules` and the dkms build-tree copy under `/usr/share/factory/var/lib/dkms` are swapped.
+
 ## Artifacts
 
 Each successful build produces:

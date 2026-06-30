@@ -91,7 +91,7 @@ Files in `/var/lib/cache22/`:
 | `/var/lib/cache22/sbkey/keys/db/db.{key,pem,der}` | Secure Boot signing key. |
 | `/var/lib/cache22/sbkey/tpm-pcr11.{key,pub}` | TPM PCR-policy key. |
 | `/var/lib/cache22/sbkey/backup-<timestamp>/` | Backup of previous keys after `rotate-keys`. |
-| `/var/lib/cache22/healthcheck-bad-boots` | Consecutive failed-boot counter (single integer). |
+| `/var/lib/cache22/healthcheck/fail-counter` | Consecutive failed-boot counter (single integer). |
 
 All under `/var/lib/cache22/` is mode 0700 root, and its contents are mode 0600 root. The directory is on the encrypted root, so at-rest the keys are protected by LUKS.
 

@@ -39,6 +39,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -528,6 +529,128 @@ def write_blob(out_blobs: Path, content: bytes, media_type: str) -> dict:
     return {"mediaType": media_type, "digest": digest, "size": len(content)}
 
 
+# ─── DKMS .ko reuse ───────────────────────────────────────────────────────
+# DKMS recompiles out-of-tree modules (iavf, r8152, broadcom-wl, nvidia-open,
+# ...) on every image build, against whatever compiler the image ships that
+# day. A compiler bump alone produces byte-different .ko output with identical
+# function, churning the dkms-modules and leftover layers for no benefit. The
+# swap below reuses a prior build's .ko bytes whenever the kernel and the
+# module source are unchanged, keyed on (kver, modname, srcversion):
+#   kver       the kernel uname-r; includes pkgrel, so any kernel change misses
+#   srcversion modpost's MD4 over the module source + headers (modinfo field).
+#              It is independent of the compiler, so it identifies "same source,
+#              same kernel headers" across a gcc/glibc bump.
+# A key match means same kernel ABI and same source: the cached .ko is
+# functionally identical and loadable. Modules are unsigned in cache22 (DKMS
+# signing is disabled by policy), so there is no signature to invalidate.
+
+
+def _read_srcversion(path: Path) -> str | None:
+    """Return a .ko's srcversion, decompressing .ko.zst first. None if absent."""
+    name = path.name
+    try:
+        if name.endswith(".ko.zst"):
+            data = subprocess.run(
+                ["zstd", "-dcq", str(path)], capture_output=True, check=True
+            ).stdout
+        elif name.endswith(".ko"):
+            data = path.read_bytes()
+        else:
+            return None
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    # The .modinfo section is NUL-separated key=value entries.
+    m = re.search(rb"srcversion=([0-9A-Fa-f]+)", data)
+    return m.group(1).decode() if m else None
+
+
+def _ko_suffix(name: str) -> str | None:
+    if name.endswith(".ko.zst"):
+        return ".ko.zst"
+    if name.endswith(".ko"):
+        return ".ko"
+    return None
+
+
+def _kver_from_module_path(rel: str) -> str | None:
+    """Pull the kernel version out of a module file path.
+
+    loadable:  usr/lib/modules/<kver>/{updates,extra}/...
+    dkms tree: usr/share/factory/var/lib/dkms/<mod>/<ver>/<kver>/x86_64/module/...
+    """
+    parts = rel.split("/")
+    if "modules" in parts:
+        i = parts.index("modules")
+        if i + 1 < len(parts):
+            return parts[i + 1]
+    if "x86_64" in parts:
+        i = parts.index("x86_64")
+        if i >= 1:
+            return parts[i - 1]
+    return None
+
+
+def swap_dkms_modules(src_root: Path, cache_dir: Path) -> None:
+    """Reuse prior-build .ko bytes when (kver, srcversion) match.
+
+    Operates on both on-disk copies of each freshly DKMS-built module:
+      loadable:  usr/lib/modules/<kver>/{updates,extra}/.../<mod>.ko[.zst]
+      dkms tree: usr/share/factory/var/lib/dkms/<mod>/<ver>/<kver>/x86_64/module/<mod>.ko[.zst]
+    The original_module/ tree is skipped: it is dkms's backup of the kernel's
+    in-tree module, not a freshly compiled artifact, and ships byte-stable with
+    the kernel package.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    patterns = [
+        "usr/lib/modules/*/updates/**/*.ko",
+        "usr/lib/modules/*/updates/**/*.ko.zst",
+        "usr/lib/modules/*/extra/**/*.ko",
+        "usr/lib/modules/*/extra/**/*.ko.zst",
+        "usr/share/factory/var/lib/dkms/*/*/*/x86_64/module/*.ko",
+        "usr/share/factory/var/lib/dkms/*/*/*/x86_64/module/*.ko.zst",
+    ]
+    candidates: set[Path] = set()
+    for pat in patterns:
+        candidates.update(src_root.glob(pat))
+
+    hits = misses = skipped = 0
+    for ko in sorted(candidates):
+        rel = str(ko.relative_to(src_root))
+        suffix = _ko_suffix(ko.name)
+        if suffix is None:
+            continue
+        modname = ko.name[: -len(suffix)]
+        kver = _kver_from_module_path(rel)
+        srcver = _read_srcversion(ko)
+        if not kver or not srcver:
+            skipped += 1
+            continue
+        key = f"{kver}__{modname}__{srcver}{suffix}"
+        cached = cache_dir / key
+        if cached.exists():
+            # A cache entry must still carry the keyed srcversion; drop it if
+            # not (corrupt or truncated) and fall through to re-populate.
+            if _read_srcversion(cached) == srcver:
+                # Content-only overwrite keeps the image file's mode/owner/xattrs.
+                ko.write_bytes(cached.read_bytes())
+                hits += 1
+                continue
+            cached.unlink(missing_ok=True)
+        try:
+            shutil.copyfile(ko, cached)
+            # actions/cache/save runs as the runner user; this script runs as
+            # root, so make the populated entry world-readable.
+            os.chmod(cached, 0o644)
+            misses += 1
+        except OSError:
+            skipped += 1
+
+    print(
+        f"==> DKMS .ko cache: {hits} reused, {misses} cached fresh, "
+        f"{skipped} skipped (no srcversion/kver)"
+    )
+
+
 # ─── Main ────────────────────────────────────────────────────────────────
 
 
@@ -578,6 +701,18 @@ def main():
             "as before (compresses everything)."
         ),
     )
+    ap.add_argument(
+        "--dkms-ko-cache",
+        default=None,
+        help=(
+            "Directory (persisted via actions/cache) of prior-build .ko bytes "
+            "keyed by kver+modname+srcversion. When set, freshly DKMS-compiled "
+            "modules are swapped for byte-identical cached ones whenever the "
+            "kernel and module source are unchanged, so a compiler-only bump "
+            "does not churn the dkms-modules/leftover layers. Omitting it "
+            "leaves the freshly built modules in place."
+        ),
+    )
     args = ap.parse_args()
 
     global SDE
@@ -607,6 +742,15 @@ def main():
     src_mnt = Path(mnt)
 
     try:
+        # Reuse prior-build DKMS .ko bytes before anything reads the rootfs, so
+        # the swapped (compiler-stable) modules are what gets chunked. Never
+        # fatal: on any error the freshly built modules are left in place.
+        if args.dkms_ko_cache:
+            try:
+                swap_dkms_modules(src_mnt, Path(args.dkms_ko_cache))
+            except Exception as e:  # noqa: BLE001 - best-effort optimization
+                print(f"==> DKMS .ko cache: skipped due to error: {e}")
+
         # Read pacman DB
         db_root = src_mnt / "usr" / "lib" / "sysimage" / "pacman" / "local"
         if not db_root.is_dir():

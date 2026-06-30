@@ -42,5 +42,14 @@ sed -i 's|=\s*/var/cache/pacman|= /usr/lib/sysimage/pacman/|g' "${PACMAN_CONF}"
 # DownloadUser=alpm wouldn't exist consistently in the build env.
 sed -i '/^DownloadUser/d' "${PACMAN_CONF}"
 
+# The dkms install scriptlet requests network access. pacman's scriptlet
+# sandbox refuses to grant it ("refusing to run ... with network access")
+# and skips the scriptlet, so DKMS modules (r8152, broadcom-wl, xone)
+# never compile into /usr/lib/modules/<kver>/updates/dkms and ship absent.
+# DisableSandboxNetwork lets the scriptlet run so the modules bake in.
+if ! grep -q '^DisableSandboxNetwork' "${PACMAN_CONF}"; then
+    sed -i '/^\[options\]/a DisableSandboxNetwork' "${PACMAN_CONF}"
+fi
+
 echo "==> Pacman state moved to ${SYSIMAGE}; conf rewritten"
 grep -E '^\s*(DBPath|CacheDir|LogFile|GPGDir|HookDir)' "${PACMAN_CONF}" || true

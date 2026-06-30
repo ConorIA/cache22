@@ -1,0 +1,36 @@
+#cloud-config
+datasource_list: [None]
+timezone: Asia/Shanghai
+disable_root: false
+ssh_pwauth: true
+users:
+  - name: root
+    lock_passwd: false
+chpasswd:
+  expire: false
+  # <= cloud-init 22.2.x 
+  list: |
+    root:@PASSWORD@
+  users:
+    - name: root
+      password: "@PASSWORD@"
+      type: hash
+runcmd:
+  # opensuse tumbleweed  /etc/ssh/sshd_config.d/  /etc/ssh/sshd_config/usr/etc/ssh/sshd_config
+  # opensuse tumbleweed cloud-init  /etc/ssh/sshd_config
+  #  clout-init  sshd_config
+  - test $(wc -l </etc/ssh/sshd_config) -le 1 && cat /etc/ssh/sshd_config >>/etc/ssh/sshd_config.d/50-cloud-init.conf && rm -f /etc/ssh/sshd_config
+  - echo "PermitRootLogin yes" >/etc/ssh/sshd_config.d/01-permitrootlogin.conf 2>/dev/null || sed -Ei 's/^#?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+  - echo "Port @SSH_PORT@" >/etc/ssh/sshd_config.d/01-change-ssh-port.conf || sed -Ei 's/^#?Port .*/Port @SSH_PORT@/' /etc/ssh/sshd_config
+  #  ssh  Access Denied
+  # systemctl restart sshd 
+  - pkill sshd || true
+  # daemon-reload  /run/systemd/generator/ssh.socket.d/addresses.conf
+  - systemctl daemon-reload
+  - for s in ssh.socket ssh.service sshd.socket sshd.service; do systemctl is-enabled $s 2>/dev/null && systemctl restart $s && break; done
+  # 
+  - sed -i -e '/^[[:space:]]*password:/d' -e '/[[:space:]]*root:/d' /etc/cloud/cloud.cfg.d/99_fallback.cfg
+  - touch /etc/cloud/cloud-init.disabled
+  # ubuntu  echo -e '\nDone' -e 
+  #  true  tty 
+  - for tty in tty0 ttyS0 ttyAMA0; do [ -c /dev/$tty ] && printf '\n%s\n' 'reinstall done' >/dev/$tty || true; done

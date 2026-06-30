@@ -1,0 +1,12 @@
+# cache22 health check: critical services.
+#
+# List one systemd unit per line. After boot, if any unit listed here is not
+# active across three consecutive boots, cache22 rolls back to the previous
+# deployment. Blank lines and text after '#' are ignored.
+#
+# With nothing listed, the health check does nothing and never rolls back. Add
+# the services that define a healthy system for this host, for example:
+#
+#   sshd.service
+#   podman.service
+#   nginx.service

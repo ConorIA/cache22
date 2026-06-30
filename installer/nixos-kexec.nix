@@ -25,18 +25,18 @@ let
   # the latter gates the build on shellcheck-clean, which the existing
   # scripts aren't (and don't need to be — they ship in the Fedora ISO
   # without that constraint).
-  cache22-install = pkgs.runCommand "cache22-install" {
+  # Both scripts and their shared cache22-common.sh live in one derivation so
+  # each script resolves the sourced file from its own bin/ directory, and so
+  # the two don't collide on bin/cache22-common.sh when merged into the system
+  # profile.
+  cache22-installer-tools = pkgs.runCommand "cache22-installer-tools" {
     nativeBuildInputs = [ pkgs.makeWrapper ];
   } ''
-    install -Dm0755 ${./cache22-install} $out/bin/cache22-install
+    install -Dm0755 ${./cache22-install}   $out/bin/cache22-install
+    install -Dm0755 ${./cache22-repair}    $out/bin/cache22-repair
+    install -Dm0644 ${./cache22-common.sh} $out/bin/cache22-common.sh
     wrapProgram $out/bin/cache22-install \
         --prefix PATH : ${lib.makeBinPath installRuntimeDeps}
-  '';
-
-  cache22-repair = pkgs.runCommand "cache22-repair" {
-    nativeBuildInputs = [ pkgs.makeWrapper ];
-  } ''
-    install -Dm0755 ${./cache22-repair} $out/bin/cache22-repair
     wrapProgram $out/bin/cache22-repair \
         --prefix PATH : ${lib.makeBinPath repairRuntimeDeps}
   '';
@@ -54,8 +54,12 @@ in {
   '';
 
   environment.systemPackages = with pkgs; [
-    cache22-install
-    cache22-repair
+    cache22-installer-tools
+    # Restore (cache22-install --restore) decodes a clone archive with
+    # cache22-backup, which needs zstd to decompress and openssl to decrypt.
+    zstd openssl
+    # LUKS install/restore needs cryptsetup in the live environment.
+    cryptsetup
     htop tmux vim git tcpdump strace lsof pciutils usbutils
   ];
 

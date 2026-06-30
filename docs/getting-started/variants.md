@@ -30,7 +30,7 @@ Earlier revisions of cache22 split out NVIDIA and gaming into separate variants 
 **Arch variants** (`arch-*`) use the official Arch Linux base:
 
 - Mainline `linux` kernel.
-- DKMS-built modules for `nvidia-open`, `r8125`, `broadcom-wl`, `xone`. Compiled against `linux-headers` at image-build time.
+- DKMS-built modules for `nvidia-open`, `r8125`, `r8152`, `broadcom-wl`, `xone`. Compiled against `linux-headers` at image-build time.
 - No ZFS support (ZFS is cachy-only via CachyOS's pre-built module).
 
 ## Choosing a role
@@ -47,7 +47,7 @@ The base layer (always installed) includes:
 
 - **GPU drivers.** Mesa (AMD, Intel, virtio) + NVIDIA proprietary (`nvidia-open-dkms` on arch, `linux-cachyos-nvidia-open` on cachy).
 - **Filesystems.** ext4, xfs, btrfs, f2fs, exFAT, FAT32, NFS, SMB. ZFS on `cachy-*` only.
-- **Network.** NetworkManager, OpenVPN, WireGuard, modemmanager, `r8125`.
+- **Network.** NetworkManager, OpenVPN, WireGuard, command-line DHCP clients (`dhcpcd`, `dhclient`, not auto-enabled), modemmanager, `r8125` (PCIe), `r8152` (USB).
 - **Bluetooth.** bluez stack.
 - **Audio.** PipeWire (with PulseAudio, JACK, ALSA shims).
 - **Containers.** podman, podman-compose, docker, docker-compose, distrobox, incus, lxc.

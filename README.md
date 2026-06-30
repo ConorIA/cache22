@@ -13,6 +13,7 @@ Quick links:
 - [Getting Started](https://cmspam.github.io/cache22/getting-started/) for install + first-boot Secure Boot setup.
 - [Updates and Reboots](https://cmspam.github.io/cache22/updates-and-reboots/) including the [three reboot paths](https://cmspam.github.io/cache22/updates-and-reboots/three-reboot-paths/) cache22 supports (soft-reboot, kexec, hard).
 - [Boot and Security](https://cmspam.github.io/cache22/boot-and-security/) including [TPM and LUKS](https://cmspam.github.io/cache22/boot-and-security/tpm-luks/).
+- [Backup and Restore](https://cmspam.github.io/cache22/system-ops/cache22-backup/) for the user-layer backup, whole-system clone, and restoring onto a fresh install.
 - [Troubleshooting](https://cmspam.github.io/cache22/troubleshooting/) for common problems.
 
 ## Variants
@@ -51,6 +52,16 @@ curl -fsSL https://raw.githubusercontent.com/cmspam/cache22/main/installer/cache
 
 After the kexec, SSH back in as root and run `cache22-install`. Works on both BIOS and UEFI VPSes. See [Installation → VPS via kexec](https://cmspam.github.io/cache22/getting-started/installation/#alternative-install-on-a-vps-via-kexec-no-iso-mount-needed).
 
+### On a low-RAM VPS (flash a prebuilt image)
+
+For server variants a prebuilt disk image is published to `ghcr.io` and streamed straight onto the disk from the existing OS. It runs in roughly 256–512 MB of RAM (no multi-GB scratch), so it works where the kexec installer can't. One command, headless:
+
+```
+curl -fsSL https://raw.githubusercontent.com/cmspam/cache22/main/installer/cache22-vps-dd.sh | sudo bash -s -- --variant cachy-server --ssh-key gh:USER
+```
+
+It kexecs into a small in-RAM Alpine, streams the image to disk, injects your SSH key for both `cache` and `root`, and reboots. The system grows to fill the disk on first boot; log in by key as `cache` (passwordless sudo) or `root`. The image is BIOS/GRUB, server variants only (`arch-server`, `cachy-server`), key-only SSH — for Secure Boot, LUKS, or desktop variants use the ISO or kexec path above. To flash a local disk yourself, use [`cache22-flash.sh`](https://raw.githubusercontent.com/cmspam/cache22/main/installer/cache22-flash.sh).
+
 ## Helper commands
 
 | Command | Purpose |
@@ -66,6 +77,7 @@ After the kexec, SSH back in as root and run `cache22-install`. Works on both BI
 | [`cache22-karg`](https://cmspam.github.io/cache22/customization/kernel-args/) | Manage persistent kernel command-line args. |
 | [`cache22-shell`](https://cmspam.github.io/cache22/customization/distrobox/) | Open a CachyOS distrobox container for non-immutable package work. |
 | [`cache22-healthcheck`](https://cmspam.github.io/cache22/system-ops/healthcheck/) | Auto-rollback after 3 consecutive bad boots. |
+| [`cache22-backup`](https://cmspam.github.io/cache22/system-ops/cache22-backup/) | Back up the user layer, or make a whole-system btrfs `send` clone; restore either onto a fresh install. |
 | [`cache22-gamescope-mode`](https://cmspam.github.io/cache22/customization/gamescope-mode/) | (KDE variants only) Toggle SteamOS-style gamescope autologin. |
 
 ## Forking
@@ -78,4 +90,4 @@ Apache 2.0 for build scripts and tooling. Packaged software keeps its own licens
 
 ## Acknowledgements
 
-[CachyOS](https://cachyos.org/) for the base distro and v3-optimized packages. [bootc](https://github.com/bootc-dev/bootc) and the broader ostree/composefs ecosystem. [bootcrew/mono](https://github.com/bootcrew/mono) for path-finding bootc-on-Arch ideas. [Universal Blue](https://universal-blue.org/) and [Bazzite](https://bazzite.gg/) for the multi-variant Containerfile pattern.
+[CachyOS](https://cachyos.org/) for the base distro and v3-optimized packages. [bootc](https://github.com/bootc-dev/bootc) and the broader ostree/composefs ecosystem. [bootcrew/mono](https://github.com/bootcrew/mono) for path-finding bootc-on-Arch ideas. [Universal Blue](https://universal-blue.org/) and [Bazzite](https://bazzite.gg/) for the multi-variant Containerfile pattern. [reinstall](https://github.com/bin456789/reinstall) (MIT) for the kexec-to-Alpine transport that the prebuilt-image VPS installer builds on (vendored under `installer/reinstall/`).

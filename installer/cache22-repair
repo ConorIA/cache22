@@ -17,11 +17,15 @@
 
 set -uo pipefail
 
-DEFAULT_VARIANT="arch-kde"
 DEFAULT_IMAGE_BASE="ghcr.io/cmspam/cache22-"
 DEFAULT_IMAGE_TAG="rolling"
 TARGET=/var/mnt/target
 LOG=/var/log/cache22-repair.log
+
+# Shared installer constants (BTRFS_OPTS, ...), shipped beside this script.
+_C22_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# shellcheck source=installer/cache22-common.sh
+source "$_C22_DIR/cache22-common.sh" || { echo "FATAL: cache22-common.sh missing beside cache22-repair" >&2; exit 1; }
 
 declare -A CFG=(
     [disk]=""
@@ -116,10 +120,22 @@ detect_install() {
     if [[ "$kind" == "luks" ]]; then
         CFG[luks]="yes"
         CFG[root_part]="$part"
-        prompt_password "LUKS passphrase for $part"
-        CFG[luks_password]="$REPLY"
-        printf '%s' "${CFG[luks_password]}" | cryptsetup open "$part" cache22-root - \
-            || die "LUKS unlock failed."
+        # Reuse a mapper left open by a previous (interrupted) run rather
+        # than failing on "device already exists". Verify it's backed by
+        # the partition we selected before trusting it.
+        if [[ -e /dev/mapper/cache22-root ]]; then
+            local backing
+            backing=$(cryptsetup status cache22-root 2>/dev/null \
+                      | awk '/^ *device:/{print $2}')
+            [[ "$backing" == "$part" ]] || \
+                die "/dev/mapper/cache22-root is already open but backed by ${backing:-unknown}, not $part. Close it first: cryptsetup close cache22-root"
+            say "  LUKS already unlocked (/dev/mapper/cache22-root) — reusing"
+        else
+            prompt_password "LUKS passphrase for $part"
+            CFG[luks_password]="$REPLY"
+            printf '%s' "${CFG[luks_password]}" | cryptsetup open "$part" cache22-root - \
+                || die "LUKS unlock failed."
+        fi
         ROOT_DEV="/dev/mapper/cache22-root"
     else
         CFG[root_part]="$part"
@@ -128,7 +144,7 @@ detect_install() {
 
     # Find ESP from the same parent disk.
     local pkname
-    pkname=$(lsblk -no PKNAME "${CFG[root_part]}" | head -1)
+    pkname=$(lsblk -ndo PKNAME "${CFG[root_part]}" | head -1)
     [[ -n "$pkname" ]] || die "Could not derive parent disk from ${CFG[root_part]}"
     CFG[disk]="/dev/$pkname"
 
@@ -211,11 +227,12 @@ detect_image() {
     banner "Detecting image to redeploy"
     local probe; probe=$(mktemp -d)
     probe_mount_ro "$probe" || die "Mount failed: $ROOT_DEV"
-    local osrel="" deploy
-    deploy=$(find "$probe/ostree/deploy" -mindepth 3 -maxdepth 3 -type d -name '*.0' \
-                  ! -path '*/backing/*' 2>/dev/null | head -1)
-    [[ -n "$deploy" && -f "$deploy/etc/os-release" ]] && osrel="$deploy/etc/os-release"
-    [[ -z "$osrel" && -f "$probe/etc/os-release" ]]   && osrel="$probe/etc/os-release"
+    local osrel="" deploy cand
+    deploy=$(find "$probe/ostree/deploy" -mindepth 3 -maxdepth 3 -type d -name '*.[0-9]' \
+                  ! -path '*/backing/*' 2>/dev/null | sort | head -1)
+    for cand in "$deploy/etc/os-release" "$deploy/usr/lib/os-release" "$deploy/usr/etc/os-release"; do
+        [[ -n "$deploy" && -f "$cand" ]] && { osrel="$cand"; break; }
+    done
 
     local variant=""
     if [[ -n "$osrel" ]]; then
@@ -224,7 +241,13 @@ detect_image() {
     umount "$probe"
     rmdir "$probe"
 
-    [[ -z "$variant" ]] && variant="$DEFAULT_VARIANT"
+    # Refuse to guess. A wrong variant pulls the wrong (and possibly much
+    # larger) image; defaulting silently once turned a repair into an
+    # out-of-space failure deploying the wrong OS. Make the user name it.
+    [[ -n "$variant" ]] || die "Could not detect the cache22 variant from the existing deployment.
+  No VARIANT_ID in the deployment's os-release (or the deployment was already
+  wiped). Re-run naming the image explicitly, e.g.:
+      cache22-repair --image ${DEFAULT_IMAGE_BASE}cachy-server:${DEFAULT_IMAGE_TAG}"
     CFG[image]="${DEFAULT_IMAGE_BASE}${variant}:${DEFAULT_IMAGE_TAG}"
     say "  Detected variant: $variant"
     say "  Image: ${CFG[image]}"
@@ -244,8 +267,8 @@ snapshot_etc() {
     local probe; probe=$(mktemp -d)
     probe_mount_ro "$probe" || die "Mount failed"
     local deploy_etc
-    deploy_etc=$(find "$probe/ostree/deploy" -mindepth 3 -maxdepth 3 -type d -name '*.0' \
-                      ! -path '*/backing/*' 2>/dev/null | head -1)/etc
+    deploy_etc=$(find "$probe/ostree/deploy" -mindepth 3 -maxdepth 3 -type d -name '*.[0-9]' \
+                      ! -path '*/backing/*' 2>/dev/null | sort | head -1)/etc
     [[ -d "$deploy_etc" ]] || { umount "$probe"; rmdir "$probe"; die "Deploy /etc not found"; }
     cp -a "$deploy_etc"/. "$ETC_SNAPSHOT/"
     umount "$probe"
@@ -285,13 +308,20 @@ wipe_image_content() {
                 [[ -e "$entry" ]] || continue
                 case "${entry##*/}" in
                     var) ;;     # KEEP — /home and all user state live here
-                    *)   rm -rf "$entry" ;;
+                    *)   # ostree marks deploy roots immutable (chattr +i);
+                         # clear it recursively or rm -rf hits EPERM.
+                         chattr -R -i "$entry" 2>/dev/null || true
+                         rm -rf "$entry" ;;
                 esac
             done
         done
     fi
-    say "  Removing /boot/<bootcsum>/ trees on root FS"
-    rm -rf "$probe/boot"/* 2>/dev/null || true
+    # Remove the whole /boot dir, not just its contents: bootc install
+    # rejects a non-mountpoint empty dir at the target root ("Requiring
+    # directory contains only mount points"). ostree recreates it.
+    say "  Removing /boot tree on root FS"
+    chattr -R -i "$probe/boot" 2>/dev/null || true
+    rm -rf "$probe/boot" 2>/dev/null || true
     umount "$probe"
     rmdir "$probe"
 
@@ -305,8 +335,6 @@ wipe_image_content() {
 }
 
 # ─── Mount fresh + re-run bootc install ────────────────────────────────
-BTRFS_OPTS="compress=zstd:1,noatime,space_cache=v2,discard=async"
-
 setup_mounts() {
     banner "Mounting target for redeploy"
     mkdir -p "$TARGET"
@@ -334,7 +362,19 @@ setup_scratch() {
         mkfs.ext4 -F -q -L cache22-scratch "${CFG[scratch_part]}"
         mount -t ext4 "${CFG[scratch_part]}" /var/lib/containers
     else
-        # Fall back to tmpfs sized to free RAM (50%).
+        # No dedicated scratch partition: fall back to tmpfs at 50% of RAM.
+        # A full image (desktop variants especially) can exceed that on a
+        # low-RAM box and fail the pull mid-unpack with ENOSPC. Warn early so
+        # the user can add a cache22-scratch partition or free RAM first.
+        local ram_mb half_mb
+        ram_mb=$(awk '/^MemTotal:/{print int($2/1024)}' /proc/meminfo 2>/dev/null)
+        half_mb=$(( ${ram_mb:-0} / 2 ))
+        if (( half_mb < 8192 )); then
+            say "  WARNING: no cache22-scratch partition; tmpfs scratch is ~${half_mb} MiB"
+            say "           (50% of ${ram_mb:-?} MiB RAM). A full image may not fit; the pull"
+            say "           can fail with 'no space left on device'. Add a cache22-scratch"
+            say "           partition or use a box with more RAM if it does."
+        fi
         mount -t tmpfs -o size=50% tmpfs /var/lib/containers
     fi
     mkdir -p /var/lib/containers/var-tmp
@@ -391,8 +431,8 @@ run_bootc() {
 deploy_etc() {
     local d
     if [[ -d "$TARGET/ostree/deploy" ]]; then
-        d=$(find "$TARGET/ostree/deploy" -mindepth 3 -maxdepth 3 -type d -name "*.0" \
-            ! -path "*/backing/*" 2>/dev/null | head -1)
+        d=$(find "$TARGET/ostree/deploy" -mindepth 3 -maxdepth 3 -type d -name "*.[0-9]" \
+            ! -path "*/backing/*" 2>/dev/null | sort | head -1)
         [[ -n "$d" && -d "$d/etc" ]] && { echo "$d/etc"; return 0; }
     fi
     die "Deploy /etc not found post-install"

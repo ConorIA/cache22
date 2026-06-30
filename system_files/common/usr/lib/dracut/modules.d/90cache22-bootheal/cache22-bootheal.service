@@ -1,0 +1,16 @@
+[Unit]
+Description=cache22: heal stale ostree bootversion symlink before prepare-root
+Documentation=man:ostree(1)
+DefaultDependencies=no
+ConditionKernelCommandLine=ostree
+# The physical sysroot must be mounted; we must run before ostree pivots
+# the deployment into place.
+After=sysroot.mount
+Before=ostree-prepare-root.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/cache22/bootheal.sh
+StandardOutput=journal+console
+StandardError=journal+console

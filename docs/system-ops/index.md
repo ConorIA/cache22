@@ -7,10 +7,11 @@ permalink: /system-ops/
 
 # System Ops
 
-Operations for managing a running cache22 system: switching variants, monitoring boot health, and recovering from a broken install.
+Operations for managing a running cache22 system: switching variants, monitoring boot health, backing up and restoring, and recovering from a broken install.
 
 Pages in this section:
 
 1. [Variant Switching](./rebase/). `cache22-rebase` for switching between variants or pinning to specific image refs.
 2. [Health Checks](./healthcheck/). `cache22-healthcheck` and the auto-rollback mechanism after failed boots.
 3. [Repair](./repair/). `cache22-repair` from the live ISO when the installed system will not boot.
+4. [Backup and Restore](./cache22-backup/). `cache22-backup` for a small user-layer backup or a whole-system btrfs clone, and restoring either onto a fresh install.

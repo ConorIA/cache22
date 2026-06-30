@@ -4,7 +4,7 @@
     {
       "id": "arch-server",
       "label": "Arch — Headless server / container host",
-      "description": "Vanilla Arch (mainline linux 7.x, DKMS r8125 + broadcom + nvidia-open). Containers (podman, docker, distrobox, incus), libvirt+qemu, cockpit web admin. NVIDIA driver included.",
+      "description": "Vanilla Arch (mainline linux 7.x, DKMS r8125 + r8152 + broadcom + nvidia-open). Containers (podman, docker, distrobox, incus), libvirt+qemu, cockpit web admin. NVIDIA driver included.",
       "image": "ghcr.io/cmspam/cache22-arch-server:rolling"
     },
     {

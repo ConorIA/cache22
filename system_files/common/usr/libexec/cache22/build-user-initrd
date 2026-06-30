@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# build-user-initrd — build a per-machine initramfs that layers your own
+# dracut additions on top of the cache22 base config. resign-uki folds the
+# result into the UKI in place of the shipped base img.
+#
+# Configure: drop dracut config into /etc/dracut.conf.d/ (read on top of the
+# image default in /usr/lib/dracut/dracut.conf.d). Typical additions:
+#   add_drivers+=" i40e "                  # a NIC for remote LUKS unlock
+#   install_items+=" /usr/bin/curl ... "   # extra binaries
+#   add_dracutmodules+=" network-manager " # network userspace in the initramfs
+# Then run this (as root). Re-run after a kernel update. See docs/INITRAMFS.md.
+#
+# Usage: build-user-initrd [kver]   (default: the running kernel)
+set -euo pipefail
+
+KVER="${1:-$(uname -r)}"
+OUTDIR=/var/lib/cache22/initramfs
+OUT="${OUTDIR}/user-${KVER}.img"
+
+if ! compgen -G '/etc/dracut.conf.d/*.conf' >/dev/null 2>&1; then
+    echo "No /etc/dracut.conf.d/*.conf overrides present — nothing to build." >&2
+    echo "Add your dracut additions there first (see docs/INITRAMFS.md)." >&2
+    exit 0
+fi
+[[ ${EUID} -eq 0 ]] || { echo "build-user-initrd: must run as root" >&2; exit 1; }
+[[ -d "/usr/lib/modules/${KVER}" ]] || {
+    echo "build-user-initrd: no modules for kernel ${KVER}" >&2; exit 1; }
+
+install -d -m 0755 "$OUTDIR"
+echo "==> Building user initramfs for ${KVER}"
+echo "    base config + /etc/dracut.conf.d overrides"
+depmod -a "${KVER}" 2>/dev/null || true
+# Same flags as the shipped base build. dracut reads the image default config
+# (/usr/lib/dracut/dracut.conf.d, incl. early_microcode=no and the DKMS omit)
+# plus the user's /etc/dracut.conf.d on top, so microcode and DKMS stay out
+# here too — they remain separate imgs.
+# Build to a temp file and rename on success, so a failed rebuild never replaces
+# a working img.
+TMP="${OUT}.tmp.$$"
+trap 'rm -f "$TMP"' EXIT
+dracut \
+    --force \
+    --kver "${KVER}" \
+    --no-hostonly \
+    --reproducible \
+    --zstd \
+    "$TMP"
+mv -f "$TMP" "$OUT"
+echo "==> Wrote ${OUT}"
+echo "    It is folded into the UKI on the next rebuild. Apply now with:"
+echo "      systemctl start cache22-resign-uki.service"

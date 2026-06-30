@@ -21,7 +21,7 @@ This is not an official or supported version of Arch or CachyOS.
 | `arch-kde` | `ghcr.io/cmspam/cache22-arch-kde:rolling` | Vanilla Arch, mainline `linux` | KDE Plasma 6 |
 | `arch-gnome` | `ghcr.io/cmspam/cache22-arch-gnome:rolling` | Vanilla Arch, mainline `linux` | GNOME Shell |
 
-All variants ship with NVIDIA (open driver), AMD, and Intel GPU support; ZFS (cachy variants only); Realtek 2.5G (`r8125`); Bluetooth; printing (CUPS); SANE; fingerprint readers; CJK input via fcitx5; QEMU + libvirt + virt-manager; podman + docker + distrobox + incus.
+All variants ship with NVIDIA (open driver), AMD, and Intel GPU support; ZFS (cachy variants only); Realtek 2.5G PCIe (`r8125`) and USB (`r8152`); Bluetooth; printing (CUPS); SANE; fingerprint readers; CJK input via fcitx5; QEMU + libvirt + virt-manager; podman + docker + distrobox + incus. Guest agents for running cache22 itself as a VM (QEMU/KVM, incus, VMware/ESXi) are included and activate only inside the matching hypervisor.
 
 Desktop variants (`*-kde`, `*-gnome`) additionally include Steam, Lutris, gamemode, MangoHud, gamescope, and Sunshine. KDE variants also get a SteamOS-style "gamescope mode" toggle (KDE-only because it autologin-couples with `plasma-login-manager`).
 
@@ -35,9 +35,11 @@ Desktop variants (`*-kde`, `*-gnome`) additionally include Steam, Lutris, gamemo
 
 **TPM2 LUKS auto-unlock with two keyslot options (UEFI only).** PCR 11 signed-policy keyslot (always) survives every UKI rebuild without re-enrollment. Optional PCR 7 keyslot (opt-in) lets `cache22-reboot --kexec` auto-unlock too. See [TPM and LUKS](./boot-and-security/tpm-luks/). BIOS installs do not support LUKS encryption.
 
-**One-command rollback and auto-rollback on failure.** `sudo bootc rollback && sudo systemctl reboot` reverts to the previous deployment. Health checks 2 minutes after every boot trigger an automatic rollback after 3 consecutive failures. See [Health Checks](./system-ops/healthcheck/).
+**One-command rollback and opt-in auto-rollback on failure.** `sudo bootc rollback && sudo systemctl reboot` reverts to the previous deployment. A health check runs 2 minutes after every boot; declare your critical services and cache22 automatically rolls back if they are not running across 3 consecutive boots. See [Health Checks](./system-ops/healthcheck/).
 
 **Per-package layer rechunking for small daily upgrades.** Typical daily upgrades download only the layers whose contents actually changed (~100-300 MB), not the full multi-GB image. See [Architecture](./architecture/).
+
+**Backup, restore, and whole-system clone.** `cache22-backup` captures the user-adjusted layer (small, replays onto any matching install) or, on btrfs, makes an exact `btrfs send` clone of the whole system, preserving sparse and reflinked data. The installer can rebuild a machine from a clone onto a fresh disk. See [Backup and Restore](./system-ops/cache22-backup/).
 
 ## Sections
 

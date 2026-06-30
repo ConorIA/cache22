@@ -35,6 +35,7 @@ pciutils
 linux-cachyos
 linux-cachyos-headers
 linux-cachyos-zfs
+zfs-utils
 linux-cachyos-r8125
 
 # ─── GPU userland (headless-safe, non-NVIDIA) ─────────────
@@ -55,6 +56,7 @@ dracut
 ostree
 composefs
 skopeo
+umoci
 
 # ─── Bootloader + UKI ─────────────────────────────────────
 efibootmgr
@@ -94,18 +96,24 @@ chwd
 networkmanager
 networkmanager-openvpn
 networkmanager-strongswan
+networkmanager-openconnect
 modemmanager
 iwd
 wpa_supplicant
 dnsmasq
 bind
+dhcpcd
+dhclient
 ethtool
+r8152-dkms
+iavf-dkms
 nss-mdns
 usb_modeswitch
 wireless-regdb
 ufw
 wireguard-tools
 strongswan
+openconnect
 
 # ─── Bluetooth ────────────────────────────────────────────
 bluez
@@ -143,13 +151,45 @@ fwupd
 fprintd
 broadcom-wl-dkms
 
-# ─── Virtualization (qemu-base) ───────────────────────────
+# ─── Virtualization (qemu, headless modules; no GUI/x11) ──
 qemu-base
+qemu-audio-dbus
+qemu-audio-spice
+qemu-block-curl
+qemu-block-dmg
+qemu-block-nfs
+qemu-block-ssh
+qemu-chardev-spice
+qemu-hw-display-qxl
+qemu-hw-display-virtio-gpu
+qemu-hw-display-virtio-gpu-gl
+qemu-hw-display-virtio-gpu-pci
+qemu-hw-display-virtio-gpu-pci-gl
+qemu-hw-display-virtio-gpu-pci-rutabaga
+qemu-hw-display-virtio-gpu-rutabaga
+qemu-hw-display-virtio-vga
+qemu-hw-display-virtio-vga-gl
+qemu-hw-display-virtio-vga-rutabaga
+qemu-hw-uefi-vars
+qemu-hw-usb-host
+qemu-hw-usb-redirect
+qemu-hw-usb-smartcard
+qemu-ui-curses
+qemu-ui-dbus
+qemu-ui-egl-headless
+qemu-ui-opengl
+qemu-ui-spice-app
+qemu-ui-spice-core
+qemu-vhost-user-gpu
 libvirt
 virglrenderer
 swtpm
 edk2-ovmf
 iproute2
+
+# ─── Guest agents (VM integration; inert on bare metal) ───
+qemu-guest-agent
+open-vm-tools
 
 # ─── Containers ───────────────────────────────────────────
 podman

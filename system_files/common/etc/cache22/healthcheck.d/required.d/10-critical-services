@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Pass when every systemd unit listed in /etc/cache22/healthcheck.services is
+# active. A missing or empty list passes, so by default this check does nothing
+# and no rollback is ever triggered. The list is the operator's declaration of
+# which services define a healthy boot for this host.
+set -uo pipefail
+
+LIST=/etc/cache22/healthcheck.services
+[[ -r "$LIST" ]] || exit 0
+
+rc=0
+while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [[ -z "$line" ]] && continue
+    if ! systemctl is-active --quiet "$line"; then
+        echo "critical service not active: $line" >&2
+        rc=1
+    fi
+done < "$LIST"
+exit $rc
