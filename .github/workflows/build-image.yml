@@ -7,7 +7,7 @@ on:
     - cron: '0 18 * * *'
   workflow_dispatch:
   push:
-    branches: [ConorIA-bigscreen]
+    branches: [main]
     paths:
       - 'Containerfile'
       - 'packages/**'
