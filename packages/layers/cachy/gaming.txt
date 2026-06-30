@@ -17,3 +17,6 @@ xone-dkms
 
 # ─── Game streaming server (Moonlight / Steam Link) ───────
 sunshine
+
+# ─── Helper for login when stuck greeter ──────────────
+ydotool

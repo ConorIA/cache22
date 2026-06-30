@@ -18,3 +18,6 @@ xone-dongle-firmware
 
 # ─── Game streaming server (LizardByte repo) ──────────────
 sunshine
+
+# ─── Helper for login when stuck greeter ──────────────
+ydotool

@@ -236,6 +236,8 @@ pkgfile
 rebuild-detector
 reflector
 pv
+fish
+starship
 
 # ─── Ops / admin / monitoring ─────────────────────────────
 tmux
@@ -254,3 +256,6 @@ inxi
 # ─── TPM2 ─────────────────────────────────────────────────
 tpm2-tools
 tpm2-tss
+
+# --- zram-generator
+zram-generator
