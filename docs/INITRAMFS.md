@@ -12,7 +12,8 @@ several imgs combine into one initramfs at boot.
 `/usr/lib/modules/<kver>/initramfs.img`, built by
 `scripts/generate-initramfs.sh`. It is the bare minimum needed to find the root
 filesystem and unlock LUKS: storage controllers, btrfs/xfs/ext4, device-mapper,
-dm-crypt, TPM2, the boot stack (bootc, ostree, composefs, systemd), and basic
+dm-crypt, TPM2, the boot stack (bootc, ostree, systemd, and the erofs + overlay
+modules `ostree-prepare-root` needs to mount the composefs root), and basic
 input for typing a passphrase.
 
 The base img is always sufficient to boot on its own. Tooling that loads only it

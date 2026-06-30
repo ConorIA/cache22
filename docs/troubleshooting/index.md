@@ -176,7 +176,7 @@ If `systemd-soft-reboot.service` shows it ran, the pivot happened.
 
 If `findmnt /` shows the old deploy:
 
-- `prepare-soft-reboot` failed silently. Check `/tmp/sr-test.log` if `cache22-reboot --soft` was invoked manually.
+- `ostree admin prepare-soft-reboot` failed, or the deploy fell back to the legacy backend (where it refuses). `cache22-reboot` then falls back to a hard reboot.
 - `softRebootCapable` was actually false. Run `sudo cache22-reboot --check` to see what strategy would be picked.
 
 **Fix:** Run a normal hard reboot:
@@ -193,7 +193,7 @@ The full reboot path is well-tested and will land on the staged deploy.
 
 **Symptom:** Tried to edit a file under `/etc` after a soft-reboot. Got "Read-only file system".
 
-**Cause:** Old behavior. systemd's soft-reboot pivot drops bind mounts not on its preserve list. Cache22's `/etc` bind from `prepare-soft-reboot` was lost during the pivot.
+**Cause:** A legacy-backend soft-reboot whose `/etc` bind was dropped by systemd's pivot (it preserves only a fixed mount list, and `/etc` is not on it). Under composefs, ostree sets `/etc` up as an overlay and this does not occur.
 
 **Fix:** Update to the latest cache22 image. The `50-cache22-etc-rw.conf` drop-in on `ostree-remount.service` ensures `/etc` is rebound as writable early in the post-soft-reboot boot.
 

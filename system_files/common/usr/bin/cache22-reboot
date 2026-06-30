@@ -157,13 +157,12 @@ do_hard_reboot() {
 }
 
 # ─── Soft-reboot ────────────────────────────────────────────────
-# Manual orchestration because:
-#   1. Soft-reboot doesn't go through the normal shutdown's
-#      finalize-staged path the same way (we want to be sure finalize
-#      runs BEFORE we try to mount the deploy at /run/nextroot).
-#   2. ostree's `ostree admin prepare-soft-reboot` refuses to run on
-#      the legacy backend; we replicate the prep ourselves via
-#      /usr/libexec/cache22/prepare-soft-reboot.
+# Manual orchestration because soft-reboot does not go through the normal
+# shutdown's finalize-staged path the same way: we finalize the staged deploy
+# and rebuild its boot artifacts BEFORE handing /run/nextroot setup to ostree's
+# `ostree admin prepare-soft-reboot`. That command works on the composefs
+# backend (which cache22 runs); if a deploy falls back to the legacy backend it
+# refuses, and we fall back to a hard reboot.
 do_soft_reboot() {
     if [[ "$has_staged" != "yes" ]]; then
         die "no staged deploy — soft-reboot is only meaningful when applying an update"
@@ -187,12 +186,12 @@ do_soft_reboot() {
     ostree admin finalize-staged \
         || { echo "    finalize-staged failed" >&2; fallback "soft-reboot"; return; }
 
-    echo "    building + signing UKI for the new deploy"
-    /usr/libexec/cache22/resign-uki \
-        || { echo "    resign-uki failed" >&2; fallback "soft-reboot"; return; }
+    echo "    rebuilding boot artifacts for the new deploy"
+    /usr/libexec/cache22/cache22-boot-rebuild \
+        || { echo "    boot-rebuild failed" >&2; fallback "soft-reboot"; return; }
 
-    echo "    populating /run/nextroot"
-    /usr/libexec/cache22/prepare-soft-reboot \
+    echo "    populating /run/nextroot (ostree composefs soft-reboot)"
+    ostree admin prepare-soft-reboot \
         || { echo "    prepare-soft-reboot failed" >&2; fallback "soft-reboot"; return; }
 
     echo "==> systemctl soft-reboot"

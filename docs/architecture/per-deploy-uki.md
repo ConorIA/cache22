@@ -70,7 +70,7 @@ cache22 extends two upstream ostree services via drop-ins instead of standalone 
 
 - `/usr/lib/systemd/system/ostree-finalize-staged.service.d/50-cache22-uki.conf`. Adds an `ExecStop=/usr/libexec/cache22/resign-uki` line. Runs in the same systemd job as `ostree admin finalize-staged`, ordered after it. Inherits all of finalize-staged's ordering, including blocking shutdown until the UKI is built.
 
-- `/usr/lib/systemd/system/ostree-remount.service.d/50-cache22-etc-rw.conf`. Adds an `ExecStartPost=/usr/libexec/cache22/ensure-etc-writable` line. Ensures `/etc` is a writable bind in case the bind was dropped by systemd during a soft-reboot pivot.
+- `/usr/lib/systemd/system/ostree-remount.service.d/50-cache22-etc-rw.conf`. Adds an `ExecStartPost=/usr/libexec/cache22/ensure-etc-writable` line. A fallback that keeps `/etc` writable on the legacy backend; under composefs ostree sets up the `/etc` overlay itself and the script defers.
 
 The drop-in pattern means cache22 inherits the parent unit's ordering, failure semantics, and shutdown-blocking behavior automatically. No standalone unit needed.
 

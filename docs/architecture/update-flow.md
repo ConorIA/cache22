@@ -84,8 +84,9 @@ systemctl reboot
   -> ostree-remount.service runs:
      -> Various /var, /sysroot remounts.
      -> 50-cache22-etc-rw.conf drop-in's ExecStartPost runs:
-        -> /usr/libexec/cache22/ensure-etc-writable (no-op on hard boot
-           because /etc is already RW from initrd's bind).
+        -> /usr/libexec/cache22/ensure-etc-writable (no-op on hard boot:
+           /etc is already writable — the composefs overlay, or the
+           initrd bind on the legacy backend).
   -> sysinit.target reached.
   -> systemd-tmpfiles-setup, sysusers, etc., run with writable /etc.
   -> multi-user.target reached.
@@ -107,26 +108,24 @@ Triggered by `cache22-reboot` (auto-pick, when softRebootCapable=true) or `cache
 cache22-reboot --soft
   -> ostree admin finalize-staged
      -> Writes BLS entry, swaps boot.X slot.
-  -> /usr/libexec/cache22/resign-uki
-     -> Builds UKI for the staged deploy (for future hard reboots).
-  -> /usr/libexec/cache22/prepare-soft-reboot
-     -> Creates /run/nextroot.
-     -> Bind-mount the staged deploy directory at /run/nextroot.
-     -> Bind /etc, /usr (RO), /sysroot, /boot, /efi, /var into /run/nextroot.
-     -> Update /run/ostree-booted with the new deploy's dev/inode.
+  -> /usr/libexec/cache22/cache22-boot-rebuild
+     -> Rebuilds the staged deploy's boot artifacts for future hard reboots
+        (UKI on UEFI, combined initrd on BIOS).
+  -> ostree admin prepare-soft-reboot
+     -> Sets up /run/nextroot from the finalized composefs deploy.
+     -> (Falls back to a hard reboot if the deploy is on the legacy backend.)
   -> systemctl soft-reboot
      -> systemd serializes state.
      -> Stops all units (ExecStops run; cache22 hooks are no-ops because
-        prepare-soft-reboot already finalized + built UKI).
+        the deploy was already finalized + boot artifacts rebuilt).
      -> Switch_root into /run/nextroot.
      -> Re-execs PID 1 (systemd) in the new root.
   -> New systemd instance starts.
   -> Normal boot sequence continues, but:
      -> Same kernel keeps running (no firmware POST, no kernel restart).
      -> /run is preserved (so /run/nextroot is now /, /run/ostree-booted is current).
-     -> ostree-remount.service runs; 50-cache22-etc-rw.conf drop-in
-        re-establishes /etc bind (the bind from prepare-soft-reboot was
-        dropped during pivot).
+     -> ostree-remount.service runs; /etc is writable (the composefs overlay
+        ostree set up; on a legacy fallback, ensure-etc-writable re-binds it).
      -> sysinit.target, multi-user.target, etc., proceed normally.
   -> User session resumes (SSH may briefly disconnect during pivot).
 ```
