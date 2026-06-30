@@ -1658,6 +1658,15 @@ search --no-floppy --fs-uuid --set=root ${BOOT_UUID}
 blscfg
 EOF
     say "  wrote $GRUB_DIR/grub.cfg (blscfg via blsuki.mod → /loader/entries/ on /boot partition)"
+
+    # Assemble the combined initrd (microcode + user-or-base + extra segments)
+    # for each BLS entry and point its initrd= line at it, the BIOS counterpart
+    # to install_sb_and_uki's first UKI build. Run inside the deploy's chroot so
+    # it uses the new image's tooling and imgs (the same bind set grub-install
+    # used above is still mounted). It reads /boot via /sysroot/boot.
+    chroot "$DEPLOY_ROOT" /usr/bin/env PATH="$CHROOT_PATH" TMPDIR=/tmp \
+        /usr/libexec/cache22/cache22-bios-initramfs || \
+        die "BIOS initramfs assembly failed"
 }
 
 # Find the writable per-deploy /etc under either backend layout.

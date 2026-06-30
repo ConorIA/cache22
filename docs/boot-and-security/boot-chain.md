@@ -36,6 +36,8 @@ firmware (BIOS)
 
 `/boot` lives on its own ext4 partition so GRUB never has to traverse btrfs subvolumes (or any filesystem-specific quirks) to find `grub.cfg` and the BLS entries. The 1 MiB BIOS-boot partition holds raw GRUB stage 1.5 only; everything else (modules, `grub.cfg`, kernels, initramfses, BLS entries) lives on the `/boot` partition.
 
+`cache22-bios-initramfs` assembles each deploy's full initramfs set (microcode + user override or base + extra segments, the same set the UEFI UKI carries) into one combined initrd per BLS entry at `/cache22/<entry>/initrd.img` on the `/boot` partition, and points the entry's `initrd=` line at it. GRUB loads the single file and the kernel unpacks the concatenated cpio segments. See [INITRAMFS.md](../INITRAMFS.md).
+
 There is no signature verification on BIOS (no firmware Secure Boot mechanism), no UKI (no UEFI to load the PE-format binary), and no TPM2 LUKS unlock (depends on PCR measurements made by sd-stub during the UEFI chain). The rest of this page describes the UEFI chain only.
 
 Every PE binary loaded by firmware is signed by the per-machine cache22 SB key. The firmware enrolls cache22's keys (PK + KEK + db) plus Microsoft's DB keys on first boot when the firmware is in setup mode. After enrollment, Secure Boot enforcement engages.

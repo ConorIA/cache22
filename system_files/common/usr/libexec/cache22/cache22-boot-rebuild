@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# cache22-boot-rebuild — runtime dispatcher. Rebuild this system's boot-time
+# initramfs artifacts for every live deploy, picking the right builder for the
+# firmware: UKIs on UEFI (resign-uki), combined initrds on BIOS
+# (cache22-bios-initramfs). Invoked by cache22-resign-uki.{service,path}.
+set -euo pipefail
+
+if [[ -d /sys/firmware/efi ]]; then
+    exec /usr/libexec/cache22/resign-uki
+else
+    exec /usr/libexec/cache22/cache22-bios-initramfs
+fi

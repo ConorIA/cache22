@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# cache22-initramfs-list — print the ordered set of imgs that make up one
+# deploy's boot-time initramfs, building the per-machine user img on demand.
+#
+# Both firmware paths consume this single list, so they can never disagree about
+# what the initramfs contains:
+#   - EFI: resign-uki maps each path to a ukify --initrd= (UKI PE sections).
+#   - BIOS: cache22-bios-initramfs concatenates them into one initrd on /boot.
+#
+# Output (stdout): absolute img paths, one per line, in kernel load order. The
+# kernel unpacks concatenated cpio segments, so this list is loaded as one
+# initramfs whether the segments arrive as UKI sections or one cat'd file:
+#   1. microcode — must be first; the CPU applies it before the main initramfs
+#      unpacks. Shipped in the deploy, kernel-independent.
+#   2. main — the per-machine user override if one is built for this kver,
+#      otherwise the shipped base img. The base img alone always boots.
+#   3. extra segments — any *.img in the deploy's initramfs.d, sorted. Globbed,
+#      not hardcoded, so a future image can split high-churn content into its own
+#      img/layer and already-deployed tooling folds it in on the next upgrade.
+# Diagnostics go to stderr; only img paths go to stdout.
+#
+# Usage:
+#   cache22-initramfs-list --kver KVER --base BASEIMG [--deploy-dir DIR]
+#
+#   --base       the shipped base initramfs.img for this deploy (BLS initrd=),
+#                used as the main img when no user override is built.
+#   --deploy-dir the deploy root (.../deploy/<csum>.N) when operating on a deploy
+#                other than the running one; omitted means the running system, so
+#                the live /usr and /var are used.
+set -euo pipefail
+
+KVER="" BASE="" DEPLOY_DIR=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --kver)       KVER="$2"; shift 2 ;;
+        --base)       BASE="$2"; shift 2 ;;
+        --deploy-dir) DEPLOY_DIR="$2"; shift 2 ;;
+        *) echo "cache22-initramfs-list: unknown arg $1" >&2; exit 2 ;;
+    esac
+done
+[[ -n "$KVER" ]] || { echo "cache22-initramfs-list: --kver required" >&2; exit 2; }
+[[ -n "$BASE" && -f "$BASE" ]] || { echo "cache22-initramfs-list: --base must name an existing file" >&2; exit 2; }
+
+# Build the per-machine user img for one deploy, in that deploy's own context.
+# dracut needs the deploy's kernel modules and reads the deploy's own /etc dracut
+# config, so when the target is not the current root we chroot into the deploy
+# and build there; output lands in the shared /var either way. A direct build is
+# used when this kver's modules are already present (the running deploy, or when
+# we are already inside its chroot at finalize). Returns non-zero on failure; the
+# caller keeps any existing img or the base img.
+build_user_img_for_deploy() {
+    local deploy_dir="$1" kver="$2"
+
+    if [[ -d "/usr/lib/modules/$kver" ]]; then
+        /usr/libexec/cache22/build-user-initrd "$kver" >&2
+        return
+    fi
+
+    [[ -n "$deploy_dir" && -d "$deploy_dir/usr/lib/modules/$kver" ]] || return 1
+    [[ -x "$deploy_dir/usr/libexec/cache22/build-user-initrd" ]] || return 1
+    local var
+    var="$(dirname "$(dirname "$deploy_dir")")/var"
+    [[ -d "$var" ]] || return 1
+
+    # The ESP is bound into the chroot only when one exists (UEFI). On BIOS there
+    # is no ESP and build-user-initrd does not need it, so the bind is skipped.
+    local esp=/efi
+    [[ -d "$esp" ]] || esp=/boot/efi
+    [[ -d "$esp" ]] || esp=""
+
+    local d
+    for d in sysroot boot var dev proc sys tmp; do
+        [[ -d "$deploy_dir/$d" ]] || { echo "    chroot build: $deploy_dir/$d missing" >&2; return 1; }
+    done
+    [[ -z "$esp" || -d "$deploy_dir/efi" ]] || { echo "    chroot build: $deploy_dir/efi missing" >&2; return 1; }
+
+    local -a mnt=()
+    local rc=0
+    if mount --bind /sysroot "$deploy_dir/sysroot" && mnt+=( "$deploy_dir/sysroot" ) \
+       && mount --bind /boot "$deploy_dir/boot" && mnt+=( "$deploy_dir/boot" ) \
+       && mount --bind "$var" "$deploy_dir/var" && mnt+=( "$deploy_dir/var" ) \
+       && { [[ -z "$esp" ]] || { mount --bind "$esp" "$deploy_dir/efi" && mnt+=( "$deploy_dir/efi" ); }; } \
+       && mount --bind /dev "$deploy_dir/dev" && mnt+=( "$deploy_dir/dev" ) \
+       && mount -t proc proc "$deploy_dir/proc" && mnt+=( "$deploy_dir/proc" ) \
+       && mount --bind /sys "$deploy_dir/sys" && mnt+=( "$deploy_dir/sys" ) \
+       && mount -t tmpfs tmpfs "$deploy_dir/tmp" && mnt+=( "$deploy_dir/tmp" ); then
+        chroot "$deploy_dir" /usr/bin/env \
+            PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=/tmp \
+            /usr/libexec/cache22/build-user-initrd "$kver" >&2 || rc=1
+    else
+        rc=1
+    fi
+    local i
+    for (( i=${#mnt[@]}-1; i>=0; i-- )); do
+        umount "${mnt[i]}" 2>/dev/null || umount -l "${mnt[i]}" 2>/dev/null || true
+    done
+    return $rc
+}
+
+# Resolve an in-deploy path, preferring the deploy dir and falling back to the
+# live root, so this works both chrooted and on the running system.
+in_deploy() {
+    local rel="$1"
+    if [[ -n "$DEPLOY_DIR" && -e "$DEPLOY_DIR/$rel" ]]; then
+        echo "$DEPLOY_DIR/$rel"
+    elif [[ -e "/$rel" ]]; then
+        echo "/$rel"
+    fi
+}
+
+declare -a IMGS=()
+
+# 1. microcode (kernel-independent; first if present).
+ucode_img=$(in_deploy usr/lib/cache22/microcode.img)
+[[ -n "$ucode_img" ]] && IMGS+=( "$ucode_img" )
+
+# 2. main: user override if one is built for this kver, else the base img.
+main_initrd="$BASE"
+user_img="/var/lib/cache22/initramfs/user-${KVER}.img"
+if compgen -G '/etc/dracut.conf.d/*.conf' >/dev/null 2>&1; then
+    # Rebuild on every run for the deploy we can build in context (the running
+    # deploy, or the one we are chrooted into at finalize) so config or source
+    # changes are picked up; build a different deploy only when its img is
+    # missing, since its /etc is frozen and needs no rebuild otherwise.
+    if [[ -d "/usr/lib/modules/$KVER" || ! -f "$user_img" ]]; then
+        echo "    building user initramfs for $KVER" >&2
+        build_user_img_for_deploy "$DEPLOY_DIR" "$KVER" || \
+            echo "    WARN: user initramfs build failed for $KVER; using base img" >&2
+    fi
+    if [[ -f "$user_img" ]]; then
+        main_initrd="$user_img"
+        echo "    using user initramfs override $user_img" >&2
+    else
+        echo "    using base img for $KVER (no user override built)" >&2
+    fi
+fi
+IMGS+=( "$main_initrd" )
+
+# 3. extra segments: glob, do not hardcode (see header).
+segdir=$(in_deploy usr/lib/cache22/initramfs.d)
+if [[ -n "$segdir" && -d "$segdir" ]]; then
+    while IFS= read -r seg; do
+        [[ -f "$seg" ]] || continue
+        IMGS+=( "$seg" )
+        echo "    + extra segment $(basename "$seg")" >&2
+    done < <(find "$segdir" -maxdepth 1 -name '*.img' 2>/dev/null | LC_ALL=C sort)
+fi
+
+printf '%s\n' "${IMGS[@]}"
