@@ -38,7 +38,7 @@ Most atomic distributions apply an update with a single reboot strategy: a full 
 
 ### How cache22 implements soft-reboot
 
-`cache22-reboot --soft` finalizes the staged deploy, rebuilds its boot artifacts for future hard reboots (`cache22-boot-rebuild`: the UKI on UEFI, the combined initrd on BIOS), then hands `/run/nextroot` setup to ostree's native `ostree admin prepare-soft-reboot` and triggers `systemctl soft-reboot`. That command needs the composefs runtime backend, which cache22 runs (`prepare-root.conf` sets `composefs.enabled = maybe`). If a deploy falls back to the legacy backend the command refuses, and `cache22-reboot` falls back to a hard reboot.
+`cache22-reboot --soft` finalizes the staged deploy, rebuilds its boot artifacts for future hard reboots via `resign-uki-finalize` (chrooted into the new deploy, the same builder the hard-reboot finalize hook uses: the UKI on UEFI, the combined initrd on BIOS), then hands `/run/nextroot` setup to ostree's native `ostree admin prepare-soft-reboot` and triggers `systemctl soft-reboot`. That command needs the composefs runtime backend, which cache22 runs (`prepare-root.conf` sets `composefs.enabled = maybe`). If a deploy falls back to the legacy backend the command refuses, and `cache22-reboot` falls back to a hard reboot.
 
 See [Boot Chain](../../boot-and-security/boot-chain/) and [Update Flow](../../architecture/update-flow/) for the full sequence.
 

@@ -186,9 +186,9 @@ do_soft_reboot() {
     ostree admin finalize-staged \
         || { echo "    finalize-staged failed" >&2; fallback "soft-reboot"; return; }
 
-    echo "    rebuilding boot artifacts for the new deploy"
-    /usr/libexec/cache22/cache22-boot-rebuild \
-        || { echo "    boot-rebuild failed" >&2; fallback "soft-reboot"; return; }
+    echo "    rebuilding boot artifacts in the new deploy's context"
+    /usr/libexec/cache22/resign-uki-finalize \
+        || { echo "    boot-artifact rebuild failed" >&2; fallback "soft-reboot"; return; }
 
     echo "    populating /run/nextroot (ostree composefs soft-reboot)"
     ostree admin prepare-soft-reboot \

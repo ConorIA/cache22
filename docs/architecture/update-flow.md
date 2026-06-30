@@ -108,9 +108,10 @@ Triggered by `cache22-reboot` (auto-pick, when softRebootCapable=true) or `cache
 cache22-reboot --soft
   -> ostree admin finalize-staged
      -> Writes BLS entry, swaps boot.X slot.
-  -> /usr/libexec/cache22/cache22-boot-rebuild
-     -> Rebuilds the staged deploy's boot artifacts for future hard reboots
-        (UKI on UEFI, combined initrd on BIOS).
+  -> /usr/libexec/cache22/resign-uki-finalize
+     -> Rebuilds the staged deploy's boot artifacts for future hard reboots,
+        chrooted into the new deploy (UKI on UEFI, combined initrd on BIOS) -
+        the same builder the hard-reboot finalize hook uses.
   -> ostree admin prepare-soft-reboot
      -> Sets up /run/nextroot from the finalized composefs deploy.
      -> (Falls back to a hard reboot if the deploy is on the legacy backend.)
