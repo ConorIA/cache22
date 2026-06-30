@@ -82,6 +82,20 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq buildah skopeo python3 jq
 
+      - name: Put container storage on the large ephemeral disk (/mnt)
+        # GitHub runners have variable free space on / but a large, near-empty
+        # ephemeral disk at /mnt. buildah/podman/skopeo default to
+        # /var/lib/containers on /, so the biggest variant can exhaust / during
+        # the final commit on a runner that happens to ship with less headroom.
+        # Redirect the default storage path to /mnt so every container op uses
+        # the roomier disk. Transparent (no tool flags change) and a no-op on the
+        # rare runner without a separate /mnt (the symlink target lands on /).
+        run: |
+          sudo rm -rf /var/lib/containers
+          sudo mkdir -p /mnt/containers
+          sudo ln -sfn /mnt/containers /var/lib/containers
+          df -h / /mnt
+
       - name: Log in to ghcr.io
         uses: docker/login-action@v4
         with:
@@ -689,6 +703,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gdisk parted btrfs-progs e2fsprogs util-linux zstd podman
+
+      - name: Put container storage on the large ephemeral disk (/mnt)
+        # Same reasoning as the build job: use the roomier /mnt disk for the OCI
+        # pull + loopback DD image build instead of the variable space on /.
+        run: |
+          sudo rm -rf /var/lib/containers
+          sudo mkdir -p /mnt/containers
+          sudo ln -sfn /mnt/containers /var/lib/containers
+          df -h / /mnt
 
       - name: Install oras
         uses: oras-project/setup-oras@v1
