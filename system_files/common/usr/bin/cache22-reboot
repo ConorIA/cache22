@@ -191,7 +191,10 @@ do_soft_reboot() {
         || { echo "    boot-artifact rebuild failed" >&2; fallback "soft-reboot"; return; }
 
     echo "    populating /run/nextroot (ostree composefs soft-reboot)"
-    ostree admin prepare-soft-reboot \
+    # INDEX is mandatory: it selects which deployment to soft-reboot into.
+    # finalize-staged just promoted the staged deploy to the default slot, and
+    # ostree always orders the default deployment at index 0.
+    ostree admin prepare-soft-reboot 0 \
         || { echo "    prepare-soft-reboot failed" >&2; fallback "soft-reboot"; return; }
 
     echo "==> systemctl soft-reboot"

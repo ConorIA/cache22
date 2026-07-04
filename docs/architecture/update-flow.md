@@ -112,8 +112,9 @@ cache22-reboot --soft
      -> Rebuilds the staged deploy's boot artifacts for future hard reboots,
         chrooted into the new deploy (UKI on UEFI, combined initrd on BIOS) -
         the same builder the hard-reboot finalize hook uses.
-  -> ostree admin prepare-soft-reboot
-     -> Sets up /run/nextroot from the finalized composefs deploy.
+  -> ostree admin prepare-soft-reboot 0
+     -> Sets up /run/nextroot from the finalized composefs deploy (index 0,
+        the default slot finalize-staged just promoted it into).
      -> (Falls back to a hard reboot if the deploy is on the legacy backend.)
   -> systemctl soft-reboot
      -> systemd serializes state.
