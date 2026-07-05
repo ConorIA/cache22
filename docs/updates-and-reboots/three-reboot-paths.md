@@ -81,7 +81,9 @@ The default for kernel-changing updates is full reboot, not kexec. kexec is opt-
 
 When LUKS is configured for TPM2 auto-unlock with a PCR 11 signed-policy keyslot (the default), kexec breaks auto-unlock. PCR 11 is measured by sd-stub at boot. kexec bypasses sd-stub, so PCR 11 stays at the booted UKI's value, not the kexec'd one. The TPM refuses to release the LUKS key. The kexec'd kernel would then reach the LUKS prompt, which may not be visible (GPU re-init after kexec frequently leaves the screen blank until a later mode change).
 
-To avoid that trap, `cache22-reboot` checks the boot LUKS before it kexecs. If no kexec-unlockable keyslot is enrolled, it aborts the kexec and falls back to a full reboot (where the passphrase prompt is visible), unless `--no-fallback` is set. A keyslot is kexec-unlockable only when it binds plain PCRs with no signed PCR 11 policy: a PCR 11 only keyslot, or a combined PCR 7 + signed PCR 11 keyslot, does not qualify.
+To avoid that trap, `cache22-reboot` checks the root LUKS device before it kexecs. If it has no kexec-unlockable keyslot, it aborts the kexec and falls back to a full reboot (where the passphrase prompt is visible), unless `--no-fallback` is set. A keyslot is kexec-unlockable only when it binds plain PCRs with no signed PCR 11 policy: a PCR 11 only keyslot, or a combined PCR 7 + signed PCR 11 keyslot, does not qualify.
+
+Only the root device is checked, because it is the only one that must unlock in the initramfs for the machine to boot. It is found from the kernel cmdline: `rd.luks.uuid=` names each LUKS device the initramfs unlocks before mounting root. If the cmdline has no `rd.luks.uuid=`, the root is not encrypted and kexec proceeds. Data pools are unlocked later from a keyfile on the already-mounted root and never block the boot, so they never force a fallback.
 
 To kexec anyway and accept the passphrase prompt (for example with a serial console attached, or to blind-type the passphrase), pass `--kexec-force`, or set `KERNEL_CHANGE_STRATEGY=kexec-force` in `reboot.conf` so the automated paths (`cache22-update --reboot`, `cache22-autoreboot`) do the same.
 

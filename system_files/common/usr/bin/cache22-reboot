@@ -216,21 +216,32 @@ do_kexec() {
     echo "==> kexec ($(explain))"
 
     # Refuse the kexec if the encrypted root could not auto-unlock afterwards.
-    # A keyslot is kexec-safe only when it binds plain PCRs (the PCR 7 fallback)
-    # with no signed PCR 11 policy: the signed policy needs sd-stub, which kexec
-    # skips, so a PCR 11 only or a combined PCR 7 + signed PCR 11 slot fails and
-    # the kexec'd kernel lands at a passphrase prompt that is easy to miss after
-    # GPU re-init. The token JSON is authoritative; the luksDump tpm2-hash-pcrs
-    # summary cannot tell a clean PCR 7 slot from a combined one.
+    # Only the root device gates this: it must unlock in the initramfs for the
+    # machine to boot at all. The kernel cmdline names it with rd.luks.uuid=,
+    # which is exactly the set of LUKS devices the initramfs unlocks before
+    # mounting root. Data pools are unlocked later, from a keyfile on the
+    # already-mounted root, and never block the boot, so they are not here.
+    #
+    # kexec bypasses sd-stub, so PCR 11 is never measured for the new UKI: a
+    # root TPM keyslot bound to the signed PCR 11 policy cannot unseal and the
+    # kexec'd kernel lands at a passphrase prompt that is easy to miss after
+    # GPU re-init. A root TPM keyslot is kexec-safe only when it binds plain
+    # PCRs (the PCR 7 fallback) with no signed PCR 11 policy: a PCR 11 only or a
+    # combined PCR 7 + signed PCR 11 slot fails. The token JSON is
+    # authoritative; the luksDump tpm2-hash-pcrs summary cannot tell a clean
+    # PCR 7 slot from a combined one.
     if command -v cryptsetup >/dev/null 2>&1; then
-        local spec realdev tok t luks_seen=0 all_safe=1 dev_safe
-        while read -r spec; do
-            [[ -n "$spec" ]] || continue
-            if [[ "$spec" == /dev/* ]]; then realdev="$spec"; else realdev=$(findfs "$spec" 2>/dev/null); fi
+        local arg uuid realdev tok t root_luks=0 root_safe=1
+        for arg in $(cat /proc/cmdline 2>/dev/null); do
+            [[ "$arg" == rd.luks.uuid=* ]] || continue
+            uuid=${arg#rd.luks.uuid=}
+            uuid=${uuid#luks-}                           # systemd accepts a luks- prefix
+            realdev=/dev/disk/by-uuid/$uuid
+            [[ -b "$realdev" ]] || realdev=$(findfs "UUID=$uuid" 2>/dev/null)
             [[ -b "$realdev" ]] || continue
             cryptsetup isLuks "$realdev" 2>/dev/null || continue
-            luks_seen=1
-            dev_safe=0
+            root_luks=1
+            local dev_safe=0
             for t in $(seq 0 31); do
                 tok=$(cryptsetup token export --token-id "$t" "$realdev" 2>/dev/null) || continue
                 [[ "$tok" == *'"systemd-tpm2"'* ]] || continue
@@ -238,9 +249,9 @@ do_kexec() {
                     dev_safe=1
                 fi
             done
-            (( dev_safe )) || all_safe=0
-        done < <(awk '$1 !~ /^#/ && NF >= 2 {print $2}' /etc/crypttab 2>/dev/null)
-        if (( luks_seen && ! all_safe )); then
+            (( dev_safe )) || root_safe=0
+        done
+        if (( root_luks && ! root_safe )); then
             if (( KEXEC_FORCE )); then
                 cat >&2 <<'EOF'
     WARNING: kexec forced past a root LUKS that will not auto-unlock. The
