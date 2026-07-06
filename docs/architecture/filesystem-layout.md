@@ -36,7 +36,7 @@ User changes carry forward. Image-shipped changes apply where the user has not c
 
 This merge happens at `bootc upgrade` time, not at boot time. At boot, `/etc` exposes the merged result.
 
-How it is mounted depends on the backend. Under composefs, `ostree-prepare-root` sets `/etc` up as a writable overlay (lower = the image `/usr/etc` defaults, upper = the per-deploy etc), on both hard boot and `ostree admin prepare-soft-reboot`. Under the legacy backend it is a writable bind-mount; if a legacy soft-reboot pivot drops it (systemd preserves only a fixed list of mounts, and `/etc` is not on it), the `50-cache22-etc-rw.conf` drop-in re-establishes it via `ensure-etc-writable`.
+How it is mounted depends on the backend. Under composefs, `ostree-prepare-root` sets `/etc` up as a writable overlay (lower = the image `/usr/etc` defaults, upper = the per-deploy etc). Under the legacy backend it is a writable bind-mount; the `50-cache22-etc-rw.conf` drop-in re-establishes it via `ensure-etc-writable` as a safety net if the bind is missing.
 
 ## /var per stateroot
 
@@ -100,7 +100,7 @@ Files in `/etc/cache22/`:
 | Path | Content |
 |---|---|
 | `/etc/cache22/extra-cmdline` | Per-machine kargs baked into UKIs. |
-| `/etc/cache22/reboot.conf` | `cache22-reboot` preferences (`SOFT_REBOOT`, `KERNEL_CHANGE_STRATEGY`). |
+| `/etc/cache22/reboot.conf` | `cache22-reboot` preferences (`KERNEL_CHANGE_STRATEGY`). |
 | `/etc/cache22/autoupdate.conf` | `cache22-autoupdate` config (`APP_UPDATES`). |
 | `/etc/cache22/autoreboot.conf` | `cache22-autoreboot` config (`WINDOW`, `ALLOW_ACTIVE_SESSIONS`). |
 | `/etc/cache22/healthcheck.d/required.d/*` | User-defined health-check scripts. |

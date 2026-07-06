@@ -26,8 +26,7 @@ cache22-update
         bootc status .status.staged != null
   -> /usr/libexec/cache22/refresh-pending-motd
      -> Reads bootc status, writes /run/motd.d/10-cache22-pending-reboot
-        with a dynamic apply hint (soft-reboot vs full reboot based on
-        softRebootCapable).
+        with the apply hint.
      -> Pops a desktop notification on graphical sessions.
   (returns)
 ```
@@ -100,43 +99,9 @@ systemctl reboot
      -> If any fail: increment counter; if counter >= 3, bootc rollback + reboot.
 ```
 
-## Phase 2 alternative. soft-reboot
-
-Triggered by `cache22-reboot` (auto-pick, when softRebootCapable=true) or `cache22-reboot --soft`.
-
-```
-cache22-reboot --soft
-  -> ostree admin finalize-staged
-     -> Writes BLS entry, swaps boot.X slot.
-  -> /usr/libexec/cache22/resign-uki-finalize
-     -> Rebuilds the staged deploy's boot artifacts for future hard reboots,
-        chrooted into the new deploy (UKI on UEFI, combined initrd on BIOS) -
-        the same builder the hard-reboot finalize hook uses.
-  -> ostree admin prepare-soft-reboot 0
-     -> Sets up /run/nextroot from the finalized composefs deploy (index 0,
-        the default slot finalize-staged just promoted it into).
-     -> (Falls back to a hard reboot if the deploy is on the legacy backend.)
-  -> systemctl soft-reboot
-     -> systemd serializes state.
-     -> Stops all units (ExecStops run; cache22 hooks are no-ops because
-        the deploy was already finalized + boot artifacts rebuilt).
-     -> Switch_root into /run/nextroot.
-     -> Re-execs PID 1 (systemd) in the new root.
-  -> New systemd instance starts.
-  -> Normal boot sequence continues, but:
-     -> Same kernel keeps running (no firmware POST, no kernel restart).
-     -> /run is preserved (so /run/nextroot is now /, /run/ostree-booted is current).
-     -> ostree-remount.service runs; /etc is writable (the composefs overlay
-        ostree set up; on a legacy fallback, ensure-etc-writable re-binds it).
-     -> sysinit.target, multi-user.target, etc., proceed normally.
-  -> User session resumes (SSH may briefly disconnect during pivot).
-```
-
-The whole soft-reboot completes in ~5 seconds.
-
 ## Phase 2 alternative. kexec
 
-Triggered by `cache22-reboot --kexec` or auto-pick when `KERNEL_CHANGE_STRATEGY=kexec` and softRebootCapable=false.
+Triggered by `cache22-reboot --kexec`, or by `cache22-reboot` (no flags) when `KERNEL_CHANGE_STRATEGY=kexec`.
 
 ```
 cache22-reboot --kexec
@@ -185,5 +150,5 @@ This idempotency is what allows triggers like `bootc-status-updated.target` to f
 
 - [bootc and ostree](../bootc-and-ostree/) for the layer responsibilities.
 - [Per-Deploy UKI Build](../per-deploy-uki/) for resign-uki internals.
-- [Three Reboot Paths](../../updates-and-reboots/three-reboot-paths/) for the user-facing reboot strategy choice.
+- [Two Reboot Paths](../../updates-and-reboots/two-reboot-paths/) for the user-facing reboot strategy choice.
 - [Health Checks](../../system-ops/healthcheck/) for the auto-rollback safety net.

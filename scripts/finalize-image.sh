@@ -108,6 +108,15 @@ flatpak remote-add --if-not-exists flathub \
 echo "==> Enabling systemd presets"
 systemctl preset-all --preset-mode=enable-only || true
 
+# soft-reboot is unsupported on cache22. Pivoting userspace while the kernel
+# keeps running leaves encrypted data pools (LUKS held open by services such
+# as incus) undetachable, and re-runs the TPM PCR/NvPCR measurements against a
+# TPM whose state already survived from the previous userspace. Both hang or
+# fail the boot. cache22-reboot only ever does hard or kexec; mask the raw
+# systemd verb so `systemctl soft-reboot` cannot be invoked by hand either.
+echo "==> Masking soft-reboot (unsupported)"
+systemctl mask systemd-soft-reboot.service || true
+
 echo "==> Cleaning pacman cache"
 rm -rf /usr/lib/sysimage/pacman/pkg/*
 

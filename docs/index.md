@@ -27,7 +27,7 @@ Desktop variants (`*-kde`, `*-gnome`) additionally include Steam, Lutris, gamemo
 
 ## Notable features
 
-**Two fast paths for applying updates.** `cache22-reboot` selects between three reboot strategies based on what bootc reports about the staged deploy: soft-reboot (~5 sec, kernel keeps running, network connections survive), kexec (~10-30 sec faster than a full reboot when the kernel changed), or full reboot. See [Three Reboot Paths](./updates-and-reboots/three-reboot-paths/).
+**Two paths for applying updates.** `cache22-reboot` does a full reboot by default, or an opt-in kexec (~10-30 sec faster than a full reboot, skips firmware POST). See [Two Reboot Paths](./updates-and-reboots/two-reboot-paths/).
 
 **Two install entry points.** A hybrid BIOS+UEFI USB installer ISO for bare metal, plus a NixOS-based kexec image for VPSes that can't mount custom ISOs. Both run the same `cache22-install` script. See [Installation](./getting-started/installation/).
 
@@ -44,7 +44,7 @@ Desktop variants (`*-kde`, `*-gnome`) additionally include Steam, Lutris, gamemo
 ## Sections
 
 1. [Getting Started](./getting-started/). Install, first-boot Secure Boot setup, picking a variant.
-2. [Updates and Reboots](./updates-and-reboots/). `cache22-update`, the three reboot paths, auto-update, pinning to specific builds.
+2. [Updates and Reboots](./updates-and-reboots/). `cache22-update`, the two reboot paths, auto-update, pinning to specific builds.
 3. [Boot and Security](./boot-and-security/). sd-boot + UKI architecture, TPM2 LUKS unlock, Secure Boot key management.
 4. [Customization](./customization/). Kernel args, distrobox, Flatpak, temporary writable `/usr`.
 5. [System Ops](./system-ops/). Variant switching, health checks, repair from live ISO.

@@ -44,7 +44,7 @@ Example output:
     added     btop                                      1.4.0-1
     removed   nano-syntax-highlighting                  3.5-1
 
-  Reboot:    sudo cache22-reboot     (auto-picks soft-reboot when possible)
+  Reboot:    sudo cache22-reboot     (full reboot, or kexec if configured)
   Cancel:    sudo bootc rollback
 ==========================================================
 ```

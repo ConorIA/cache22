@@ -2,15 +2,12 @@
 # refresh-pending-motd — write or remove the pending-reboot MOTD marker
 # based on actual bootc state. Idempotent.
 #
-# Why this exists: cache22-update used to write the marker file inline,
-# trusting /run tmpfs to clear it on next boot. That works for hard
-# reboots but NOT soft-reboots — /run survives soft-reboot by design,
-# so the marker would persist showing "update is staged" long after the
-# update was applied. By regenerating the marker from bootc state at
-# every boot AND on bootc-status-updated.target, we avoid the staleness.
+# The marker is regenerated from bootc state at every boot and on
+# bootc-status-updated.target, so it never goes stale: once a staged
+# deploy is applied and booted, the marker clears on its own.
 #
 # Triggers (see cache22-pending-motd.service):
-#   - WantedBy=multi-user.target          (every boot, hard or soft)
+#   - WantedBy=multi-user.target          (every boot)
 #   - WantedBy=bootc-status-updated.target (after bootc ops outside cache22-update)
 #   - Direct invocation by cache22-update after staging.
 
@@ -26,14 +23,8 @@ MOTD_FILE=/run/motd.d/10-cache22-pending-reboot
 status=$(bootc status --json 2>/dev/null) || exit 0
 
 if echo "$status" | jq -e '.status.staged != null' >/dev/null 2>&1; then
-    # There's a staged deploy — write/refresh the marker with a dynamic
-    # apply hint based on whether soft-reboot is possible.
-    soft_capable=$(echo "$status" | jq -r '.status.staged.softRebootCapable // false')
-    if [[ "$soft_capable" == "true" ]]; then
-        apply_hint="Apply with \`sudo cache22-reboot\` — soft-reboot available (~5 sec, same kernel)."
-    else
-        apply_hint="Apply with \`sudo cache22-reboot\` — full reboot required (kernel changed)."
-    fi
+    # There's a staged deploy: write/refresh the marker with the apply hint.
+    apply_hint="Apply with \`sudo cache22-reboot\` (reboots into the staged deploy)."
     install -dm755 "$(dirname "$MOTD_FILE")"
     new_content=$(cat <<EOF
 
@@ -73,7 +64,7 @@ EOF
                     --urgency=normal \
                     --expire-time=15000 \
                     "cache22 update ready" \
-                    "An OS update has been staged. Run sudo cache22-reboot to apply (soft-reboot used when possible) or cache22-changelog to inspect." \
+                    "An OS update has been staged. Run sudo cache22-reboot to apply or cache22-changelog to inspect." \
                 2>/dev/null || true
         done < <(loginctl list-sessions --no-legend 2>/dev/null)
     fi

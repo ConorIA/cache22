@@ -7,10 +7,10 @@
 #   2. The most recent cache22-autoupdate.service run did NOT fail
 #   3. No active sessions block (unless ALLOW_ACTIVE_SESSIONS=yes)
 #
-# Reboot is delegated to cache22-reboot, which auto-picks soft-reboot
-# (kernel unchanged) or honors KERNEL_CHANGE_STRATEGY in
-# /etc/cache22/reboot.conf when the kernel changed. A 5-minute wall
-# warning is broadcast first so logged-in users can save work.
+# Reboot is delegated to cache22-reboot, which honors
+# KERNEL_CHANGE_STRATEGY in /etc/cache22/reboot.conf (hard or kexec).
+# A 5-minute wall warning is broadcast first so logged-in users can
+# save work.
 
 set -uo pipefail
 

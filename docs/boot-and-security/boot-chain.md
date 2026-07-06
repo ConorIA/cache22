@@ -110,7 +110,7 @@ To add or modify per-machine kargs see [Kernel Args](../../customization/kernel-
 `/usr/libexec/cache22/resign-uki` runs:
 
 - During the shutdown sequence right after `ostree-finalize-staged.service` writes the BLS entry, via the `50-cache22-uki.conf` drop-in. This is the path for normal updates.
-- Explicitly by `cache22-reboot --soft` and `cache22-reboot --kexec` before the soft-reboot or kexec is triggered.
+- Explicitly by `cache22-reboot --kexec` before the kexec is triggered.
 - When `/etc/cache22/extra-cmdline` is modified, via the `cache22-resign-uki.path` watcher.
 - On demand via `sudo systemctl start cache22-resign-uki.service`.
 

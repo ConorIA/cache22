@@ -69,7 +69,7 @@ Lists available variants from a live catalog (`variants.json` in this repo) plus
 sudo cache22-rebase --variant arch-kde --reboot
 ```
 
-After staging the new variant, the helper exec's `cache22-reboot` with auto-pick. Soft-reboot is unlikely to apply across variants since the kernel and initramfs differ; expect a full reboot or kexec.
+After staging the new variant, the helper exec's `cache22-reboot`. This does a full reboot, or kexec if `KERNEL_CHANGE_STRATEGY=kexec`.
 
 ## What happens during rebase
 

@@ -2,9 +2,9 @@
 # ensure-etc-writable — fallback that makes /etc a writable bind-on-self if it
 # isn't already.
 #
-# Under the composefs backend ostree sets /etc up as a writable overlay itself
-# (on hard boot and on `ostree admin prepare-soft-reboot`), so this script
-# defers there. It stays as a safety net for the legacy backend: if a deploy
+# Under the composefs backend ostree sets /etc up as a writable overlay itself,
+# so this script defers there. It stays as a safety net for the legacy backend:
+# if a deploy
 # falls back to the legacy bind-mount (composefs.enabled = maybe) and /etc ends
 # up read-only, re-establish a writable bind. Idempotent: when /etc is already a
 # writable mount it exits without touching anything.

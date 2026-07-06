@@ -11,7 +11,7 @@ Full documentation is at **<https://cmspam.github.io/cache22/>**.
 Quick links:
 
 - [Getting Started](https://cmspam.github.io/cache22/getting-started/) for install + first-boot Secure Boot setup.
-- [Updates and Reboots](https://cmspam.github.io/cache22/updates-and-reboots/) including the [three reboot paths](https://cmspam.github.io/cache22/updates-and-reboots/three-reboot-paths/) cache22 supports (soft-reboot, kexec, hard).
+- [Updates and Reboots](https://cmspam.github.io/cache22/updates-and-reboots/) including the [two reboot paths](https://cmspam.github.io/cache22/updates-and-reboots/two-reboot-paths/) cache22 supports (kexec and full reboot).
 - [Boot and Security](https://cmspam.github.io/cache22/boot-and-security/) including [TPM and LUKS](https://cmspam.github.io/cache22/boot-and-security/tpm-luks/).
 - [Backup and Restore](https://cmspam.github.io/cache22/system-ops/cache22-backup/) for the user-layer backup, whole-system clone, and restoring onto a fresh install.
 - [Troubleshooting](https://cmspam.github.io/cache22/troubleshooting/) for common problems.
@@ -67,7 +67,7 @@ It kexecs into a small in-RAM Alpine, streams the image to disk, injects your SS
 | Command | Purpose |
 | --- | --- |
 | [`cache22-update`](https://cmspam.github.io/cache22/updates-and-reboots/cache22-update/) | Recommended upgrade frontend. Pull + stage. Optional `--reboot` and `--app-updates`. |
-| [`cache22-reboot`](https://cmspam.github.io/cache22/updates-and-reboots/cache22-reboot/) | Apply a staged update. Auto-picks soft-reboot, kexec, or full reboot. |
+| [`cache22-reboot`](https://cmspam.github.io/cache22/updates-and-reboots/cache22-reboot/) | Apply a staged update. Full reboot by default, or kexec when opted in. |
 | [`cache22-autoupdate`](https://cmspam.github.io/cache22/updates-and-reboots/auto-update-and-reboot/) | Schedule unattended `cache22-update`. |
 | [`cache22-autoreboot`](https://cmspam.github.io/cache22/updates-and-reboots/auto-update-and-reboot/) | Schedule unattended reboots after autoupdate. |
 | [`cache22-changelog`](https://cmspam.github.io/cache22/updates-and-reboots/changelog/) | Show package-level diff between booted and staged. |

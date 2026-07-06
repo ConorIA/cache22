@@ -1,46 +1,21 @@
 ---
-title: Three Reboot Paths
+title: Two Reboot Paths
 parent: Updates and Reboots
 nav_order: 1
 ---
 
-# Three Reboot Paths
+# Two Reboot Paths
 
-Most atomic distributions apply an update with a single reboot strategy: a full reboot. cache22 ships three.
+Most atomic distributions apply an update with a single reboot strategy: a full reboot. cache22 offers two, a full reboot and an opt-in kexec that skips firmware POST.
 
 | Strategy | Time to apply | When usable |
 | --- | --- | --- |
-| **Soft-reboot** | ~5 seconds | Staged deploy has the same kernel + initramfs as booted. |
 | **kexec** | ~10-30 seconds saved vs full reboot | Always usable when there is a staged deploy. Skips firmware POST + bootloader. |
-| **Full reboot** | ~30-90 seconds | Always usable. Required when nothing fast is possible or appropriate. |
+| **Full reboot** | ~30-90 seconds | Always usable. The default. |
 
-`cache22-reboot` (with no flags) picks the fastest safe option based on bootc state and `/etc/cache22/reboot.conf`. Each strategy is described below.
+`cache22-reboot` (with no flags) does a full reboot by default, or kexec when opted into via `/etc/cache22/reboot.conf` or `--kexec`. Each strategy is described below.
 
-## Soft-reboot
-
-**Time:** ~5 seconds.
-
-**Mechanism:** `systemctl soft-reboot` switches root into the staged deploy's filesystem without restarting the kernel. The running kernel keeps its in-memory state. Userspace re-initializes against the new root.
-
-**Survives:**
-- Kernel uptime continues; `uptime(1)` does not reset.
-- Open TCP connections survive briefly during the pivot (mostly useful for SSH sessions that re-establish quickly).
-- `/run`, `/tmp`, `/var/log/journal`, `/sysroot`, `/home`, `/var`, `/boot`, `/efi`, `/usr/lib/modules` are preserved.
-
-**Requirements:**
-- `bootc status` reports `softRebootCapable: true` for the staged deploy. This requires the staged deploy's kernel and initramfs to be byte-identical to the booted one. In practice, this means the update did not change the kernel package or initramfs generation.
-
-**Use cases:**
-- Userspace-only updates (most daily updates when the kernel package is unchanged).
-- Same-content re-stages (e.g., `bootc switch` to the current digest).
-
-`cache22-reboot` picks soft-reboot automatically when `softRebootCapable=true` and `SOFT_REBOOT=auto` in `/etc/cache22/reboot.conf` (the default). To opt out, set `SOFT_REBOOT=never` in the config.
-
-### How cache22 implements soft-reboot
-
-`cache22-reboot --soft` finalizes the staged deploy, rebuilds its boot artifacts for future hard reboots via `resign-uki-finalize` (chrooted into the new deploy, the same builder the hard-reboot finalize hook uses: the UKI on UEFI, the combined initrd on BIOS), then hands `/run/nextroot` setup to ostree's native `ostree admin prepare-soft-reboot 0` (index 0 is the deploy finalize-staged just promoted to default) and triggers `systemctl soft-reboot`. That command needs the composefs runtime backend, and its prepare path requires `prepare-root.conf` to set `composefs.enabled = yes` outright: it refuses on `maybe` even when composefs is actually mounted. cache22 sets `yes`. If a deploy is on the legacy backend the command refuses, and `cache22-reboot` falls back to a hard reboot.
-
-See [Boot Chain](../../boot-and-security/boot-chain/) and [Update Flow](../../architecture/update-flow/) for the full sequence.
+> cache22 does not support soft-reboot (`systemctl soft-reboot`). Pivoting userspace while the kernel keeps running leaves encrypted data pools (LUKS held open by services such as incus) undetachable, and re-runs the TPM PCR measurements against a TPM whose state already survived from the previous userspace. Both hang or fail the boot. The systemd verb is masked on cache22 images so it cannot be invoked.
 
 ## kexec
 
@@ -56,14 +31,9 @@ See [Boot Chain](../../boot-and-security/boot-chain/) and [Update Flow](../../ar
 - For TPM2 LUKS auto-unlock to keep working: a PCR 7 keyslot enrolled with `cache22-encryption`. See [TPM and LUKS](../../boot-and-security/tpm-luks/).
 
 **Use cases:**
-- Kernel updates where soft-reboot is not possible but the user wants to avoid firmware POST time.
+- Applying an update without waiting for firmware POST, when the hardware kexecs cleanly.
 
-`cache22-reboot` picks kexec when:
-
-- The staged deploy is not soft-reboot capable (kernel changed), AND
-- `KERNEL_CHANGE_STRATEGY=kexec` is set in `/etc/cache22/reboot.conf`, OR `--kexec` is passed on the command line.
-
-The default for kernel-changing updates is full reboot, not kexec. kexec is opt-in.
+`cache22-reboot` picks kexec when `KERNEL_CHANGE_STRATEGY=kexec` is set in `/etc/cache22/reboot.conf`, or `--kexec` is passed on the command line. The default is a full reboot; kexec is opt-in.
 
 ### How cache22 implements kexec
 
@@ -108,7 +78,7 @@ See [TPM and LUKS](../../boot-and-security/tpm-luks/) for the security tradeoff.
 - Always available.
 
 **Use cases:**
-- Default when no fast path is possible or opted-into.
+- The default for applying any staged update.
 - When debugging boot issues, since the full path exercises everything.
 - When microcode or firmware updates need to take effect.
 
@@ -118,17 +88,15 @@ The shutdown sequence triggers `ostree-finalize-staged.service` (which writes th
 
 `cache22-reboot` (no flags) picks one of these outcomes:
 
-| State | `softRebootCapable` | `KERNEL_CHANGE_STRATEGY` | Selected |
-|---|---|---|---|
-| Nothing staged | n/a | n/a | Full reboot of the currently booted deploy |
-| Staged, same kernel | `true` | n/a | **Soft-reboot** |
-| Staged, kernel changed | `false` | `hard` (default) | **Full reboot** |
-| Staged, kernel changed | `false` | `kexec` | **kexec** |
+| State | `KERNEL_CHANGE_STRATEGY` | Selected |
+|---|---|---|
+| Nothing staged | any | Full reboot of the currently booted deploy |
+| Staged | `hard` (default) | **Full reboot** |
+| Staged | `kexec` | **kexec** |
 
 Override with explicit flags:
 
 ```
-sudo cache22-reboot --soft         # Force soft-reboot. Errors if not capable (unless --no-fallback omitted).
 sudo cache22-reboot --kexec        # Force kexec when there is a staged deploy.
 sudo cache22-reboot --kexec-force  # Force kexec even if LUKS will need a passphrase.
 sudo cache22-reboot --hard         # Force full reboot.
@@ -142,11 +110,9 @@ sudo cache22-reboot --no-fallback  # Abort instead of falling back to a full reb
 
 ```
 $ sudo cache22-reboot --check
-strategy: soft - soft-reboot (kernel unchanged, fastest)
+strategy: hard - hard reboot (set KERNEL_CHANGE_STRATEGY=kexec or pass --kexec for kexec)
   staged digest:        sha256:f00e2552043fef13...
-  softRebootCapable:    true
   KERNEL_CHANGE_STRATEGY: hard
-  SOFT_REBOOT:            auto
 ```
 
 ### Default daily update apply
@@ -157,9 +123,9 @@ After `cache22-update` has staged a new image:
 sudo cache22-reboot
 ```
 
-If the kernel did not change, this completes in about 5 seconds and your SSH session may even survive the pivot. If the kernel changed, the default full reboot fires.
+By default this does a full reboot into the staged deploy. To skip firmware POST on capable hardware, opt into kexec (below).
 
-### Opt into kexec for kernel-changing updates
+### Opt into kexec for applying updates
 
 Edit `/etc/cache22/reboot.conf`:
 
@@ -167,7 +133,7 @@ Edit `/etc/cache22/reboot.conf`:
 KERNEL_CHANGE_STRATEGY=kexec
 ```
 
-From now on, kernel-changing updates use kexec instead of full reboot. The setting applies to `cache22-reboot`, `cache22-update --reboot`, and `cache22-autoreboot`.
+From now on, applying a staged update uses kexec instead of a full reboot. The setting applies to `cache22-reboot`, `cache22-update --reboot`, and `cache22-autoreboot`.
 
 If LUKS+TPM is in use, also enroll a PCR 7 keyslot first; see the LUKS+TPM caveat above.
 
@@ -177,16 +143,4 @@ If LUKS+TPM is in use, also enroll a PCR 7 keyslot first; see the LUKS+TPM cavea
 sudo cache22-reboot --hard
 ```
 
-Useful when investigating boot issues. Skips both the soft-reboot and kexec fast paths regardless of state.
-
-### Trigger soft-reboot of an already-applied deploy
-
-Re-stage the current image at its exact digest, then soft-reboot:
-
-```
-DIGEST=$(sudo bootc status --json | jq -r .status.booted.image.imageDigest)
-sudo bootc switch --transport registry "ghcr.io/cmspam/cache22-cachy-server@$DIGEST"
-sudo cache22-reboot
-```
-
-The "update" is a no-op (same content), but the soft-reboot exercises the pivot mechanism. Useful for testing.
+Useful when investigating boot issues. Skips the kexec fast path regardless of config.

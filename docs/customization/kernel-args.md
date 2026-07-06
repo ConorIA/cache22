@@ -188,4 +188,4 @@ If both deploys' UKIs have the bad karg (rare; only happens if the karg was adde
 
 - [Boot Chain](../../boot-and-security/boot-chain/) for how UKIs are signed and loaded.
 - [Per-Deploy UKI Build](../../architecture/per-deploy-uki/) for the resign-uki internals.
-- [Three Reboot Paths](../../updates-and-reboots/three-reboot-paths/) for what kexec needs from the UKI.
+- [Two Reboot Paths](../../updates-and-reboots/two-reboot-paths/) for what kexec needs from the UKI.
