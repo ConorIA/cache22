@@ -2,3 +2,4 @@
 
 plasma-bigscreen
 firefoxpwa
+libcec
