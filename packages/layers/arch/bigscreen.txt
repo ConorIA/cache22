@@ -1,3 +1,4 @@
 # cache22 — arch Plasma Bigscreen layer.
 
 plasma-bigscreen
+firefoxpwa
