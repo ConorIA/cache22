@@ -1,3 +1,5 @@
 # cache22 — cachy Plasma Bigscreen layer.
 
 plasma-bigscreen
+firefoxpwa
+libcec
