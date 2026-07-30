@@ -201,6 +201,7 @@ flatpak
 bash-completion
 git
 openssh
+mosh
 rsync
 wget
 curl
