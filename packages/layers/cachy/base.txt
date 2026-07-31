@@ -106,7 +106,6 @@ dhcpcd
 dhclient
 ethtool
 r8152-dkms
-iavf-dkms
 nss-mdns
 usb_modeswitch
 wireless-regdb

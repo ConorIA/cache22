@@ -530,7 +530,7 @@ def write_blob(out_blobs: Path, content: bytes, media_type: str) -> dict:
 
 
 # ─── DKMS .ko reuse ───────────────────────────────────────────────────────
-# DKMS recompiles out-of-tree modules (iavf, r8152, broadcom-wl, nvidia-open,
+# DKMS recompiles out-of-tree modules (r8152, broadcom-wl, nvidia-open,
 # ...) on every image build, against whatever compiler the image ships that
 # day. A compiler bump alone produces byte-different .ko output with identical
 # function, churning the dkms-modules and leftover layers for no benefit. The
