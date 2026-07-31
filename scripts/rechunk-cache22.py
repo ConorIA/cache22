@@ -224,7 +224,7 @@ def parse_pacman_files(files_path: Path) -> list[str]:
     return out
 
 
-PKGCACHE_VERSION = "r1"
+PKGCACHE_VERSION = "r2"
 
 
 def _stable_mtree_sha(mtree_path: Path) -> str | None:
