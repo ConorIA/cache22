@@ -187,9 +187,9 @@ Usage:
 Common flags:
   --variant ID         shortcut: looks up the OCI image for the given
                        variant id from variants.json (fetched from
-                       GitHub at runtime). Common ids: cachy-kde,
-                       cachy-server, arch-kde, arch-server. Default
-                       $DEFAULT_VARIANT.
+                       GitHub at runtime). Ids are <family>-<role>:
+                       family cachy or arch, role server, kde, gnome
+                       or hyprland. Default $DEFAULT_VARIANT.
   --image REF          OCI image (default: $DEFAULT_IMAGE).
                        --image overrides --variant.
   --list-variants      print the available variants and exit.

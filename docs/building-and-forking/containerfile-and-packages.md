@@ -39,13 +39,14 @@ packages/
 │   │   ├── desktop.txt     GPU userland, fonts, IMEs, generic apps
 │   │   ├── gaming.txt      Steam, gamescope, mangohud, lutris, sunshine
 │   │   ├── kde.txt         Plasma 6 + KDE apps
-│   │   └── gnome.txt       GNOME Shell + GNOME apps
+│   │   ├── gnome.txt       GNOME Shell + GNOME apps
+│   │   └── hyprland.txt    Hyprland + waybar, rofi, swaync, hypr* tools
 │   └── arch/               same layer names, arch-specific package picks
 └── manifests/
     ├── cachy-server.manifest
     ├── cachy-kde.manifest
     ├── arch-gnome.manifest
-    └── ... (20 total)
+    └── ... (8 total)
 ```
 
 A manifest names the layers a variant pulls, one per line, in install order. Comments (`#`) and blanks are ignored.

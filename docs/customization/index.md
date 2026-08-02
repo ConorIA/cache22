@@ -16,5 +16,6 @@ In rough order of preference:
 3. **[Kernel Args](./kernel-args/).** Persistent kernel command-line options via `cache22-karg` and `/etc/cache22/extra-cmdline`.
 4. **[bootc usroverlay](./usroverlay/).** Temporary writable `/usr` for testing only. Discarded on reboot.
 5. **[Gamescope Mode](./gamescope-mode/).** SteamOS-style autologin into a gamescope session running Steam Big Picture. KDE variants only.
+6. **[Hyprland Session](./hyprland/).** What the Hyprland variants ship, the default keybindings, and where the config files live. Hyprland variants only.
 
 For more invasive changes (additional packages baked into the image, custom system files, additional variants), fork the repository: see [Building and Forking](../building-and-forking/).

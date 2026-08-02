@@ -14,11 +14,15 @@ locale-gen 2>&1 | tail -5
 echo "==> Rewriting /etc/os-release + /etc/lsb-release with cache22 identity"
 VARIANT="${VARIANT:-cachy-kde}"
 case "$VARIANT" in
-    cachy-kde)    VARIANT_PRETTY="CachyOS-based KDE" ;;
-    cachy-server) VARIANT_PRETTY="CachyOS-based Server" ;;
-    arch-kde)     VARIANT_PRETTY="Arch-based KDE" ;;
-    arch-server)  VARIANT_PRETTY="Arch-based Server" ;;
-    *)            VARIANT_PRETTY="$VARIANT" ;;
+    cachy-kde)      VARIANT_PRETTY="CachyOS-based KDE" ;;
+    cachy-gnome)    VARIANT_PRETTY="CachyOS-based GNOME" ;;
+    cachy-hyprland) VARIANT_PRETTY="CachyOS-based Hyprland" ;;
+    cachy-server)   VARIANT_PRETTY="CachyOS-based Server" ;;
+    arch-kde)       VARIANT_PRETTY="Arch-based KDE" ;;
+    arch-gnome)     VARIANT_PRETTY="Arch-based GNOME" ;;
+    arch-hyprland)  VARIANT_PRETTY="Arch-based Hyprland" ;;
+    arch-server)    VARIANT_PRETTY="Arch-based Server" ;;
+    *)              VARIANT_PRETTY="$VARIANT" ;;
 esac
 case "$VARIANT" in
     cachy-*) ID_LIKE_LINE='ID_LIKE="cachyos arch"' ;;

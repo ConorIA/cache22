@@ -24,9 +24,11 @@ sudo cache22-rebase --reboot                 # Reboot when done.
 | `cachy-server` | `ghcr.io/cmspam/cache22-cachy-server:rolling` |
 | `cachy-kde` | `ghcr.io/cmspam/cache22-cachy-kde:rolling` |
 | `cachy-gnome` | `ghcr.io/cmspam/cache22-cachy-gnome:rolling` |
+| `cachy-hyprland` | `ghcr.io/cmspam/cache22-cachy-hyprland:rolling` |
 | `arch-server` | `ghcr.io/cmspam/cache22-arch-server:rolling` |
 | `arch-kde` | `ghcr.io/cmspam/cache22-arch-kde:rolling` |
 | `arch-gnome` | `ghcr.io/cmspam/cache22-arch-gnome:rolling` |
+| `arch-hyprland` | `ghcr.io/cmspam/cache22-arch-hyprland:rolling` |
 
 ## Examples
 

@@ -6,18 +6,20 @@ nav_order: 3
 
 # Variants
 
-cache22 ships six variants. Each pairs one of two base distributions (CachyOS or vanilla Arch) with one of three roles (headless server, KDE Plasma desktop, or GNOME desktop). NVIDIA proprietary driver and gaming stack (where applicable) are built in.
+cache22 ships eight variants. Each pairs one of two base distributions (CachyOS or vanilla Arch) with one of four roles (headless server, KDE Plasma desktop, GNOME desktop, or Hyprland desktop). NVIDIA proprietary driver and gaming stack (where applicable) are built in.
 
 | Variant | Image | Base + kernel | Use case |
 | --- | --- | --- | --- |
 | `cachy-server` | `ghcr.io/cmspam/cache22-cachy-server:rolling` | CachyOS, `linux-cachyos` | Headless server / container host |
 | `cachy-kde` | `ghcr.io/cmspam/cache22-cachy-kde:rolling` | CachyOS, `linux-cachyos` | KDE Plasma desktop + gaming |
 | `cachy-gnome` | `ghcr.io/cmspam/cache22-cachy-gnome:rolling` | CachyOS, `linux-cachyos` | GNOME desktop + gaming |
+| `cachy-hyprland` | `ghcr.io/cmspam/cache22-cachy-hyprland:rolling` | CachyOS, `linux-cachyos` | Hyprland desktop + gaming |
 | `arch-server` | `ghcr.io/cmspam/cache22-arch-server:rolling` | Arch, mainline `linux` | Headless server / container host |
 | `arch-kde` | `ghcr.io/cmspam/cache22-arch-kde:rolling` | Arch, mainline `linux` | KDE Plasma desktop + gaming |
 | `arch-gnome` | `ghcr.io/cmspam/cache22-arch-gnome:rolling` | Arch, mainline `linux` | GNOME desktop + gaming |
+| `arch-hyprland` | `ghcr.io/cmspam/cache22-arch-hyprland:rolling` | Arch, mainline `linux` | Hyprland desktop + gaming |
 
-Earlier revisions of cache22 split out NVIDIA and gaming into separate variants (20 in total). That matrix was retired in favor of these six: keeping it reliable on GHA-hosted CI ran into ghcr.io rate limits and runner concurrency caps. The cost is ~250 MB of unused NVIDIA firmware/driver on AMD-only hardware, and the gaming stack (Steam, gamescope, lutris, sunshine) installed on desktop variants whether you use it or not.
+Earlier revisions of cache22 split out NVIDIA and gaming into separate variants (20 in total). That matrix was retired in favor of these: keeping it reliable on GHA-hosted CI ran into ghcr.io rate limits and runner concurrency caps. The cost is ~250 MB of unused NVIDIA firmware/driver on AMD-only hardware, and the gaming stack (Steam, gamescope, lutris, sunshine) installed on desktop variants whether you use it or not.
 
 ## Choosing a base
 
@@ -39,7 +41,9 @@ Earlier revisions of cache22 split out NVIDIA and gaming into separate variants 
 
 **`kde`.** KDE Plasma 6 with `plasma-login-manager`, Dolphin, Konsole, Discover, Bazaar Flathub storefront, Firefox. Plus the gaming stack and SteamOS-style switchable gamescope session via `cache22-gamescope-mode`.
 
-**`gnome`.** GNOME Shell with GDM, Nautilus, Loupe, Papers, Bazaar. Plus the gaming stack. No SteamOS session switcher (that's KDE-only today — driven by `plasma-login-manager` autologin).
+**`gnome`.** GNOME Shell with GDM, Nautilus, Loupe, Papers, Bazaar. Plus the gaming stack. No SteamOS session switcher (that's KDE-only today, driven by `plasma-login-manager` autologin).
+
+**`hyprland`.** The Hyprland Wayland compositor with waybar, rofi, swaync, kitty, Thunar, and the hypr* tools (hyprlock, hypridle, hyprpaper, hyprshot, hyprpicker). It logs in through `plasma-login-manager`, the same greeter the KDE variants use, so all three desktop roles behave the same at the login screen. A working default config ships in `/etc/xdg/hypr`; copy it to `~/.config/hypr` to make it yours. Plus the gaming stack. See [Hyprland Session](../../customization/hyprland/).
 
 ## What every variant ships
 
@@ -54,7 +58,7 @@ The base layer (always installed) includes:
 - **Virtualization.** qemu-base, libvirt, virglrenderer, swtpm, edk2-ovmf.
 - **CLI tooling.** git, openssh, rsync, jq, ripgrep, fd, fzf, btop, tmux, vim, nano, micro, fastfetch.
 - **Firmware.** linux-firmware, sof-firmware, intel/amd microcode.
-- **Desktop add-ons** (kde and gnome only). Printing (CUPS), scanning (SANE), fingerprint (fprintd), CJK input methods (fcitx5).
+- **Desktop add-ons** (desktop variants only). Printing (CUPS), scanning (SANE), fingerprint (fprintd), CJK input methods (fcitx5).
 
 ## Composition
 

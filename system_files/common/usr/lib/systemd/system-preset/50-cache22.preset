@@ -21,9 +21,11 @@ disable systemd-networkd-wait-online.service
 # you don't want password auth on a public network.
 enable sshd.service
 
-# Display manager (only useful in the kde variant; for server, the
-# plasmalogin unit is absent and the preset rule silently no-ops).
+# Display manager. plasma-login-manager on the kde and hyprland variants,
+# gdm on gnome. Only the unit the variant actually installed exists; the
+# other rule silently no-ops, as both do on server.
 enable plasmalogin.service
+enable gdm.service
 
 # System services
 enable bluetooth.service

@@ -17,13 +17,15 @@ This is not an official or supported version of Arch or CachyOS.
 | `cachy-server` | `ghcr.io/cmspam/cache22-cachy-server:rolling` | CachyOS, `linux-cachyos` | (headless) |
 | `cachy-kde` | `ghcr.io/cmspam/cache22-cachy-kde:rolling` | CachyOS, `linux-cachyos` | KDE Plasma 6 |
 | `cachy-gnome` | `ghcr.io/cmspam/cache22-cachy-gnome:rolling` | CachyOS, `linux-cachyos` | GNOME Shell |
+| `cachy-hyprland` | `ghcr.io/cmspam/cache22-cachy-hyprland:rolling` | CachyOS, `linux-cachyos` | Hyprland |
 | `arch-server` | `ghcr.io/cmspam/cache22-arch-server:rolling` | Vanilla Arch, mainline `linux` | (headless) |
 | `arch-kde` | `ghcr.io/cmspam/cache22-arch-kde:rolling` | Vanilla Arch, mainline `linux` | KDE Plasma 6 |
 | `arch-gnome` | `ghcr.io/cmspam/cache22-arch-gnome:rolling` | Vanilla Arch, mainline `linux` | GNOME Shell |
+| `arch-hyprland` | `ghcr.io/cmspam/cache22-arch-hyprland:rolling` | Vanilla Arch, mainline `linux` | Hyprland |
 
 All variants ship with NVIDIA (open driver), AMD, and Intel GPU support; ZFS (cachy variants only); Realtek 2.5G PCIe (`r8125`) and USB (`r8152`); Bluetooth; printing (CUPS); SANE; fingerprint readers; CJK input via fcitx5; QEMU + libvirt + virt-manager; podman + docker + distrobox + incus. Guest agents for running cache22 itself as a VM (QEMU/KVM, incus, VMware/ESXi) are included and activate only inside the matching hypervisor.
 
-Desktop variants (`*-kde`, `*-gnome`) additionally include Steam, Lutris, gamemode, MangoHud, gamescope, and Sunshine. KDE variants also get a SteamOS-style "gamescope mode" toggle (KDE-only because it autologin-couples with `plasma-login-manager`).
+Desktop variants (`*-kde`, `*-gnome`, `*-hyprland`) additionally include Steam, Lutris, gamemode, MangoHud, gamescope, and Sunshine. KDE variants also get a SteamOS-style "gamescope mode" toggle (KDE-only because it autologin-couples with `plasma-login-manager`).
 
 ## Notable features
 

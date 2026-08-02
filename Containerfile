@@ -138,16 +138,17 @@ RUN pkglist=$(/tmp/cache22-build/scripts/expand-manifest.sh \
     done
 
 # systemd-sysusers run inside a container stamps shadow sp_lstchg=0
-# ("password must be changed now") on accounts it creates. For the Plasma
-# login-manager session user that makes PAM reject user@<uid>.service, which
-# blocks the logind seat and DRM handoff so the Wayland session never comes
-# up on first boot. Lock the account and set a fixed non-zero last-changed
-# date (kept constant for reproducible rebuilds) with age/inactivity expiry
-# disabled. No-op on variants where the user does not exist.
-RUN if id plasmalogin >/dev/null 2>&1; then \
-        passwd -l plasmalogin || true; \
-        chage -d 1 -M -1 -I -1 plasmalogin; \
-    fi
+# ("password must be changed now") on accounts it creates. For a greeter's
+# session user that makes PAM reject user@<uid>.service, which blocks the
+# logind seat and DRM handoff so the Wayland session never comes up on
+# first boot. Lock the account and set a fixed non-zero last-changed date
+# (kept constant for reproducible rebuilds) with age/inactivity expiry
+# disabled. Each name no-ops on variants where the user does not exist.
+RUN for u in plasmalogin gdm; do \
+        id "$u" >/dev/null 2>&1 || continue; \
+        passwd -l "$u" || true; \
+        chage -d 1 -M -1 -I -1 "$u"; \
+    done
 
 # Re-apply layered overlay so post-install package files (e.g. ostree's
 # prepare-root.conf) don't clobber our config.
