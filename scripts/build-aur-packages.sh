@@ -142,6 +142,24 @@ if command -v rustup >/dev/null 2>&1; then
     sudo -u builder rustup default stable
 fi
 
+# git against aur.archlinux.org drops connections often enough in CI
+# (SSL_read: unexpected eof) that a single failure must not be read as
+# "this package does not exist". Retry transport errors; return 2 for the
+# one answer that is not worth retrying, an AUR repo that is not there.
+aur_git() {
+    local attempt err
+    for attempt in 1 2 3 4 5; do
+        err=$(git "$@" 2>&1 >&3) && return 0
+        printf '%s\n' "$err" >&2
+        if [[ "$err" == *"not found"* || "$err" == *"does not appear to be a git repository"* ]]; then
+            return 2
+        fi
+        [[ "$attempt" == "5" ]] && return 1
+        echo "==> git $1 attempt $attempt failed; retrying in 15s" >&2
+        sleep 15
+    done
+} 3>&1
+
 # ─── Recursive AUR builder ────────────────────────────────────────
 # build_aur_package <name>
 #   1. Clone aur.archlinux.org/<name>.git
@@ -156,9 +174,14 @@ build_aur_package() {
 
     # Confirm AUR has this package before cloning. ls-remote is much
     # more reliable than the RPC API in CI (which has occasionally
-    # returned partial bodies). An empty result means the AUR repo
-    # doesn't exist.
-    if ! git ls-remote "https://aur.archlinux.org/$pkg.git" 2>/dev/null | grep -q .; then
+    # returned partial bodies).
+    local lsremote rc=0
+    lsremote=$(aur_git ls-remote "https://aur.archlinux.org/$pkg.git") || rc=$?
+    if [[ "$rc" == "1" ]]; then
+        echo "ERROR: cannot reach AUR for '$pkg' after 5 attempts" >&2
+        exit 1
+    fi
+    if [[ "$rc" != "0" || -z "$lsremote" ]]; then
         cat >&2 <<EOF
 ERROR: '$pkg' is listed in cache22 packages/*.txt but resolves nowhere:
        - not a package or virtual provider in any configured pacman repo
@@ -172,7 +195,7 @@ EOF
 
     echo "==> Resolving AUR/$pkg"
     rm -rf "/tmp/$pkg"
-    git clone --depth 1 "https://aur.archlinux.org/$pkg.git" "/tmp/$pkg"
+    aur_git clone --depth 1 "https://aur.archlinux.org/$pkg.git" "/tmp/$pkg"
     [[ -f "/tmp/$pkg/PKGBUILD" ]] || { echo "AUR/$pkg: no PKGBUILD" >&2; exit 1; }
     chown -R builder:builder "/tmp/$pkg"
 
