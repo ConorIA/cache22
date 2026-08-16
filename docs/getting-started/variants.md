@@ -39,11 +39,11 @@ Earlier revisions of cache22 split out NVIDIA and gaming into separate variants 
 
 **`server`.** No display manager, no Wayland or X11 stack, no desktop apps. Containers (podman, docker, distrobox, incus), libvirt+qemu, cockpit web admin. ~6 GB on disk.
 
-**`kde`.** KDE Plasma 6 with `plasma-login-manager`, Dolphin, Konsole, Discover, Bazaar Flathub storefront, Firefox. Plus the gaming stack and SteamOS-style switchable gamescope session via `cache22-gamescope-mode`.
+**`kde`.** KDE Plasma 6 with `plasma-login-manager`, Dolphin, Konsole, Discover Flatpak storefront, Firefox. Plus the gaming stack and SteamOS-style switchable gamescope session via `cache22-gamescope-mode`.
 
-**`gnome`.** GNOME Shell with GDM, Nautilus, Loupe, Papers, Bazaar. Plus the gaming stack. No SteamOS session switcher (that's KDE-only today, driven by `plasma-login-manager` autologin).
+**`gnome`.** GNOME Shell with GDM, Nautilus, Loupe, Papers, GNOME Software Flatpak storefront. Plus the gaming stack. No SteamOS session switcher (that's KDE-only today, driven by `plasma-login-manager` autologin).
 
-**`hyprland`.** The Hyprland Wayland compositor with waybar, rofi, swaync, kitty, Thunar, and the hypr* tools (hyprlock, hypridle, hyprpaper, hyprshot, hyprpicker). It logs in through `plasma-login-manager`, the same greeter the KDE variants use, so all three desktop roles behave the same at the login screen. A working default config ships in `/etc/xdg/hypr`; copy it to `~/.config/hypr` to make it yours. Plus the gaming stack. See [Hyprland Session](../../customization/hyprland/).
+**`hyprland`.** The Hyprland Wayland compositor with waybar, rofi, swaync, kitty, Thunar, GNOME Software Flatpak storefront, and the hypr* tools (hyprlock, hypridle, hyprpaper, hyprshot, hyprpicker). It logs in through `plasma-login-manager`, the same greeter the KDE variants use, so all three desktop roles behave the same at the login screen. A working default config ships in `/etc/xdg/hypr`; copy it to `~/.config/hypr` to make it yours. Plus the gaming stack. See [Hyprland Session](../../customization/hyprland/).
 
 ## What every variant ships
 

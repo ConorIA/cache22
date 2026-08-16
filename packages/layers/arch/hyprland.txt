@@ -39,6 +39,7 @@ xarchiver
 gvfs
 gvfs-mtp
 gvfs-smb
+gnome-software
 mousepad
 imv
 mpv
