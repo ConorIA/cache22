@@ -28,6 +28,7 @@ gvfs-nfs
 gvfs-smb
 
 # ─── GNOME daily-driver apps ──────────────────────────────
+gnome-software
 gnome-text-editor
 loupe
 gnome-screenshot

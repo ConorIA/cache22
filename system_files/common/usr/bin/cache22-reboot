@@ -2,25 +2,17 @@
 # cache22-reboot — apply a staged update with the optimal reboot
 # strategy.
 #
-# Auto-picks based on what bootc says is possible:
+# Auto-picks based on config and what bootc has staged:
 #
-#   soft-reboot   bootc reports staged.softRebootCapable=true.
-#                 Same kernel keeps running; only userspace pivots
-#                 into the staged deploy. ~5 sec, network connections
-#                 survive. Default when applicable.
+#   hard reboot   Default. Full system restart through firmware POST +
+#                 bootloader. Works on all hardware.
 #
-#   hard reboot   Kernel changed (soft-reboot not capable). Full system
-#                 restart through firmware POST + bootloader. Default
-#                 when soft-reboot isn't possible.
-#
-#   kexec         Kernel changed AND user opted into kexec (via config
-#                 or --kexec). Faster than full reboot when hardware
-#                 supports it; some hardware doesn't kexec cleanly.
+#   kexec         User opted into kexec (via config or --kexec). Faster
+#                 than a full reboot when hardware supports it; some
+#                 hardware doesn't kexec cleanly.
 #
 # Flags:
-#   --soft          Force soft-reboot (fail if not capable, unless
-#                   --no-fallback omitted).
-#   --kexec         Prefer kexec when the kernel changed.
+#   --kexec         Prefer kexec.
 #   --kexec-force   Like --kexec, but also bypass the LUKS auto-unlock
 #                   check and kexec even if the passphrase will be needed.
 #   --hard          Force full reboot regardless.
@@ -32,17 +24,14 @@
 # Persistent preference: /etc/cache22/reboot.conf
 #   KERNEL_CHANGE_STRATEGY=hard|kexec|kexec-force  (default: hard)
 #     (kexec-force also bypasses the LUKS auto-unlock check)
-#   SOFT_REBOOT=auto|never               (default: auto)
 # CLI flags override the config for that invocation.
 
 set -euo pipefail
 
 CONFIG=/etc/cache22/reboot.conf
 KERNEL_CHANGE_STRATEGY=hard
-SOFT_REBOOT=auto
 [[ -f $CONFIG ]] && . "$CONFIG"
 
-FORCE_SOFT=0
 FORCE_KEXEC=0
 FORCE_HARD=0
 CHECK=0
@@ -56,13 +45,12 @@ KEXEC_FORCE=0
 
 for arg in "$@"; do
     case "$arg" in
-        --soft)         FORCE_SOFT=1 ;;
         --kexec)        FORCE_KEXEC=1 ;;
         --kexec-force)  FORCE_KEXEC=1; KEXEC_FORCE=1 ;;
         --hard)         FORCE_HARD=1 ;;
         --check)        CHECK=1 ;;
         --no-fallback)  FALLBACK=0 ;;
-        -h|--help)      sed -n '2,36p' "$0" | sed 's/^# \?//'; exit 0 ;;
+        -h|--help)      sed -n '2,27p' "$0" | sed 's/^# \?//'; exit 0 ;;
         *)              echo "Unknown arg: $arg" >&2; exit 1 ;;
     esac
 done
@@ -72,12 +60,10 @@ die() { echo "Error: $*" >&2; exit 1; }
 # ─── State discovery ─────────────────────────────────────────────
 status=$(bootc status --json 2>/dev/null || echo '{}')
 has_staged=no
-soft_capable=false
 staged_digest=""
 
 if echo "$status" | jq -e '.status.staged != null' >/dev/null 2>&1; then
     has_staged=yes
-    soft_capable=$(echo "$status" | jq -r '.status.staged.softRebootCapable // false')
     staged_digest=$(echo "$status" | jq -r '.status.staged.image.imageDigest // ""')
 fi
 
@@ -85,17 +71,6 @@ fi
 decide() {
     if (( FORCE_HARD ));  then echo hard;  return; fi
     if (( FORCE_KEXEC )); then echo kexec; return; fi
-    if (( FORCE_SOFT )); then
-        # Honor the user's explicit ask; the executor will fail-fast
-        # if soft isn't actually capable.
-        echo soft; return
-    fi
-    if [[ "$has_staged" != "yes" ]]; then
-        echo hard; return
-    fi
-    if [[ "$soft_capable" == "true" && "$SOFT_REBOOT" != "never" ]]; then
-        echo soft; return
-    fi
     case "$KERNEL_CHANGE_STRATEGY" in
         kexec) echo kexec ;;
         *)     echo hard ;;
@@ -106,32 +81,27 @@ strategy=$(decide)
 
 explain() {
     case "$strategy" in
-        soft)  echo "soft-reboot (kernel unchanged, fastest)" ;;
-        kexec) echo "kexec (kernel changed; --kexec or KERNEL_CHANGE_STRATEGY=kexec)" ;;
+        kexec) echo "kexec (--kexec or KERNEL_CHANGE_STRATEGY=kexec)" ;;
         hard)
             if [[ "$has_staged" != "yes" ]]; then
                 echo "hard reboot (nothing staged; rebooting current)"
             elif (( FORCE_HARD )); then
                 echo "hard reboot (--hard forced)"
-            elif [[ "$soft_capable" == "true" && "$SOFT_REBOOT" == "never" ]]; then
-                echo "hard reboot (SOFT_REBOOT=never in $CONFIG)"
             else
-                echo "hard reboot (kernel changed; set KERNEL_CHANGE_STRATEGY=kexec or pass --kexec for kexec)"
+                echo "hard reboot (set KERNEL_CHANGE_STRATEGY=kexec or pass --kexec for kexec)"
             fi
             ;;
     esac
 }
 
 if (( CHECK )); then
-    echo "strategy: $strategy — $(explain)"
+    echo "strategy: $strategy - $(explain)"
     if [[ "$has_staged" == "yes" ]]; then
         echo "  staged digest:        ${staged_digest:0:23}…"
-        echo "  softRebootCapable:    $soft_capable"
     else
         echo "  staged:               (none)"
     fi
     echo "  KERNEL_CHANGE_STRATEGY: $KERNEL_CHANGE_STRATEGY"
-    echo "  SOFT_REBOOT:            $SOFT_REBOOT"
     exit 0
 fi
 
@@ -156,49 +126,6 @@ do_hard_reboot() {
     exec systemctl reboot
 }
 
-# ─── Soft-reboot ────────────────────────────────────────────────
-# Manual orchestration because:
-#   1. Soft-reboot doesn't go through the normal shutdown's
-#      finalize-staged path the same way (we want to be sure finalize
-#      runs BEFORE we try to mount the deploy at /run/nextroot).
-#   2. ostree's `ostree admin prepare-soft-reboot` refuses to run on
-#      the legacy backend; we replicate the prep ourselves via
-#      /usr/libexec/cache22/prepare-soft-reboot.
-do_soft_reboot() {
-    if [[ "$has_staged" != "yes" ]]; then
-        die "no staged deploy — soft-reboot is only meaningful when applying an update"
-    fi
-    if [[ "$soft_capable" != "true" ]]; then
-        if (( FALLBACK )); then
-            echo "==> soft-reboot not capable (kernel changed); falling back"
-            strategy=$(case "$KERNEL_CHANGE_STRATEGY" in kexec) echo kexec ;; *) echo hard ;; esac)
-            case "$strategy" in
-                kexec) do_kexec; return ;;
-                hard)  do_hard_reboot; return ;;
-            esac
-        else
-            die "staged deploy is not soft-reboot capable (kernel changed)"
-        fi
-    fi
-
-    echo "==> soft-reboot ($(explain))"
-
-    echo "    finalizing staged deploy"
-    ostree admin finalize-staged \
-        || { echo "    finalize-staged failed" >&2; fallback "soft-reboot"; return; }
-
-    echo "    building + signing UKI for the new deploy"
-    /usr/libexec/cache22/resign-uki \
-        || { echo "    resign-uki failed" >&2; fallback "soft-reboot"; return; }
-
-    echo "    populating /run/nextroot"
-    /usr/libexec/cache22/prepare-soft-reboot \
-        || { echo "    prepare-soft-reboot failed" >&2; fallback "soft-reboot"; return; }
-
-    echo "==> systemctl soft-reboot"
-    exec systemctl soft-reboot
-}
-
 # ─── kexec ──────────────────────────────────────────────────────
 # Picks the UKI sd-boot would auto-default to (highest .osrel
 # VERSION_ID across cache22-*.efi). For a staged-but-not-finalized
@@ -214,21 +141,32 @@ do_kexec() {
     echo "==> kexec ($(explain))"
 
     # Refuse the kexec if the encrypted root could not auto-unlock afterwards.
-    # A keyslot is kexec-safe only when it binds plain PCRs (the PCR 7 fallback)
-    # with no signed PCR 11 policy: the signed policy needs sd-stub, which kexec
-    # skips, so a PCR 11 only or a combined PCR 7 + signed PCR 11 slot fails and
-    # the kexec'd kernel lands at a passphrase prompt that is easy to miss after
-    # GPU re-init. The token JSON is authoritative; the luksDump tpm2-hash-pcrs
-    # summary cannot tell a clean PCR 7 slot from a combined one.
+    # Only the root device gates this: it must unlock in the initramfs for the
+    # machine to boot at all. The kernel cmdline names it with rd.luks.uuid=,
+    # which is exactly the set of LUKS devices the initramfs unlocks before
+    # mounting root. Data pools are unlocked later, from a keyfile on the
+    # already-mounted root, and never block the boot, so they are not here.
+    #
+    # kexec bypasses sd-stub, so PCR 11 is never measured for the new UKI: a
+    # root TPM keyslot bound to the signed PCR 11 policy cannot unseal and the
+    # kexec'd kernel lands at a passphrase prompt that is easy to miss after
+    # GPU re-init. A root TPM keyslot is kexec-safe only when it binds plain
+    # PCRs (the PCR 7 fallback) with no signed PCR 11 policy: a PCR 11 only or a
+    # combined PCR 7 + signed PCR 11 slot fails. The token JSON is
+    # authoritative; the luksDump tpm2-hash-pcrs summary cannot tell a clean
+    # PCR 7 slot from a combined one.
     if command -v cryptsetup >/dev/null 2>&1; then
-        local spec realdev tok t luks_seen=0 all_safe=1 dev_safe
-        while read -r spec; do
-            [[ -n "$spec" ]] || continue
-            if [[ "$spec" == /dev/* ]]; then realdev="$spec"; else realdev=$(findfs "$spec" 2>/dev/null); fi
+        local arg uuid realdev tok t root_luks=0 root_safe=1
+        for arg in $(cat /proc/cmdline 2>/dev/null); do
+            [[ "$arg" == rd.luks.uuid=* ]] || continue
+            uuid=${arg#rd.luks.uuid=}
+            uuid=${uuid#luks-}                           # systemd accepts a luks- prefix
+            realdev=/dev/disk/by-uuid/$uuid
+            [[ -b "$realdev" ]] || realdev=$(findfs "UUID=$uuid" 2>/dev/null)
             [[ -b "$realdev" ]] || continue
             cryptsetup isLuks "$realdev" 2>/dev/null || continue
-            luks_seen=1
-            dev_safe=0
+            root_luks=1
+            local dev_safe=0
             for t in $(seq 0 31); do
                 tok=$(cryptsetup token export --token-id "$t" "$realdev" 2>/dev/null) || continue
                 [[ "$tok" == *'"systemd-tpm2"'* ]] || continue
@@ -236,9 +174,9 @@ do_kexec() {
                     dev_safe=1
                 fi
             done
-            (( dev_safe )) || all_safe=0
-        done < <(awk '$1 !~ /^#/ && NF >= 2 {print $2}' /etc/crypttab 2>/dev/null)
-        if (( luks_seen && ! all_safe )); then
+            (( dev_safe )) || root_safe=0
+        done
+        if (( root_luks && ! root_safe )); then
             if (( KEXEC_FORCE )); then
                 cat >&2 <<'EOF'
     WARNING: kexec forced past a root LUKS that will not auto-unlock. The
@@ -329,7 +267,6 @@ EOF
 }
 
 case "$strategy" in
-    soft)  do_soft_reboot ;;
     kexec) do_kexec ;;
     hard)  do_hard_reboot ;;
 esac

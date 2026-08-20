@@ -20,6 +20,12 @@
       "image": "ghcr.io/cmspam/cache22-arch-gnome:rolling"
     },
     {
+      "id": "arch-hyprland",
+      "label": "Arch — Hyprland desktop",
+      "description": "Vanilla Arch + Hyprland Wayland compositor (waybar, rofi, swaync, hyprlock/hypridle/hyprpaper) behind the same plasma-login-manager greeter the kde variants use, full gaming stack (Steam, gamescope, mangohud, lutris, sunshine), NVIDIA proprietary driver. System-wide default config in /etc/xdg/hypr; bring your own dotfiles.",
+      "image": "ghcr.io/cmspam/cache22-arch-hyprland:rolling"
+    },
+    {
       "id": "cachy-server",
       "label": "CachyOS — Headless server / container host",
       "description": "Default CachyOS 7.x kernel (clang+ThinLTO, AutoFDO-profiled, EEVDF scheduler) with pre-built zfs + r8125 + nvidia-open modules. Containers (podman, docker, distrobox, incus), libvirt+qemu, cockpit web admin. NVIDIA driver included.",
@@ -36,6 +42,12 @@
       "label": "CachyOS — GNOME desktop",
       "description": "Default CachyOS kernel (clang+ThinLTO, AutoFDO, EEVDF) + GNOME Shell desktop, full gaming stack (Steam, gamescope, mangohud, lutris, sunshine, Xbox controller), NVIDIA proprietary driver. No SteamOS session switcher (KDE-only today).",
       "image": "ghcr.io/cmspam/cache22-cachy-gnome:rolling"
+    },
+    {
+      "id": "cachy-hyprland",
+      "label": "CachyOS — Hyprland desktop",
+      "description": "Default CachyOS kernel (clang+ThinLTO, AutoFDO, EEVDF) + Hyprland Wayland compositor (waybar, rofi, swaync, hyprlock/hypridle/hyprpaper) behind the same plasma-login-manager greeter the kde variants use, full gaming stack (Steam, gamescope, mangohud, lutris, sunshine), NVIDIA proprietary driver. System-wide default config in /etc/xdg/hypr; bring your own dotfiles.",
+      "image": "ghcr.io/cmspam/cache22-cachy-hyprland:rolling"
     }
   ]
 }

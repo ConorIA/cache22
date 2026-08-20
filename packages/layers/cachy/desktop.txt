@@ -17,7 +17,6 @@ xorg-xwayland
 
 # ─── User-facing apps not bound to a specific DE ──────────
 firefox
-bazaar
 pavucontrol
 virt-manager
 qemu-desktop

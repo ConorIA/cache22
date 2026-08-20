@@ -34,7 +34,6 @@ linux
 linux-headers
 r8125-dkms
 r8152-dkms
-iavf-dkms
 
 # ─── GPU userland (headless-safe, non-NVIDIA) ─────────────
 mesa

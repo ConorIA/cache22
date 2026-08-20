@@ -248,8 +248,19 @@ emit_archive() {
     fi
 }
 
-root_uuid()     { findmnt -no UUID /; }
-root_subvolid() { findmnt -no OPTIONS / | grep -o 'subvolid=[0-9]*' | cut -d= -f2; }
+# The physical root filesystem mountpoint for btrfs operations. Under the
+# composefs backend / is an overlay over an EROFS image and the real btrfs root
+# is mounted at /sysroot; under the legacy backend / is the btrfs root itself.
+# File-level captures still read from /; only btrfs-layer queries use this.
+phys_root() {
+    case "$(findmnt -no FSTYPE / 2>/dev/null)" in
+        overlay|erofs) echo /sysroot ;;
+        *)             echo / ;;
+    esac
+}
+
+root_uuid()     { findmnt -no UUID "$(phys_root)"; }
+root_subvolid() { findmnt -no OPTIONS "$(phys_root)" | grep -o 'subvolid=[0-9]*' | cut -d= -f2; }
 
 # Mountpoints under /var on a different filesystem than the root: external
 # storage, plus virtual mounts (tmpfs/fuse/overlay have no/other UUID). These
@@ -290,7 +301,7 @@ build_var_excludes() {
 # avoiding the top-level-vs-mount path translation entirely. Excluded subtrees
 # are pruned, which also keeps find out of fuse/tmpfs mounts.
 build_subvol_list() {
-    [[ "$(findmnt -no FSTYPE /)" == btrfs ]] || return 0
+    [[ "$(findmnt -no FSTYPE "$(phys_root)")" == btrfs ]] || return 0
     local -a ex; mapfile -t ex < <(build_var_excludes)
     local -a fx=(); local e first=1
     for e in "${ex[@]}"; do
@@ -434,7 +445,7 @@ place_subvols() {
 # setting CLONE_TOP (and CLONE_SNAPS for a snapshot scratch dir). cleanup() tears
 # both down. Echoes nothing; sets the globals.
 mount_top_level() {
-    local dev; dev=$(findmnt -no SOURCE -T / | sed 's/\[.*\]//')
+    local dev; dev=$(findmnt -no SOURCE -T "$(phys_root)" | sed 's/\[.*\]//')
     [[ -n "$dev" ]] || die "could not determine the device backing /"
     CLONE_TOP=$(mktemp -d "$TMPDIR_BASE/c22-top.XXXXXX")
     mount -o subvolid=5 "$dev" "$CLONE_TOP" || die "could not mount btrfs top level"
@@ -449,7 +460,7 @@ mount_top_level() {
 # Created on first use; if it already exists as a plain directory (older
 # installs) it is left as-is and the path-based exclude still covers it.
 ensure_archive_subvol() {
-    [[ "$(findmnt -no FSTYPE /)" == btrfs ]] || return 0
+    [[ "$(findmnt -no FSTYPE "$(phys_root)")" == btrfs ]] || return 0
     [[ -e "$STATE_DIR" ]] && return 0
     mkdir -p "$(dirname "$STATE_DIR")"
     btrfs subvolume create "$STATE_DIR" >/dev/null 2>&1 || mkdir -p "$STATE_DIR"
@@ -508,7 +519,7 @@ cmd_backup() {
         echo "── cache22-backup dry run ──"
         echo "level:        $LEVEL"
         echo "image:        $(img_ref)  $(img_digest)"
-        echo "root fs:      $(findmnt -no FSTYPE /)"
+        echo "root fs:      $(findmnt -no FSTYPE "$(phys_root)")"
         echo "/etc files:   ${#etc_files[@]} captured (disk/machine state excluded)"
         echo "/var subvols (btrfs full backup: nested data -> btrfs send, mounted/partial -> dedicated tar):"; printf '  %s\n' ${subvols[@]+"${subvols[@]}"}
         echo "/var excludes:"; printf '  %s\n' "${var_ex[@]}"
@@ -552,7 +563,7 @@ cmd_backup() {
     # Incremental backups stay all-tar via the main /var tar (no per-subvolume
     # send delta to pair with the tar snapshot).
     local -a send_rt=() tar_rt=()
-    if [[ "$(findmnt -no FSTYPE /)" == btrfs && "$LEVEL" == full && ${#subvols[@]} -gt 0 ]]; then
+    if [[ "$(findmnt -no FSTYPE "$(phys_root)")" == btrfs && "$LEVEL" == full && ${#subvols[@]} -gt 0 ]]; then
         local R E sendable
         for R in "${subvols[@]}"; do
             sendable=yes
@@ -607,7 +618,7 @@ cmd_backup() {
         echo "image=$(img_ref)"
         echo "image_digest=$(img_digest)"
         echo "ostree_checksum=$(ostree_checksum)"
-        echo "rootfs=$(findmnt -no FSTYPE /)"
+        echo "rootfs=$(findmnt -no FSTYPE "$(phys_root)")"
         echo "level=$LEVEL"
         echo "send_subvols=${#send_rt[@]}"
         echo "tar_subvols=${#tar_rt[@]}"
@@ -768,7 +779,7 @@ cmd_restore() {
     # already a live subvolume/mount (e.g. mounted /var/home), then extract its
     # tar in place. Shallowest first so a parent exists before a nested one.
     if [[ -f "$STAGE/subvol-tar.tsv" ]]; then
-        [[ "$(findmnt -no FSTYPE /)" == btrfs ]] || die "archive has btrfs subvolume tars but the root is not btrfs"
+        [[ "$(findmnt -no FSTYPE "$(phys_root)")" == btrfs ]] || die "archive has btrfs subvolume tars but the root is not btrfs"
         note "restoring btrfs subvolumes (dedicated tar)"
         local tid tpath tro
         while IFS=$'\t' read -r tid tpath tro; do
@@ -789,7 +800,7 @@ cmd_restore() {
     # place after the file overlay, so their parent directories already exist.
     # Best run before the services that own them are started.
     if [[ -d "$STAGE/subvol-streams" ]]; then
-        [[ "$(findmnt -no FSTYPE /)" == btrfs ]] || die "archive has btrfs subvolume streams but the root is not btrfs"
+        [[ "$(findmnt -no FSTYPE "$(phys_root)")" == btrfs ]] || die "archive has btrfs subvolume streams but the root is not btrfs"
         note "restoring btrfs subvolumes via receive"
         mount_top_level
         place_subvols "$CLONE_TOP" "$STAGE/subvol-streams" "$STAGE/subvol-send.tsv"
@@ -849,7 +860,7 @@ cmd_clone() {
             *)                 die "unknown arg: $1" ;;
         esac
     done
-    [[ "$(findmnt -no FSTYPE /)" == btrfs ]] || die "clone requires a btrfs root filesystem; use 'backup' for ext4/xfs"
+    [[ "$(findmnt -no FSTYPE "$(phys_root)")" == btrfs ]] || die "clone requires a btrfs root filesystem; use 'backup' for ext4/xfs"
 
     # Effective exclude set: clone defaults (keeps sbkey) + EXTRA_EXCLUDE + user
     # excludes + foreign mounts, minus user includes.
@@ -862,7 +873,7 @@ cmd_clone() {
         [[ "$keep" == yes ]] && clone_ex+=("$e")
     done
 
-    local dev; dev=$(findmnt -no SOURCE -T / | sed 's/\[.*\]//')
+    local dev; dev=$(findmnt -no SOURCE -T "$(phys_root)" | sed 's/\[.*\]//')
     [[ -n "$dev" ]] || die "could not determine the device backing /"
 
     if [[ "$DRYRUN" == yes ]]; then

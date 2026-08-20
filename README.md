@@ -11,7 +11,7 @@ Full documentation is at **<https://cmspam.github.io/cache22/>**.
 Quick links:
 
 - [Getting Started](https://cmspam.github.io/cache22/getting-started/) for install + first-boot Secure Boot setup.
-- [Updates and Reboots](https://cmspam.github.io/cache22/updates-and-reboots/) including the [three reboot paths](https://cmspam.github.io/cache22/updates-and-reboots/three-reboot-paths/) cache22 supports (soft-reboot, kexec, hard).
+- [Updates and Reboots](https://cmspam.github.io/cache22/updates-and-reboots/) including the [two reboot paths](https://cmspam.github.io/cache22/updates-and-reboots/two-reboot-paths/) cache22 supports (kexec and full reboot).
 - [Boot and Security](https://cmspam.github.io/cache22/boot-and-security/) including [TPM and LUKS](https://cmspam.github.io/cache22/boot-and-security/tpm-luks/).
 - [Backup and Restore](https://cmspam.github.io/cache22/system-ops/cache22-backup/) for the user-layer backup, whole-system clone, and restoring onto a fresh install.
 - [Troubleshooting](https://cmspam.github.io/cache22/troubleshooting/) for common problems.
@@ -23,13 +23,15 @@ Quick links:
 | `cachy-server` | `ghcr.io/cmspam/cache22-cachy-server:rolling` | CachyOS, `linux-cachyos` | (headless) |
 | `cachy-kde` | `ghcr.io/cmspam/cache22-cachy-kde:rolling` | CachyOS, `linux-cachyos` | KDE Plasma 6 |
 | `cachy-gnome` | `ghcr.io/cmspam/cache22-cachy-gnome:rolling` | CachyOS, `linux-cachyos` | GNOME Shell |
+| `cachy-hyprland` | `ghcr.io/cmspam/cache22-cachy-hyprland:rolling` | CachyOS, `linux-cachyos` | Hyprland |
 | `arch-server` | `ghcr.io/cmspam/cache22-arch-server:rolling` | Vanilla Arch, mainline `linux` | (headless) |
 | `arch-kde` | `ghcr.io/cmspam/cache22-arch-kde:rolling` | Vanilla Arch, mainline `linux` | KDE Plasma 6 |
 | `arch-gnome` | `ghcr.io/cmspam/cache22-arch-gnome:rolling` | Vanilla Arch, mainline `linux` | GNOME Shell |
+| `arch-hyprland` | `ghcr.io/cmspam/cache22-arch-hyprland:rolling` | Vanilla Arch, mainline `linux` | Hyprland |
 
 All variants ship with NVIDIA (open driver), AMD, and Intel GPU support; ZFS (cachy variants only); Realtek 2.5G; Bluetooth; CUPS; SANE; fingerprint readers; CJK input via fcitx5; QEMU + libvirt + virt-manager; podman + docker + distrobox + incus.
 
-Desktop variants (`*-kde`, `*-gnome`) additionally include Steam, Lutris, gamemode, MangoHud, gamescope, and Sunshine. KDE variants also get a SteamOS-style "gamescope mode" toggle (KDE-only because it autologin-coupled with `plasma-login-manager`).
+Desktop variants (`*-kde`, `*-gnome`, `*-hyprland`) additionally include Steam, Lutris, gamemode, MangoHud, gamescope, and Sunshine. KDE variants also get a SteamOS-style "gamescope mode" toggle (KDE-only because it autologin-coupled with `plasma-login-manager`).
 
 For details on each variant see [Variants](https://cmspam.github.io/cache22/getting-started/variants/).
 
@@ -67,7 +69,7 @@ It kexecs into a small in-RAM Alpine, streams the image to disk, injects your SS
 | Command | Purpose |
 | --- | --- |
 | [`cache22-update`](https://cmspam.github.io/cache22/updates-and-reboots/cache22-update/) | Recommended upgrade frontend. Pull + stage. Optional `--reboot` and `--app-updates`. |
-| [`cache22-reboot`](https://cmspam.github.io/cache22/updates-and-reboots/cache22-reboot/) | Apply a staged update. Auto-picks soft-reboot, kexec, or full reboot. |
+| [`cache22-reboot`](https://cmspam.github.io/cache22/updates-and-reboots/cache22-reboot/) | Apply a staged update. Full reboot by default, or kexec when opted in. |
 | [`cache22-autoupdate`](https://cmspam.github.io/cache22/updates-and-reboots/auto-update-and-reboot/) | Schedule unattended `cache22-update`. |
 | [`cache22-autoreboot`](https://cmspam.github.io/cache22/updates-and-reboots/auto-update-and-reboot/) | Schedule unattended reboots after autoupdate. |
 | [`cache22-changelog`](https://cmspam.github.io/cache22/updates-and-reboots/changelog/) | Show package-level diff between booted and staged. |

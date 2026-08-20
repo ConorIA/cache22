@@ -197,5 +197,5 @@ Use the bootc timer if cache22-autoupdate's profile or scheduling layer is not w
 ## See also
 
 - [`cache22-reboot`](../cache22-reboot/) for the reboot strategy selection used by autoreboot.
-- [Three Reboot Paths](../three-reboot-paths/) for what each strategy does.
+- [Two Reboot Paths](../two-reboot-paths/) for what each strategy does.
 - [TPM and LUKS](../../boot-and-security/tpm-luks/) for unattended-reboot LUKS unlock configuration.

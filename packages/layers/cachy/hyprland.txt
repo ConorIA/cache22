@@ -1,0 +1,70 @@
+# cache22 — cachy Hyprland layer.
+# Hyprland compositor + a working Wayland session around it. Pulled by
+# *-hyprland variants only.
+
+# ─── Compositor + session ─────────────────────────────────
+hyprland
+uwsm
+xdg-desktop-portal-hyprland
+xdg-desktop-portal-gtk
+hyprpolkitagent
+qt5-wayland
+qt6-wayland
+xdg-user-dirs
+
+# ─── hypr* utilities ──────────────────────────────────────
+hyprpaper
+hyprlock
+hypridle
+hyprsunset
+hyprpicker
+hyprshot
+
+# ─── Greeter (same one the kde variants use) ──────────────
+plasma-login-manager
+
+# ─── Bar, launcher, notifications ─────────────────────────
+waybar
+rofi
+swaync
+otf-font-awesome
+
+# ─── Terminal, files, everyday apps ───────────────────────
+kitty
+thunar
+thunar-volman
+thunar-archive-plugin
+tumbler
+xarchiver
+gvfs
+gvfs-mtp
+gvfs-smb
+gnome-software
+mousepad
+imv
+mpv
+
+# ─── Wayland tooling ──────────────────────────────────────
+wl-clipboard
+cliphist
+wtype
+grim
+slurp
+swappy
+brightnessctl
+playerctl
+nwg-displays
+nwg-look
+
+# ─── Tray applets + secrets ───────────────────────────────
+network-manager-applet
+blueman
+gnome-keyring
+
+# ─── Theming ──────────────────────────────────────────────
+qt5ct
+qt6ct
+kvantum
+papirus-icon-theme
+adwaita-icon-theme
+adwaita-cursors

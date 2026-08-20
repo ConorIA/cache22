@@ -27,8 +27,8 @@
 #                           graphical or SSH sessions. Default off — the
 #                           reboot defers and retries when sessions end.
 #
-# Reboot strategy (soft-reboot vs kexec vs hard reboot) is owned by
-# cache22-reboot — see /etc/cache22/reboot.conf to set a preference.
+# Reboot strategy (kexec vs hard reboot) is owned by cache22-reboot.
+# See /etc/cache22/reboot.conf to set a preference.
 
 set -euo pipefail
 
@@ -65,7 +65,7 @@ EOF
     systemctl daemon-reload
     systemctl enable --now cache22-autoreboot.timer
     echo "[OK] auto-reboot enabled — at: $at, window: $window, allow-active: $allow"
-    echo "     reboot strategy controlled by /etc/cache22/reboot.conf (default: hard reboot when kernel changes, soft-reboot when not)"
+    echo "     reboot strategy controlled by /etc/cache22/reboot.conf (default: hard reboot; kexec if configured)"
     echo "     next check: $(systemctl list-timers cache22-autoreboot.timer --no-legend --no-pager | awk '{print $1, $2}')"
 }
 

@@ -1,25 +1,36 @@
 #!/usr/bin/env bash
-# resign-uki-finalize — run resign-uki from inside the newest deploy's chroot.
+# resign-uki-finalize — run the firmware's boot-time initramfs builder from
+# inside the newest deploy's chroot.
 #
 # On a bootc upgrade the finalize hook (ostree-finalize-staged drop-in) runs
-# from the OLD booted deploy. Running resign-uki directly there means the OLD
-# resign-uki builds the NEW deploy's UKI, and any user img is built against the
-# OLD modules/config. Instead, chroot into the newly finalized deploy and run
-# ITS resign-uki, so the new image's resign-uki + build-user-initrd run with the
-# new deploy's kernel modules and config (correct drivers on a kernel upgrade,
-# and resign-uki changes take effect on the upgrade that ships them).
+# from the OLD booted deploy. Running the builder directly there means the OLD
+# code builds the NEW deploy's artifacts, and any user img is built against the
+# OLD modules/config. Instead, chroot into the newly finalized deploy and run ITS
+# builder, so the new image's builder + build-user-initrd run with the new
+# deploy's kernel modules and config (correct drivers on a kernel upgrade, and
+# code changes take effect on the upgrade that ships them).
 #
-# This mirrors what the installer (install_sb_and_uki) already does. If ANY part
-# of the chroot setup fails it falls back to running resign-uki on the host, so
-# it can never produce a worse result than running resign-uki directly.
+# Firmware split:
+#   UEFI -> /usr/libexec/cache22/resign-uki             (signed UKIs on the ESP)
+#   BIOS -> /usr/libexec/cache22/cache22-bios-initramfs  (combined initrds on /boot)
+#
+# This mirrors what the installer (install_sb_and_uki / install_grub_bios)
+# already does. If ANY part of the chroot setup fails it falls back to running
+# the builder on the host, so it can never produce a worse result than running
+# the builder directly.
+
+if [[ -d /sys/firmware/efi ]]; then
+    SCRIPT=/usr/libexec/cache22/resign-uki
+    NEED_ESP=1
+else
+    SCRIPT=/usr/libexec/cache22/cache22-bios-initramfs
+    NEED_ESP=0
+fi
 
 run_host() {
-    echo "resign-uki-finalize: running host resign-uki" >&2
-    exec /usr/libexec/cache22/resign-uki
+    echo "resign-uki-finalize: running host builder ($SCRIPT)" >&2
+    exec "$SCRIPT"
 }
-
-# UEFI-only: BIOS has no UKI, ostree's BLS handles the initrd directly.
-[[ -d /sys/firmware/efi ]] || run_host
 
 # Find the newest deploy via the highest-versioned BLS entry (the next-boot
 # default that finalize-staged just wrote).
@@ -33,19 +44,26 @@ ostree_arg=$(sed -n 's/^options .*[[:space:]]ostree=\([^[:space:]]*\).*/\1/p' "$
 [[ -n "$ostree_arg" ]] || run_host
 
 deploy=$(readlink -f "/sysroot${ostree_arg}" 2>/dev/null)
-[[ -n "$deploy" && -x "$deploy/usr/libexec/cache22/resign-uki" ]] || run_host
+[[ -n "$deploy" && -x "$deploy$SCRIPT" ]] || run_host
 
-# Per-stateroot /var (…/deploy/<state>/var) and the ESP.
+# Per-stateroot /var (.../deploy/<state>/var) and, on UEFI, the ESP.
 var="$(dirname "$(dirname "$deploy")")/var"
 [[ -d "$var" ]] || run_host
-esp=/efi; [[ -d "$esp" ]] || esp=/boot/efi
-[[ -d "$esp" ]] || run_host
+esp=""
+if (( NEED_ESP )); then
+    esp=/efi; [[ -d "$esp" ]] || esp=/boot/efi
+    [[ -d "$esp" ]] || run_host
+fi
 
-# Bind-mount targets must already exist inside the (chattr +i) deploy; they
-# ship via the rechunker extra_dirs, same as the installer relies on.
-for d in sysroot boot var efi dev proc sys tmp; do
+# Bind-mount targets must already exist inside the (chattr +i) deploy; they ship
+# via the rechunker extra_dirs, same as the installer relies on. /efi is only
+# needed on UEFI.
+for d in sysroot boot var dev proc sys tmp; do
     [[ -d "$deploy/$d" ]] || { echo "resign-uki-finalize: $deploy/$d missing" >&2; run_host; }
 done
+if (( NEED_ESP )); then
+    [[ -d "$deploy/efi" ]] || { echo "resign-uki-finalize: $deploy/efi missing" >&2; run_host; }
+fi
 
 mounted=()
 cleanup() {
@@ -60,25 +78,26 @@ trap cleanup EXIT
 bind() { mount "$@" && mounted+=( "${@: -1}" ); }
 
 # What and why (validated on a sealed deploy):
-#   /boot      separate partition holding the BLS entries + kernels resign-uki reads
+#   /boot      separate partition holding the BLS entries + kernels the builder reads
 #   /sysroot   for /ostree deploy resolution (readlink of the BLS ostree= path)
+#   /efi       UEFI only: where resign-uki writes UKIs + sd-boot
 #   /sys       --bind, NOT --rbind: avoids cgroup/security submounts that leak on cleanup
-#   /tmp       fresh tmpfs: the sealed deploy's /tmp is read-only, but resign-uki mktemps
+#   /tmp       fresh tmpfs: the sealed deploy's /tmp is read-only, but the builder mktemps
 if bind --bind  /sysroot "$deploy/sysroot" \
    && bind --bind  /boot    "$deploy/boot" \
    && bind --bind  "$var"   "$deploy/var" \
-   && bind --bind  "$esp"   "$deploy/efi" \
+   && { (( NEED_ESP == 0 )) || bind --bind "$esp" "$deploy/efi"; } \
    && bind --bind  /dev     "$deploy/dev" \
    && bind -t proc proc     "$deploy/proc" \
    && bind --bind  /sys     "$deploy/sys" \
    && bind -t tmpfs tmpfs   "$deploy/tmp"; then
     if chroot "$deploy" /usr/bin/env \
             PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin TMPDIR=/tmp \
-            /usr/libexec/cache22/resign-uki; then
+            "$SCRIPT"; then
         cleanup; trap - EXIT
         exit 0
     fi
-    echo "resign-uki-finalize: chrooted resign-uki failed" >&2
+    echo "resign-uki-finalize: chrooted builder failed" >&2
 fi
 
 # Anything above failed: tear down and fall back to the host path.

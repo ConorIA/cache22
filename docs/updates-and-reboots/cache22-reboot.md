@@ -6,19 +6,19 @@ nav_order: 3
 
 # cache22-reboot
 
-`cache22-reboot` applies a staged update. It auto-selects between soft-reboot, kexec, and full reboot based on bootc state and `/etc/cache22/reboot.conf`. See [Three Reboot Paths](../three-reboot-paths/) for the strategy details.
+`cache22-reboot` applies a staged update. It does a full reboot by default, or an opt-in kexec, based on `/etc/cache22/reboot.conf` and the command-line flags. See [Two Reboot Paths](../two-reboot-paths/) for the strategy details.
 
 ## Synopsis
 
 ```
-sudo cache22-reboot [--soft] [--kexec] [--hard] [--check] [--no-fallback]
+sudo cache22-reboot [--kexec] [--kexec-force] [--hard] [--check] [--no-fallback]
 ```
 
 | Flag | Effect |
 | --- | --- |
-| (none) | Auto-pick: soft if `softRebootCapable=true`, else kexec or hard per config. |
-| `--soft` | Force soft-reboot. Errors if not capable, unless `--no-fallback` is omitted. |
-| `--kexec` | Prefer kexec when the kernel changed. |
+| (none) | Full reboot, or kexec when `KERNEL_CHANGE_STRATEGY=kexec` is set. |
+| `--kexec` | Prefer kexec. Falls back to a full reboot if LUKS would need a passphrase, unless `--no-fallback`. |
+| `--kexec-force` | kexec even if LUKS will need a passphrase prompt. |
 | `--hard` | Force full reboot regardless of state. |
 | `--check` | Print the strategy that would run. Do not reboot. |
 | `--no-fallback` | Abort instead of falling back to a full reboot if the chosen strategy fails. |
@@ -28,13 +28,10 @@ sudo cache22-reboot [--soft] [--kexec] [--hard] [--check] [--no-fallback]
 `/etc/cache22/reboot.conf`:
 
 ```
-SOFT_REBOOT=auto             # auto (default) or never
-KERNEL_CHANGE_STRATEGY=hard  # hard (default) or kexec
+KERNEL_CHANGE_STRATEGY=hard  # hard (default), kexec, or kexec-force
 ```
 
-`SOFT_REBOOT=never` opts out of soft-reboot for the system. Useful if the user does not trust the soft-reboot path.
-
-`KERNEL_CHANGE_STRATEGY=kexec` switches the default for kernel-changing updates from full reboot to kexec.
+`KERNEL_CHANGE_STRATEGY=kexec` switches the default from full reboot to kexec. `kexec-force` also kexecs when LUKS will need a passphrase prompt.
 
 CLI flags override the config for that invocation.
 
@@ -44,11 +41,9 @@ CLI flags override the config for that invocation.
 
 ```
 $ sudo cache22-reboot --check
-strategy: soft - soft-reboot (kernel unchanged, fastest)
+strategy: hard - hard reboot (set KERNEL_CHANGE_STRATEGY=kexec or pass --kexec for kexec)
   staged digest:        sha256:f00e2552043fef13...
-  softRebootCapable:    true
   KERNEL_CHANGE_STRATEGY: hard
-  SOFT_REBOOT:            auto
 ```
 
 Or when nothing is staged:
@@ -58,21 +53,19 @@ $ sudo cache22-reboot --check
 strategy: hard - hard reboot (nothing staged; rebooting current)
   staged:               (none)
   KERNEL_CHANGE_STRATEGY: hard
-  SOFT_REBOOT:            auto
 ```
 
-### Auto-pick (recommended default)
+### Default apply
 
 ```
 sudo cache22-reboot
 ```
 
-Selects the fastest viable strategy. Same kernel: soft-reboot (~5 sec). Kernel changed with default config: full reboot. Kernel changed with `KERNEL_CHANGE_STRATEGY=kexec`: kexec.
+Does a full reboot into the staged deploy. With `KERNEL_CHANGE_STRATEGY=kexec` set (or `--kexec` passed), it kexecs instead, skipping firmware POST.
 
 ### Force a specific path
 
 ```
-sudo cache22-reboot --soft      # Soft-reboot, fail loudly if not capable.
 sudo cache22-reboot --kexec     # kexec. Falls back to hard reboot if kexec staging fails.
 sudo cache22-reboot --hard      # Full reboot. Always works.
 ```
@@ -103,16 +96,13 @@ sudo cache22-reboot
 
 cache22-reboot works the same regardless of who staged the deploy.
 
-## When auto-pick selects each path
+## Which path runs
 
-| `bootc status .status.staged` | `softRebootCapable` | `SOFT_REBOOT` | `KERNEL_CHANGE_STRATEGY` | Selected |
-|---|---|---|---|---|
-| null | n/a | any | any | Full reboot (of current) |
-| not null | `true` | `auto` | any | **Soft-reboot** |
-| not null | `true` | `never` | `hard` | Full reboot |
-| not null | `true` | `never` | `kexec` | kexec |
-| not null | `false` | any | `hard` | Full reboot |
-| not null | `false` | any | `kexec` | kexec |
+| `bootc status .status.staged` | `KERNEL_CHANGE_STRATEGY` | Selected |
+|---|---|---|
+| null | any | Full reboot (of current) |
+| not null | `hard` (default) | **Full reboot** |
+| not null | `kexec` | **kexec** |
 
 ## Failure handling
 
@@ -129,13 +119,13 @@ The shutdown sequence triggers two cache22 hooks via drop-ins on systemd units:
 1. `ostree-finalize-staged.service`'s `ExecStop` runs `ostree admin finalize-staged`, writing the BLS entry for the staged deploy.
 2. The `50-cache22-uki.conf` drop-in's `ExecStop` runs `/usr/libexec/cache22/resign-uki`, which builds and signs the per-deploy UKI for any newly-finalized deploys.
 
-This happens for all reboot paths (full reboot, kexec, soft-reboot). soft-reboot does not call `ostree-finalize-staged` through the same path; instead, `cache22-reboot --soft` calls it explicitly before triggering `systemctl soft-reboot`.
+This happens for both reboot paths (full reboot and kexec).
 
 See [Update Flow](../../architecture/update-flow/) for the full shutdown sequence.
 
 ## See also
 
-- [Three Reboot Paths](../three-reboot-paths/). Detail on each reboot strategy.
+- [Two Reboot Paths](../two-reboot-paths/). Detail on each reboot strategy.
 - [`cache22-update`](../cache22-update/). Staging an update before applying.
 - [TPM and LUKS](../../boot-and-security/tpm-luks/). LUKS auto-unlock options for the kexec path.
 - [Troubleshooting](../../troubleshooting/) for what to check if a reboot does not produce the expected state.

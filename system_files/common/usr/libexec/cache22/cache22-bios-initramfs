@@ -1,0 +1,257 @@
+#!/usr/bin/env bash
+# cache22-bios-initramfs — BIOS/GRUB counterpart to resign-uki.
+#
+# For each ostree BLS entry, assemble the deploy's full initramfs set (microcode
+# + user-or-base + extra segments, via cache22-initramfs-list) into ONE combined
+# initrd file on the /boot ext4 partition, then rewrite the entry's initrd= line
+# to point at it. GRUB's i386-pc linux loader takes a single initrd file and the
+# kernel unpacks the concatenated cpio segments, so the result matches the EFI
+# UKI: microcode, the user override, and extra segments all apply on BIOS too.
+#
+# Why one combined file rather than several initrd lines: a single initrd is the
+# format ostree already writes and GRUB unambiguously loads, so the BIOS path
+# carries no dependency on blscfg multi-initrd handling.
+#
+# Runs from three places, all on the running image's copy of this script:
+#   - install:  install_grub_bios chroots into the new deploy and runs it.
+#   - finalize: resign-uki-finalize chroots into the just-finalized deploy.
+#   - runtime:  cache22-resign-uki.service (via cache22-boot-rebuild) on a
+#               /boot/loader change (undeploy, rollback, switch).
+# EFI systems never reach here.
+#
+# Atomicity: every /boot write is to <name>.tmp + fsync + rename. GC of stale
+# combined initrds runs only after all entries are rebuilt successfully.
+
+set -euo pipefail
+
+STAGE_SUBDIR=cache22
+
+die() { echo "cache22-bios-initramfs: $*" >&2; exit 1; }
+[[ ${EUID} -eq 0 ]] || die "must run as root"
+
+# EFI systems build UKIs via resign-uki instead. Exit clean so the units that may
+# invoke us are no-ops rather than failures.
+[[ -d /sys/firmware/efi ]] && {
+    echo "cache22-bios-initramfs: /sys/firmware/efi present -> UEFI system, nothing to do"
+    exit 0
+}
+
+# Locate /boot. At runtime it is the mounted ext4 partition at /boot. In a
+# chroot (install/finalize) the deploy ships an empty /boot, so the real
+# partition is reached via /sysroot/boot.
+boot_dir() {
+    if [[ -d /boot/ostree ]]; then
+        echo /boot
+    elif [[ -d /sysroot/boot/ostree ]]; then
+        echo /sysroot/boot
+    else
+        die "could not locate ostree's /boot (checked /boot and /sysroot/boot)"
+    fi
+}
+
+# Enumerate the BLS entries ostree wrote per deploy. ostree maintains the
+# /boot/loader symlink to the active loader.X dir; fall back to walking both
+# loader.0 and loader.1 when the symlink is not yet wired (eg at install).
+list_bls_entries() {
+    local boot="$1"
+    if [[ -L "$boot/loader" && -d "$boot/loader/entries" ]]; then
+        find "$boot/loader/entries" -name 'ostree-*.conf' 2>/dev/null
+    else
+        find "$boot/loader.0/entries" "$boot/loader.1/entries" \
+             -name 'ostree-*.conf' 2>/dev/null
+    fi
+}
+
+# Read a single BLS entry into globals BLS_LINUX, BLS_INITRD, BLS_OPTIONS. The
+# linux=/initrd= paths are resolved relative to GRUB's $root (the /boot
+# partition), so they are partition-relative (no /boot prefix) on the standard
+# BIOS layout.
+parse_bls() {
+    local entry="$1"
+    BLS_LINUX="" BLS_INITRD="" BLS_OPTIONS=""
+    while IFS= read -r line; do
+        case "$line" in
+            linux\ *)   BLS_LINUX="${line#linux }" ;;
+            initrd\ *)  BLS_INITRD="${line#initrd }" ;;
+            options\ *) BLS_OPTIONS="${line#options }" ;;
+        esac
+    done < "$entry"
+}
+
+# Atomic copy/replace on the ext4 /boot partition: write .tmp, fsync, rename.
+atomic_install() {
+    local src="$1" dst="$2" tmp
+    tmp="${dst}.tmp.$$"
+    cp "$src" "$tmp"
+    sync -f "$tmp" 2>/dev/null || sync
+    mv -f "$tmp" "$dst"
+}
+
+BOOT=$(boot_dir)
+
+# Resolve the base initrd's physical path and the BLS path style. On the standard
+# BIOS layout the BLS initrd= is partition-relative (/ostree/...), so the file
+# lives at $BOOT + that path; a non-standard layout that put /boot on the root
+# filesystem would give rootfs-absolute (/boot/...) paths instead. Detect by
+# which one names a real file so staged paths match the same convention.
+#   echoes: "<physical-base>\t<bls-prefix>"   (bls-prefix is "" or "/boot")
+resolve_layout() {
+    local bls_initrd="$1"
+    if [[ -f "${BOOT}${bls_initrd}" ]]; then
+        printf '%s\t%s\n' "${BOOT}${bls_initrd}" ""
+    elif [[ -f "${bls_initrd}" ]]; then
+        printf '%s\t%s\n' "${bls_initrd}" "/boot"
+    elif [[ -f "/sysroot${bls_initrd}" ]]; then
+        printf '%s\t%s\n' "/sysroot${bls_initrd}" "/boot"
+    else
+        return 1
+    fi
+}
+
+# Build the combined initrd for one BLS entry and rewrite its initrd= line.
+# Echoes the stage id (one per entry) used for GC; nothing on skip.
+process_entry() {
+    local entry="$1"
+    parse_bls "$entry"
+    [[ -n "$BLS_LINUX"   ]] || { echo "    SKIP: no linux= in $entry" >&2; return 1; }
+    [[ -n "$BLS_INITRD"  ]] || { echo "    SKIP: no initrd= in $entry" >&2; return 1; }
+    [[ -n "$BLS_OPTIONS" ]] || { echo "    SKIP: no options= in $entry" >&2; return 1; }
+
+    local layout base_phys bls_prefix
+    layout=$(resolve_layout "$BLS_INITRD") || die "base initrd not found for $entry (initrd=$BLS_INITRD)"
+    base_phys="${layout%$'\t'*}"
+    bls_prefix="${layout#*$'\t'}"
+
+    # kver from the vmlinuz filename suffix.
+    local kver
+    kver=$(basename "$BLS_LINUX" | sed -n 's|^vmlinuz-||p')
+    [[ -n "$kver" ]] || die "could not parse kver from $BLS_LINUX"
+
+    # Resolve the deploy dir from the ostree= karg so cache22-initramfs-list can
+    # read this deploy's microcode/extra imgs and build its user img in context.
+    local deploy_dir="" bls_ostree
+    bls_ostree=$(echo "$BLS_OPTIONS" | tr ' ' '\n' | sed -nE 's/^ostree=//p' | head -1)
+    if [[ -n "$bls_ostree" ]]; then
+        [[ -e "$bls_ostree" ]] || bls_ostree="/sysroot$bls_ostree"
+        deploy_dir=$(readlink -f "$bls_ostree" 2>/dev/null || true)
+    fi
+
+    # The shared enumeration: identical img set and order as the EFI UKI.
+    local -a imgs=()
+    local -a list_args=( --kver "$kver" --base "$base_phys" )
+    [[ -n "$deploy_dir" ]] && list_args+=( --deploy-dir "$deploy_dir" )
+    local img
+    while IFS= read -r img; do
+        [[ -n "$img" ]] && imgs+=( "$img" )
+    done < <(/usr/libexec/cache22/cache22-initramfs-list "${list_args[@]}")
+    [[ ${#imgs[@]} -gt 0 ]] || die "empty initramfs list for $entry"
+
+    # Stage id: the entry name (ostree-N) is unique per live entry, so two
+    # deploys that share a kernel/bootcsum still get distinct combined initrds.
+    local id
+    id=$(basename "$entry" .conf)
+
+    local stage_phys_dir="$BOOT/$STAGE_SUBDIR/$id"
+    local combined_phys="$stage_phys_dir/initrd.img"
+    local combined_bls="${bls_prefix}/$STAGE_SUBDIR/$id/initrd.img"
+
+    install -d -m 0755 "$BOOT/$STAGE_SUBDIR" "$stage_phys_dir"
+
+    # Concatenate in load order. The kernel reads consecutive cpio archives:
+    # the leading uncompressed microcode cpio is applied first, then the
+    # (zstd) main + extra segments are unpacked.
+    echo "==> Building combined initrd for $id (kver=$kver, ${#imgs[@]} segments)" >&2
+    local tmp="${combined_phys}.tmp.$$"
+    : > "$tmp"
+    for img in "${imgs[@]}"; do
+        cat "$img" >> "$tmp" || { rm -f "$tmp"; die "failed appending $img"; }
+        echo "    + $(basename "$img")" >&2
+    done
+    sync -f "$tmp" 2>/dev/null || sync
+    mv -f "$tmp" "$combined_phys"
+
+    # Rewrite the entry: replace the first initrd line with the combined file and
+    # drop any further initrd lines. All other lines (linux/options/title/...)
+    # are preserved verbatim. ostree rewrites this entry on the next deploy, at
+    # which point this hook runs again and re-applies the line.
+    local etmp="${entry}.tmp.$$" wrote_initrd=0
+    : > "$etmp"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        case "$line" in
+            initrd\ *)
+                if (( wrote_initrd == 0 )); then
+                    printf 'initrd %s\n' "$combined_bls" >> "$etmp"
+                    wrote_initrd=1
+                fi
+                ;;
+            *) printf '%s\n' "$line" >> "$etmp" ;;
+        esac
+    done < "$entry"
+    if (( wrote_initrd == 0 )); then
+        printf 'initrd %s\n' "$combined_bls" >> "$etmp"
+    fi
+    sync -f "$etmp" 2>/dev/null || sync
+    mv -f "$etmp" "$entry"
+    echo "    initrd= -> $combined_bls" >&2
+
+    printf '%s\n' "$id"
+}
+
+# Stage ids referenced by a current BLS entry's initrd= line. This is the exact
+# "still needed" set: a freshly rewritten entry points at its own dir, and an
+# entry this run skipped still points at whatever it had. GC keying off this can
+# never remove a file a live entry references, even after a partial run.
+referenced_ids() {
+    local e
+    while IFS= read -r e; do
+        [[ -z "$e" ]] && continue
+        sed -n "s|^initrd .*/$STAGE_SUBDIR/\\([^/]*\\)/initrd\\.img\$|\\1|p" "$e"
+    done < <(list_bls_entries "$BOOT")
+}
+
+# Remove staged combined-initrd dirs not referenced by any BLS entry.
+gc_stages() {
+    local stage_root="$BOOT/$STAGE_SUBDIR"
+    [[ -d "$stage_root" ]] || return 0
+    local keep d base
+    keep=$(referenced_ids)
+    shopt -s nullglob
+    for d in "$stage_root"/*/; do
+        base=$(basename "$d")
+        if ! grep -qxF "$base" <<<"$keep"; then
+            echo "==> GC: removing unreferenced $STAGE_SUBDIR/$base" >&2
+            rm -rf "$d"
+        fi
+    done
+    shopt -u nullglob
+}
+
+main() {
+    local entries
+    entries=$(list_bls_entries "$BOOT" | sort)
+    [[ -n "$entries" ]] || die "no ostree-*.conf BLS entries found under $BOOT"
+
+    local keep_set="" entry id
+    while IFS= read -r entry; do
+        [[ -z "$entry" ]] && continue
+        id=$(process_entry "$entry") || continue
+        keep_set+="${id}"$'\n'
+    done <<<"$entries"
+
+    [[ -n "$keep_set" ]] || die "no combined initrds were built -- refusing to GC"
+
+    # Confirm every keep-set combined initrd actually exists before GC, so a
+    # silently-missing file (disk full mid-write) never lets GC remove a good one.
+    while IFS= read -r id; do
+        [[ -z "$id" ]] && continue
+        [[ -f "$BOOT/$STAGE_SUBDIR/$id/initrd.img" ]] || \
+            die "build claimed success but $STAGE_SUBDIR/$id/initrd.img missing -- refusing to GC"
+    done <<<"$keep_set"
+
+    gc_stages
+
+    sync -f "$BOOT" 2>/dev/null || sync
+    echo "==> cache22-bios-initramfs done" >&2
+}
+
+main "$@"

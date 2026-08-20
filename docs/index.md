@@ -17,17 +17,19 @@ This is not an official or supported version of Arch or CachyOS.
 | `cachy-server` | `ghcr.io/cmspam/cache22-cachy-server:rolling` | CachyOS, `linux-cachyos` | (headless) |
 | `cachy-kde` | `ghcr.io/cmspam/cache22-cachy-kde:rolling` | CachyOS, `linux-cachyos` | KDE Plasma 6 |
 | `cachy-gnome` | `ghcr.io/cmspam/cache22-cachy-gnome:rolling` | CachyOS, `linux-cachyos` | GNOME Shell |
+| `cachy-hyprland` | `ghcr.io/cmspam/cache22-cachy-hyprland:rolling` | CachyOS, `linux-cachyos` | Hyprland |
 | `arch-server` | `ghcr.io/cmspam/cache22-arch-server:rolling` | Vanilla Arch, mainline `linux` | (headless) |
 | `arch-kde` | `ghcr.io/cmspam/cache22-arch-kde:rolling` | Vanilla Arch, mainline `linux` | KDE Plasma 6 |
 | `arch-gnome` | `ghcr.io/cmspam/cache22-arch-gnome:rolling` | Vanilla Arch, mainline `linux` | GNOME Shell |
+| `arch-hyprland` | `ghcr.io/cmspam/cache22-arch-hyprland:rolling` | Vanilla Arch, mainline `linux` | Hyprland |
 
 All variants ship with NVIDIA (open driver), AMD, and Intel GPU support; ZFS (cachy variants only); Realtek 2.5G PCIe (`r8125`) and USB (`r8152`); Bluetooth; printing (CUPS); SANE; fingerprint readers; CJK input via fcitx5; QEMU + libvirt + virt-manager; podman + docker + distrobox + incus. Guest agents for running cache22 itself as a VM (QEMU/KVM, incus, VMware/ESXi) are included and activate only inside the matching hypervisor.
 
-Desktop variants (`*-kde`, `*-gnome`) additionally include Steam, Lutris, gamemode, MangoHud, gamescope, and Sunshine. KDE variants also get a SteamOS-style "gamescope mode" toggle (KDE-only because it autologin-couples with `plasma-login-manager`).
+Desktop variants (`*-kde`, `*-gnome`, `*-hyprland`) additionally include Steam, Lutris, gamemode, MangoHud, gamescope, and Sunshine. KDE variants also get a SteamOS-style "gamescope mode" toggle (KDE-only because it autologin-couples with `plasma-login-manager`).
 
 ## Notable features
 
-**Two fast paths for applying updates.** `cache22-reboot` selects between three reboot strategies based on what bootc reports about the staged deploy: soft-reboot (~5 sec, kernel keeps running, network connections survive), kexec (~10-30 sec faster than a full reboot when the kernel changed), or full reboot. See [Three Reboot Paths](./updates-and-reboots/three-reboot-paths/).
+**Two paths for applying updates.** `cache22-reboot` does a full reboot by default, or an opt-in kexec (~10-30 sec faster than a full reboot, skips firmware POST). See [Two Reboot Paths](./updates-and-reboots/two-reboot-paths/).
 
 **Two install entry points.** A hybrid BIOS+UEFI USB installer ISO for bare metal, plus a NixOS-based kexec image for VPSes that can't mount custom ISOs. Both run the same `cache22-install` script. See [Installation](./getting-started/installation/).
 
@@ -44,7 +46,7 @@ Desktop variants (`*-kde`, `*-gnome`) additionally include Steam, Lutris, gamemo
 ## Sections
 
 1. [Getting Started](./getting-started/). Install, first-boot Secure Boot setup, picking a variant.
-2. [Updates and Reboots](./updates-and-reboots/). `cache22-update`, the three reboot paths, auto-update, pinning to specific builds.
+2. [Updates and Reboots](./updates-and-reboots/). `cache22-update`, the two reboot paths, auto-update, pinning to specific builds.
 3. [Boot and Security](./boot-and-security/). sd-boot + UKI architecture, TPM2 LUKS unlock, Secure Boot key management.
 4. [Customization](./customization/). Kernel args, distrobox, Flatpak, temporary writable `/usr`.
 5. [System Ops](./system-ops/). Variant switching, health checks, repair from live ISO.

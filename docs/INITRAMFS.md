@@ -12,12 +12,13 @@ several imgs combine into one initramfs at boot.
 `/usr/lib/modules/<kver>/initramfs.img`, built by
 `scripts/generate-initramfs.sh`. It is the bare minimum needed to find the root
 filesystem and unlock LUKS: storage controllers, btrfs/xfs/ext4, device-mapper,
-dm-crypt, TPM2, the boot stack (bootc, ostree, composefs, systemd), and basic
+dm-crypt, TPM2, the boot stack (bootc, ostree, systemd, and the erofs + overlay
+modules `ostree-prepare-root` needs to mount the composefs root), and basic
 input for typing a passphrase.
 
 The base img is always sufficient to boot on its own. Tooling that loads only it
-(an older `resign-uki`, or the BIOS/GRUB path, which references a single initrd)
-still produces a bootable system.
+(an older `resign-uki`, or an ostree BLS entry before the builder has rewritten
+it) still produces a bootable system.
 
 ### Microcode img
 
@@ -49,6 +50,28 @@ globs this directory rather than hardcoding names, the resign-uki already
 deployed on a machine picks up such a new img on the next upgrade with no code
 change. The microcode and base imgs stay hardcoded: microcode must load first,
 and the base img is the kernel-specific anchor ostree manages.
+
+## Assembly
+
+`/usr/libexec/cache22/cache22-initramfs-list` enumerates the ordered img set for
+a deploy (microcode, then the user override or base img, then sorted extra
+segments) and builds the user img on demand. It is the single source of truth for
+what the initramfs contains; both firmware paths consume it, so they cannot
+disagree:
+
+- UEFI: `resign-uki` passes each img to `ukify` as a `--initrd` and writes one
+  signed UKI per deploy to the ESP. sd-stub loads the concatenated segments.
+- BIOS: `cache22-bios-initramfs` concatenates the same imgs into one initrd file
+  per BLS entry on the `/boot` partition (`/cache22/<entry>/initrd.img`) and
+  rewrites the entry's `initrd=` line to point at it. GRUB loads the single file
+  and the kernel unpacks the concatenated cpio segments. A single file is the
+  format ostree already writes and GRUB unambiguously supports, so the BIOS path
+  carries no dependency on blscfg multi-initrd handling.
+
+Both run at install, at finalize (chrooted into the new deploy via
+`resign-uki-finalize`, so the build uses the new deploy's modules and config),
+and at runtime (`cache22-resign-uki.service`, dispatched by firmware through
+`cache22-boot-rebuild`).
 
 ## What is excluded, and why
 
@@ -83,7 +106,8 @@ driver and an SSH client so the initramfs can fetch a remote LUKS key:
    ```
 
 2. Apply it. This rebuilds the running deploy's user img from the current config
-   and folds it into the UKI:
+   and folds it into the boot-time initramfs (the UKI on UEFI, the combined
+   initrd on BIOS):
 
    ```
    sudo systemctl start cache22-resign-uki.service
@@ -111,10 +135,12 @@ deploy's initramfs is built at finalize against that deploy's own kernel modules
 If a build fails, that deploy falls back to the base img with a warning, so the
 machine still boots.
 
-## Limitations
+## Firmware parity
 
-The microcode and user imgs are folded into the UKI, so they apply on UEFI
-Secure Boot installs only. The BIOS/GRUB path references a single initrd through
-ostree's BLS entry and therefore loads the base img only. This is fine for the
-dd/BIOS targets, which are virtual machines (a guest does not apply CPU
-microcode; the host does).
+The microcode, user, and extra imgs apply on both UEFI and BIOS: UEFI carries
+them as UKI sections, BIOS as the per-entry combined initrd (see
+[Assembly](#assembly)). The one thing BIOS does not get is the UEFI-only security
+chain (Secure Boot signing and the TPM2 PCR measurements sd-stub makes); the
+initramfs contents are identical. Microcode is included on BIOS for completeness;
+a virtual-machine guest ignores it (the host applies CPU microcode), but a
+bare-metal BIOS install applies it.

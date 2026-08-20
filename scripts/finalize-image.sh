@@ -14,11 +14,15 @@ locale-gen 2>&1 | tail -5
 echo "==> Rewriting /etc/os-release + /etc/lsb-release with cache22 identity"
 VARIANT="${VARIANT:-cachy-kde}"
 case "$VARIANT" in
-    cachy-kde)    VARIANT_PRETTY="CachyOS-based KDE" ;;
-    cachy-server) VARIANT_PRETTY="CachyOS-based Server" ;;
-    arch-kde)     VARIANT_PRETTY="Arch-based KDE" ;;
-    arch-server)  VARIANT_PRETTY="Arch-based Server" ;;
-    *)            VARIANT_PRETTY="$VARIANT" ;;
+    cachy-kde)      VARIANT_PRETTY="CachyOS-based KDE" ;;
+    cachy-gnome)    VARIANT_PRETTY="CachyOS-based GNOME" ;;
+    cachy-hyprland) VARIANT_PRETTY="CachyOS-based Hyprland" ;;
+    cachy-server)   VARIANT_PRETTY="CachyOS-based Server" ;;
+    arch-kde)       VARIANT_PRETTY="Arch-based KDE" ;;
+    arch-gnome)     VARIANT_PRETTY="Arch-based GNOME" ;;
+    arch-hyprland)  VARIANT_PRETTY="Arch-based Hyprland" ;;
+    arch-server)    VARIANT_PRETTY="Arch-based Server" ;;
+    *)              VARIANT_PRETTY="$VARIANT" ;;
 esac
 case "$VARIANT" in
     cachy-*) ID_LIKE_LINE='ID_LIKE="cachyos arch"' ;;
@@ -107,6 +111,15 @@ flatpak remote-add --if-not-exists flathub \
 
 echo "==> Enabling systemd presets"
 systemctl preset-all --preset-mode=enable-only || true
+
+# soft-reboot is unsupported on cache22. Pivoting userspace while the kernel
+# keeps running leaves encrypted data pools (LUKS held open by services such
+# as incus) undetachable, and re-runs the TPM PCR/NvPCR measurements against a
+# TPM whose state already survived from the previous userspace. Both hang or
+# fail the boot. cache22-reboot only ever does hard or kexec; mask the raw
+# systemd verb so `systemctl soft-reboot` cannot be invoked by hand either.
+echo "==> Masking soft-reboot (unsupported)"
+systemctl mask systemd-soft-reboot.service || true
 
 echo "==> Cleaning pacman cache"
 rm -rf /usr/lib/sysimage/pacman/pkg/*

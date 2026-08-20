@@ -64,7 +64,7 @@ The new deploy is staged. SSH MOTD and shell login banners will mention the pend
 sudo cache22-update --reboot
 ```
 
-This is equivalent to `sudo cache22-update && sudo cache22-reboot`. The reboot uses the same auto-selected strategy as `cache22-reboot` with no flags: soft-reboot if the kernel did not change, otherwise full reboot (or kexec if `KERNEL_CHANGE_STRATEGY=kexec`).
+This is equivalent to `sudo cache22-update && sudo cache22-reboot`. The reboot uses the same strategy as `cache22-reboot` with no flags: a full reboot by default, or kexec if `KERNEL_CHANGE_STRATEGY=kexec`.
 
 ### Also update flatpaks and distroboxes
 
@@ -137,7 +137,7 @@ For day-to-day use, prefer `cache22-update`.
 
 ## See also
 
-- [Three Reboot Paths](../three-reboot-paths/) for what happens when the staged deploy is applied.
+- [Two Reboot Paths](../two-reboot-paths/) for what happens when the staged deploy is applied.
 - [`cache22-changelog`](../changelog/) to inspect the package-level diff before rebooting.
 - [Auto-Update and Auto-Reboot](../auto-update-and-reboot/) for unattended scheduling.
 - [Pinning and Rollback](../pinning-and-rollback/) for picking specific builds or reverting after a bad upgrade.

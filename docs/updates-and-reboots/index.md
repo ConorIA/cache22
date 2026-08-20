@@ -14,7 +14,7 @@ The main commands:
 | Command | Purpose |
 | --- | --- |
 | [`cache22-update`](./cache22-update/) | Fetch and stage the next image. |
-| [`cache22-reboot`](./cache22-reboot/) | Apply the staged image. Auto-selects from three reboot paths. |
+| [`cache22-reboot`](./cache22-reboot/) | Apply the staged image. Auto-selects from two reboot paths. |
 | [`cache22-changelog`](./changelog/) | Show the package-level diff between booted and staged. |
 | [`cache22-autoupdate`](./auto-update-and-reboot/) | Schedule unattended `cache22-update` runs. |
 | [`cache22-autoreboot`](./auto-update-and-reboot/) | Schedule unattended reboots after auto-updates. |
@@ -22,7 +22,7 @@ The main commands:
 
 Pages in this section:
 
-1. [Three Reboot Paths](./three-reboot-paths/). How cache22-reboot picks between soft-reboot, kexec, and full reboot.
+1. [Two Reboot Paths](./two-reboot-paths/). How cache22-reboot picks between kexec and full reboot.
 2. [cache22-update](./cache22-update/). Fetching and staging updates.
 3. [cache22-reboot](./cache22-reboot/). Applying staged updates with the right strategy.
 4. [Auto-Update and Auto-Reboot](./auto-update-and-reboot/). Hands-off daily updates.

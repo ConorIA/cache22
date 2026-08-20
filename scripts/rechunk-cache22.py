@@ -224,7 +224,7 @@ def parse_pacman_files(files_path: Path) -> list[str]:
     return out
 
 
-PKGCACHE_VERSION = "r1"
+PKGCACHE_VERSION = "r2"
 
 
 def _stable_mtree_sha(mtree_path: Path) -> str | None:
@@ -530,7 +530,7 @@ def write_blob(out_blobs: Path, content: bytes, media_type: str) -> dict:
 
 
 # ─── DKMS .ko reuse ───────────────────────────────────────────────────────
-# DKMS recompiles out-of-tree modules (iavf, r8152, broadcom-wl, nvidia-open,
+# DKMS recompiles out-of-tree modules (r8152, broadcom-wl, nvidia-open,
 # ...) on every image build, against whatever compiler the image ships that
 # day. A compiler bump alone produces byte-different .ko output with identical
 # function, churning the dkms-modules and leftover layers for no benefit. The

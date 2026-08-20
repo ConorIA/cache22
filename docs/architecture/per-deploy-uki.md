@@ -60,7 +60,6 @@ Because `/etc` is merged forward by ostree, an override applies to the current d
 | `ostree-finalize-staged.service` ExecStop (via `50-cache22-uki.conf` drop-in) | Shutdown, after ostree finalizes the staged deploy. The default path for normal updates. |
 | `cache22-resign-uki.path` watcher on `/etc/cache22/extra-cmdline` | When kargs are edited. Triggers a runtime rebuild for all live deploys. |
 | `cache22-resign-uki.path` watcher on `/boot/loader` | When the deployment set changes while the system is running: `ostree admin undeploy`, `bootc switch`, `bootc rollback`. ostree swaps the `loader.N` symlink on every write, so this catches an undeploy that the finalize-staged drop-in (staged deploys only) misses. Without it, an undeploy leaves stale UKIs whose `boot.X` no longer resolves. |
-| `cache22-reboot --soft` direct call | Before soft-reboot triggers, so the UKI for the staged deploy exists in case of a future hard reboot. |
 | `cache22-reboot --kexec` direct call | Before kexec, so the kernel can be extracted from the freshly-built UKI. |
 | Manual `sudo systemctl start cache22-resign-uki.service` | On demand. |
 
@@ -70,7 +69,7 @@ cache22 extends two upstream ostree services via drop-ins instead of standalone 
 
 - `/usr/lib/systemd/system/ostree-finalize-staged.service.d/50-cache22-uki.conf`. Adds an `ExecStop=/usr/libexec/cache22/resign-uki` line. Runs in the same systemd job as `ostree admin finalize-staged`, ordered after it. Inherits all of finalize-staged's ordering, including blocking shutdown until the UKI is built.
 
-- `/usr/lib/systemd/system/ostree-remount.service.d/50-cache22-etc-rw.conf`. Adds an `ExecStartPost=/usr/libexec/cache22/ensure-etc-writable` line. Ensures `/etc` is a writable bind in case the bind was dropped by systemd during a soft-reboot pivot.
+- `/usr/lib/systemd/system/ostree-remount.service.d/50-cache22-etc-rw.conf`. Adds an `ExecStartPost=/usr/libexec/cache22/ensure-etc-writable` line. A fallback that keeps `/etc` writable on the legacy backend; under composefs ostree sets up the `/etc` overlay itself and the script defers.
 
 The drop-in pattern means cache22 inherits the parent unit's ordering, failure semantics, and shutdown-blocking behavior automatically. No standalone unit needed.
 

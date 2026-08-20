@@ -112,7 +112,7 @@ See [First-Boot Secure Boot Setup](../getting-started/secure-boot-first-boot/) f
 
 **Symptom:** SSH login banner or shell greeting reports a pending update. `cache22-changelog --check` exits 1 (no staged) or `bootc status .status.staged` is null.
 
-**Cause:** Stale `/run/motd.d/10-cache22-pending-reboot` marker file. On older cache22 images, this file persisted across soft-reboots because `/run` survives soft-reboot by design.
+**Cause:** Stale `/run/motd.d/10-cache22-pending-reboot` marker file left behind after a deploy was applied.
 
 **Fix:** Update to the latest cache22 image. Newer images include `cache22-pending-motd.service` which refreshes the marker on every boot and on every bootc state change.
 
@@ -146,65 +146,14 @@ For users on bare `bootc upgrade` (not via `cache22-update`), the redundant rest
 sudo bootc upgrade
 ```
 
-bootc will re-stage the image even when there is nothing new. Useful for testing the soft-reboot path with a guaranteed soft-reboot-capable staged deploy:
+bootc will re-stage the image even when there is nothing new. Useful for testing the apply path with a guaranteed staged deploy:
 
 ```
 sudo bootc upgrade
-sudo cache22-reboot     # Will soft-reboot since same kernel.
+sudo cache22-reboot     # Full reboot, or kexec if KERNEL_CHANGE_STRATEGY=kexec.
 ```
-
-### Soft-reboot did not apply the update
-
-**Symptom:** Ran `cache22-reboot --soft` (or auto-pick chose soft). Command completed but the system seems to be on the old deploy still.
-
-**Investigation:**
-
-```
-findmnt /
-```
-
-If the source path includes the new deploy's csum (different from before), soft-reboot succeeded. If not, it didn't.
-
-Other checks:
-
-```
-ps -o lstart= -p 1                       # PID 1 start time. Doesn't change on soft-reboot.
-systemctl status systemd-soft-reboot.service
-```
-
-If `systemd-soft-reboot.service` shows it ran, the pivot happened.
-
-If `findmnt /` shows the old deploy:
-
-- `prepare-soft-reboot` failed silently. Check `/tmp/sr-test.log` if `cache22-reboot --soft` was invoked manually.
-- `softRebootCapable` was actually false. Run `sudo cache22-reboot --check` to see what strategy would be picked.
-
-**Fix:** Run a normal hard reboot:
-
-```
-sudo cache22-reboot --hard
-```
-
-The full reboot path is well-tested and will land on the staged deploy.
 
 ## Disk and filesystem
-
-### `/etc` is read-only after a soft-reboot
-
-**Symptom:** Tried to edit a file under `/etc` after a soft-reboot. Got "Read-only file system".
-
-**Cause:** Old behavior. systemd's soft-reboot pivot drops bind mounts not on its preserve list. Cache22's `/etc` bind from `prepare-soft-reboot` was lost during the pivot.
-
-**Fix:** Update to the latest cache22 image. The `50-cache22-etc-rw.conf` drop-in on `ostree-remount.service` ensures `/etc` is rebound as writable early in the post-soft-reboot boot.
-
-For an immediate workaround on an older image:
-
-```
-sudo mount --bind /etc /etc
-sudo mount -o remount,bind,rw /etc
-```
-
-Or hard-reboot, which restores `/etc` via initrd's `ostree-prepare-root`.
 
 ### Pacman fails with "Read-only file system"
 

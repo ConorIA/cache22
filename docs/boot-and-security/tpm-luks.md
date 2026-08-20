@@ -39,7 +39,7 @@ This means kernel updates, kernel argument changes, and image-content changes do
 
 **Defends against:** an attacker with access to the SB signing key (db.key) attempting to plant a different boot path. For example, a Type 1 BLS entry pointing at a separately-signed kernel with arbitrary cmdline. sd-boot would load that kernel (it is db-signed), but no sd-stub would run, so PCR 11 stays at the booted UKI's value, not the attacker's. The TPM refuses to release the LUKS key.
 
-**Tradeoff:** `cache22-reboot --kexec` will not auto-unlock LUKS. kexec also bypasses sd-stub, leaving PCR 11 unmeasured for the new UKI. The LUKS prompt appears (often invisible due to GPU re-init issues post-kexec). See the [kexec section](../../updates-and-reboots/three-reboot-paths/) for details.
+**Tradeoff:** `cache22-reboot --kexec` will not auto-unlock LUKS. kexec also bypasses sd-stub, leaving PCR 11 unmeasured for the new UKI. The LUKS prompt appears (often invisible due to GPU re-init issues post-kexec). See the [kexec section](../../updates-and-reboots/two-reboot-paths/) for details.
 
 ## PCR 7 fallback keyslot (optional)
 
@@ -53,7 +53,7 @@ PCR 7 captures Secure Boot state: which keys are enrolled in firmware DB, and wh
 
 systemd-cryptsetup tries enrolled methods in order. If the PCR 11 keyslot's policy fails (kexec, or any other case where PCR 11 does not match), it falls through to the PCR 7 keyslot. PCR 7 still matches, and LUKS unlocks.
 
-Because of this, `cache22-reboot` refuses to kexec when no PCR 7 (signed-policy-free) keyslot is enrolled, rather than booting into an often-invisible passphrase prompt. Override with `--kexec-force` or `KERNEL_CHANGE_STRATEGY=kexec-force`; see [Three Reboot Paths](../../updates-and-reboots/three-reboot-paths/).
+Because of this, `cache22-reboot` refuses to kexec when no PCR 7 (signed-policy-free) keyslot is enrolled, rather than booting into an often-invisible passphrase prompt. Override with `--kexec-force` or `KERNEL_CHANGE_STRATEGY=kexec-force`; see [Two Reboot Paths](../../updates-and-reboots/two-reboot-paths/).
 
 **Tradeoff:** the Type 1 BLS-entry attack defense effectively goes away. An attacker who triggers a non-sd-stub boot path will fail PCR 11 unseal but succeed at PCR 7 unseal. This is equivalent to having only a PCR 7 keyslot enrolled.
 
@@ -171,6 +171,6 @@ Common causes of unexpected unseal failure:
 ## See also
 
 - [cache22-secureboot](../cache22-secureboot/) for the SB key that signs `tpm-pcr11.key`.
-- [Three Reboot Paths](../../updates-and-reboots/three-reboot-paths/) for what kexec actually does.
+- [Two Reboot Paths](../../updates-and-reboots/two-reboot-paths/) for what kexec actually does.
 - [Threat Model](../threat-model/) for what the PCR 11 vs PCR 7 distinction protects against in cache22's specific design.
 - [Troubleshooting](../../troubleshooting/) for "kexec gives blank screen" recovery.

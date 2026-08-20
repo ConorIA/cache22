@@ -16,7 +16,7 @@ After boot, the visible mounts include:
 |---|---|---|
 | `/` | The booted deploy directory (read-only btrfs). | The OS image. |
 | `/sysroot` | The btrfs root subvolume containing `/ostree`. | The physical root partition. |
-| `/etc` | Bind-on-self of `<deploy>/etc` (read-write). | Per-machine configuration. |
+| `/etc` | Writable: a persistent overlay (composefs) or bind-on-self (legacy) over the per-deploy etc. | Per-machine configuration. |
 | `/var` | Per-stateroot `/sysroot/ostree/deploy/<state>/var` (read-write). | Persistent runtime state. |
 | `/home` | btrfs subvolume `/home` (read-write). | User home directories. |
 | `/boot` | UEFI: same partition as `/`, mounted separately. BIOS: dedicated `cache22-boot` ext4 partition. | BLS entries and kernel/initramfs files (GRUB modules + `grub.cfg` on BIOS). |
@@ -26,7 +26,7 @@ The root mount is read-only by design. Writes to `/usr` are blocked unless `boot
 
 ## /etc handling
 
-`/etc` is a writable bind-mount on the deploy's `/etc` directory. The deploy's `/etc` is the result of an ostree 3-way merge performed at deploy time, combining:
+`/etc` is writable and persistent. Its content is the result of an ostree 3-way merge performed at deploy time, combining:
 
 1. The previous deploy's `/usr/etc` (image defaults at last upgrade time).
 2. The current `/etc` (user state including their changes).
@@ -34,9 +34,9 @@ The root mount is read-only by design. Writes to `/usr` are blocked unless `boot
 
 User changes carry forward. Image-shipped changes apply where the user has not customized. Conflicting changes typically prefer the user's version.
 
-This merge happens at `bootc upgrade` time, not at boot time. At boot, `/etc` is just bound to the merged result.
+This merge happens at `bootc upgrade` time, not at boot time. At boot, `/etc` exposes the merged result.
 
-The bind is set up by `ostree-prepare-root` in initrd on hard boot. On soft-reboot, the bind is dropped during systemd's pivot (systemd preserves only a fixed list of mounts, and `/etc` is not on it). The `50-cache22-etc-rw.conf` drop-in re-establishes the bind via `cache22-ensure-etc-writable`.
+How it is mounted depends on the backend. Under composefs, `ostree-prepare-root` sets `/etc` up as a writable overlay (lower = the image `/usr/etc` defaults, upper = the per-deploy etc). Under the legacy backend it is a writable bind-mount; the `50-cache22-etc-rw.conf` drop-in re-establishes it via `ensure-etc-writable` as a safety net if the bind is missing.
 
 ## /var per stateroot
 
@@ -100,7 +100,7 @@ Files in `/etc/cache22/`:
 | Path | Content |
 |---|---|
 | `/etc/cache22/extra-cmdline` | Per-machine kargs baked into UKIs. |
-| `/etc/cache22/reboot.conf` | `cache22-reboot` preferences (`SOFT_REBOOT`, `KERNEL_CHANGE_STRATEGY`). |
+| `/etc/cache22/reboot.conf` | `cache22-reboot` preferences (`KERNEL_CHANGE_STRATEGY`). |
 | `/etc/cache22/autoupdate.conf` | `cache22-autoupdate` config (`APP_UPDATES`). |
 | `/etc/cache22/autoreboot.conf` | `cache22-autoreboot` config (`WINDOW`, `ALLOW_ACTIVE_SESSIONS`). |
 | `/etc/cache22/healthcheck.d/required.d/*` | User-defined health-check scripts. |

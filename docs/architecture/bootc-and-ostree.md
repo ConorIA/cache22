@@ -13,9 +13,9 @@ cache22 sits on top of two layers: ostree (the lower layer, owns deploys on disk
 ostree provides:
 
 - A content-addressable filesystem store at `/sysroot/ostree/repo/`. Files are deduplicated by SHA-256.
-- Multiple deploys per machine. Each deploy is a hardlink farm referencing the repo's objects, mounted at `/sysroot/ostree/deploy/<state>/deploy/<csum>.<idx>/`.
+- Multiple deploys per machine, checked out at `/sysroot/ostree/deploy/<state>/deploy/<csum>.<idx>/`. Under the composefs backend each deploy also gets an `.ostree.cfs` EROFS image of the tree; under the legacy backend the checkout is a hardlink farm referencing the repo's objects.
 - Slot management: booted, staged, pending, rollback. State changes happen via subcommands like `ostree admin deploy`, `ostree admin finalize-staged`, `ostree admin rollback`.
-- The `ostree-prepare-root` initrd helper that bind-mounts a deploy as the new root.
+- The `ostree-prepare-root` initrd helper that mounts a deploy as the new root: a read-only composefs image over the object store, or a bind-mount of the checkout on the legacy backend.
 - The `ostree-remount.service` that handles `/var` and `/sysroot` remounts at runtime.
 
 ostree does NOT know about container images, registry pulls, OCI layers, or signatures. It operates on bare commits.
@@ -60,9 +60,9 @@ ostree is the layer that actually owns the on-disk deploy state. bootc is the la
 | Operation | Layer | Note |
 |---|---|---|
 | Pull image from registry | bootc | bootc handles auth, layer fetch, conversion to ostree commit. |
-| Create deploy directory | ostree | Hardlinked from the repo. |
+| Create deploy directory | ostree | Checkout from the repo; `.ostree.cfs` generated alongside under composefs. |
 | Stage / finalize / boot config | ostree | bootc invokes via `ostree-finalize-staged.service`. |
-| Bind-mount root in initrd | ostree | `ostree-prepare-root`. |
+| Mount root in initrd | ostree | `ostree-prepare-root` (composefs image, or bind-mount on the legacy backend). |
 | Etc / var / sysroot remounts at runtime | ostree | `ostree-remount.service`. |
 | Bootloader install | cache22 | `bootctl install` + per-machine SB key setup. |
 | Per-deploy UKI build + signing | cache22 | `resign-uki` triggered via drop-ins. |

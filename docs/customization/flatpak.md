@@ -6,13 +6,13 @@ nav_order: 3
 
 # Flatpak
 
-cache22 ships `flatpak` in all variants. KDE variants additionally include the [Bazaar](https://github.com/kolunmi/bazaar) Flatpak storefront for browsing and installing apps.
+cache22 ships `flatpak` in all variants. Desktop variants additionally include a graphical storefront for browsing and installing apps: KDE Discover on the `kde` variants, GNOME Software on the `gnome` and `hyprland` variants.
 
 Flatpak is the recommended way to install GUI applications on cache22. The applications run in their own sandboxed environments, do not modify `/usr`, and update independently of the OS image.
 
 ## Installing an app
 
-Via Bazaar (KDE variants): launch Bazaar from the application menu, search, click Install.
+Via the storefront (desktop variants): launch Discover or GNOME Software from the application menu, search, click Install.
 
 Via the command line:
 
@@ -92,16 +92,18 @@ Common alternatives:
 - [KDE Nightly](https://userbase.kde.org/Tutorials/Flatpak#KDE_Apps).
 - Vendor-specific remotes (some apps publish their own).
 
-## Bazaar storefront (KDE variants)
+## Graphical storefront (desktop variants)
 
-Bazaar provides a graphical storefront UI:
+The `kde` variants ship KDE Discover. The `gnome` and `hyprland` variants ship GNOME Software. Both provide the same basic functions:
 
 - Browse Flathub by category.
 - Search apps.
 - See app screenshots, descriptions, and ratings.
 - Install / update / uninstall.
 
-Launch from the KDE application menu. Bazaar replaces GNOME Software / KDE Discover in cache22's KDE setup.
+Launch either from the application menu.
+
+Neither can alter the base image. GNOME Software is built with its PackageKit backend disabled. Discover has that backend compiled in, but cache22 does not install the `packagekit` daemon it needs, so it stays inactive. Both are left managing Flatpaks and firmware updates only.
 
 ## When to use Flatpak vs Distrobox vs usroverlay
 

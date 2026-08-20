@@ -39,13 +39,14 @@ packages/
 │   │   ├── desktop.txt     GPU userland, fonts, IMEs, generic apps
 │   │   ├── gaming.txt      Steam, gamescope, mangohud, lutris, sunshine
 │   │   ├── kde.txt         Plasma 6 + KDE apps
-│   │   └── gnome.txt       GNOME Shell + GNOME apps
+│   │   ├── gnome.txt       GNOME Shell + GNOME apps
+│   │   └── hyprland.txt    Hyprland + waybar, rofi, swaync, hypr* tools
 │   └── arch/               same layer names, arch-specific package picks
 └── manifests/
     ├── cachy-server.manifest
     ├── cachy-kde.manifest
     ├── arch-gnome.manifest
-    └── ... (20 total)
+    └── ... (8 total)
 ```
 
 A manifest names the layers a variant pulls, one per line, in install order. Comments (`#`) and blanks are ignored.
@@ -77,7 +78,6 @@ Packages must be available in pacman repositories the build sees. cache22 ships 
 - `cmspam/gamescope-patched`. NVIDIA-fixed gamescope.
 - `cmspam/xe-virt-host-v3`. Intel Xe virglrenderer for running VMs with virtio-gpu native context (host side).
 - `cmspam/xe-virt-guest-v3`. Intel Xe patched `mesa`, `lib32-mesa`, `intel-media-driver` for running cache22 as a VM guest with GL/Vulkan/VA-API over virtio-gpu native context, no passthrough. With both repos one image runs as host or guest on Xe hardware.
-- `cmspam/intel-iavf` (release tag `arch`). Out-of-tree Intel iavf VF driver `iavf-dkms`, shipped in base so SR-IOV virtual functions work on kernels 6.10 and newer. Built against the image kernel by DKMS at install; a depmod override selects it over the in-kernel iavf.
 - `cache22-aur` (built in-image at build time). AUR packages cache22 needs.
 
 To add an AUR package: just list it in the appropriate layer's `.txt` file. `scripts/build-aur-packages.sh` auto-detects names that no configured pacman repo provides and builds them (plus transitive AUR deps) into the in-image `cache22-aur` repo.
