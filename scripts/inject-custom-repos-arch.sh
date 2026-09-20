@@ -105,10 +105,6 @@ Server = https://github.com/cmspam/xe-virt-repo/releases/download/latest-host
 SigLevel = Optional TrustAll
 Server = https://github.com/cmspam/xe-virt-repo/releases/download/latest-guest
 
-[gamescope-patched-v3]
-SigLevel = Optional TrustAll
-Server = https://github.com/cmspam/gamescope-patched/releases/download/latest-v3
-
 # Sunshine (game streaming server, Moonlight-compatible) — official
 # pacman repo from upstream LizardByte.
 [lizardbyte]

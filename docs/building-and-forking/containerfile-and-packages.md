@@ -75,7 +75,7 @@ Each layer's `.txt` file is one package per line, with `#` comments and blanks. 
 Packages must be available in pacman repositories the build sees. cache22 ships the standard CachyOS or Arch repos plus:
 
 - `cmspam/qemu-patched-v3`. VA-API patched QEMU.
-- `cmspam/gamescope-patched`. NVIDIA-fixed gamescope.
+- `cmspam/gamescope-patched-v3` (cachy family only). Arch's gamescope rebuilt for x86-64-v3, because `cachyos-v3` carries an older one and outranks `[extra]`. The arch family gets a current gamescope from ALHP.
 - `cmspam/xe-virt-host-v3`. Intel Xe virglrenderer for running VMs with virtio-gpu native context (host side).
 - `cmspam/xe-virt-guest-v3`. Intel Xe patched `mesa`, `lib32-mesa`, `intel-media-driver` for running cache22 as a VM guest with GL/Vulkan/VA-API over virtio-gpu native context, no passthrough. With both repos one image runs as host or guest on Xe hardware.
 - `cache22-aur` (built in-image at build time). AUR packages cache22 needs.

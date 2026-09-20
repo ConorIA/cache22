@@ -38,8 +38,10 @@ Server = https://github.com/cmspam/xe-virt-repo/releases/download/latest-host
 SigLevel = Optional TrustAll
 Server = https://github.com/cmspam/xe-virt-repo/releases/download/latest-guest
 
-# Patched gamescope: fixes nvidia steam remote-play black screen +
-# inverted colors. Repo-priority placement wins over stock cachyos.
+# Arch's gamescope rebuilt for v3. cachyos-v3 carries its own gamescope
+# several weeks behind Arch, and it outranks [extra], so without this the
+# image would be stuck on the older one. Repo-priority placement wins over
+# stock cachyos.
 [gamescope-patched-v3]
 SigLevel = Optional TrustAll
 Server = https://github.com/cmspam/gamescope-patched/releases/download/latest-v3
