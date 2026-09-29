@@ -81,4 +81,3 @@ packagekit-qt6
 
 # ─── KDE-specific quality-of-life ─────────────────────────
 kup
-plasma6-applets-supergfxctl
